@@ -23,7 +23,24 @@ permissions:
   contents: read
 
 jobs:
+  # Wheel __version__ gate lives in one place — every package except
+  # install-scheduler (no __version__) is verified before publish runs.
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {dir: packages/redact, mod: devin_redact}
+          - {dir: packages/backup, mod: devin_backup}
+          - {dir: packages/janitor, mod: devin_janitor}
+    uses: Icaro0310/devin-powerups/.github/workflows/verify-wheel-version.yml@v1
+    with:
+      package-dir: ${{ matrix.dir }}
+      module: ${{ matrix.mod }}
+      python-version: "3.12"
+
   publish:
+    needs: verify
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
@@ -39,17 +56,9 @@ jobs:
         run: |
           base="${SEL:-${REF%%-v*}}"
           case "$base" in
-              redact)
-                echo "dir=packages/redact" >> "$GITHUB_OUTPUT"
-                echo "mod=devin_redact" >> "$GITHUB_OUTPUT" ;;
-              backup)
-                echo "dir=packages/backup" >> "$GITHUB_OUTPUT"
-                echo "mod=devin_backup" >> "$GITHUB_OUTPUT" ;;
-              janitor)
-                echo "dir=packages/janitor" >> "$GITHUB_OUTPUT"
-                echo "mod=devin_janitor" >> "$GITHUB_OUTPUT" ;;
-              # install-scheduler exposes no __version__; it gets no
-              # mod output and the verify step below skips it.
+              redact) echo "dir=packages/redact" >> "$GITHUB_OUTPUT" ;;
+              backup) echo "dir=packages/backup" >> "$GITHUB_OUTPUT" ;;
+              janitor) echo "dir=packages/janitor" >> "$GITHUB_OUTPUT" ;;
               scheduler) echo "dir=shared/install-scheduler" >> "$GITHUB_OUTPUT" ;;
             *) echo "unknown package: $base" >&2; exit 1 ;;
           esac
@@ -62,20 +71,18 @@ jobs:
           python -m pip install --upgrade build twine
           python -m build
           python -m twine check dist/*
-      # A released wheel once self-reported a stale __version__; install
-      # the just-built wheel into an isolated target and assert it
-      # matches pyproject before anything is uploaded. Runs only when
-      # the resolve step set a module name (install-scheduler has none).
-      - name: Verify wheel self-reports pyproject version
-        if: steps.pkg.outputs.mod != ''
-        working-directory: ${{ steps.pkg.outputs.dir }}
+      # Supply-chain guard: redact 0.2.1 and evals 0.3.x once reached
+      # PyPI via dispatch from unmerged branches, leaving the index ahead
+      # of main. Refuse to upload when the publish origin is not merged.
+      - name: Require publish origin merged into main
         env:
-          PKG: ${{ steps.pkg.outputs.mod }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          ver=$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml)
-          test -n "$ver"
-          pip install --no-cache-dir --no-deps --target /tmp/verchk dist/*.whl
-          VER="$ver" python -c "import importlib, os, sys; sys.path.insert(0, '/tmp/verchk'); m = importlib.import_module('$PKG'); assert getattr(m, '__version__', None) == os.environ['VER'], f'wheel __version__ {getattr(m, \"__version__\", None)} != pyproject {os.environ[\"VER\"]}'"
+          status=$(gh api "repos/${{ github.repository }}/compare/main...${GITHUB_SHA}" --jq .status)
+          case "$status" in
+            behind|identical) ;;
+            *) echo "::error::publish origin is '$status' vs main — refusing to publish an unmerged commit"; exit 1 ;;
+          esac
       - name: Upload to PyPI
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
         with:
