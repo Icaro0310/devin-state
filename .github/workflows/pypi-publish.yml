@@ -63,7 +63,7 @@ jobs:
     needs: [resolve, verify]
     # A skipped verify (install-scheduler has no __version__) must not
     # cancel the publish leg; a failed one still must.
-    if: ${{ always() && !cancelled() && needs.verify.result != 'failure' }}
+    if: ${{ always() && !cancelled() && needs.resolve.result == 'success' && needs.verify.result != 'failure' }}
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
