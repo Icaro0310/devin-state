@@ -181,12 +181,18 @@ def test_poordjaevin_judge_malformed_shapes_keep(tmp_path):
 
 
 def test_split_binary_windows_path():
-    """A Windows binary path keeps its backslashes (posix shlex would
-    eat them: ``C:\\Tools\\x.exe`` -> ``C:Toolsx.exe``)."""
+    """Windows argv convention: backslashes survive and quotes toggle
+    grouping anywhere in a token (CommandLineToArgvW semantics)."""
     parts = _split_binary("C:\\Tools\\poordjaevin.exe", posix=False)
     assert parts == ["C:\\Tools\\poordjaevin.exe"]
     quoted = _split_binary('"C:\\Tools\\poordjaevin.exe" -v', posix=False)
     assert quoted == ["C:\\Tools\\poordjaevin.exe", "-v"]
+    mid = _split_binary(
+        'tool.exe --config="C:\\My Data\\cfg.json"', posix=False
+    )
+    assert mid == ["tool.exe", "--config=C:\\My Data\\cfg.json"]
+    bare = _split_binary("tool -v --flag", posix=False)
+    assert bare == ["tool", "-v", "--flag"]
 
 
 def test_poordjaevin_judge_passes_state_and_questions(tmp_path):

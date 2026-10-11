@@ -37,17 +37,41 @@ COMMAND_TIMEOUT_S = 60
 MIN_DELETE_CONFIDENCE = 0.6
 
 
+def _win_argv(spec: str) -> list[str]:
+    r"""CommandLineToArgvW-style split: ``"`` toggles quoting anywhere in a
+    token (so ``--config="C:\My Data\x"`` stays one argument) and backslashes
+    are literal. Quotes are consumed, never emitted."""
+    parts: list[str] = []
+    cur: list[str] = []
+    quoted = False
+    for ch in spec:
+        if ch == '"':
+            quoted = not quoted
+            continue
+        if ch in " \t" and not quoted:
+            if cur:
+                parts.append("".join(cur))
+                cur = []
+            continue
+        cur.append(ch)
+    if cur:
+        parts.append("".join(cur))
+    return parts
+
+
 def _split_binary(spec: str, *, posix: bool | None = None) -> list[str]:
     r"""Split a ``--judge <bin>`` spec into argv, Windows-path safe.
 
     POSIX-mode ``shlex.split`` eats backslashes, so ``C:\Tools\poordjaevin.exe``
-    would collapse into ``C:Toolspoordjaevin.exe``; on Windows we split with
-    ``posix=False`` and strip surrounding quotes instead.
+    would collapse into ``C:Toolspoordjaevin.exe``; on Windows we use the
+    CommandLineToArgvW convention instead (shlex ``posix=False`` still
+    mis-splits mid-token quotes).
     """
     if posix is None:
         posix = os.name != "nt"
-    parts = shlex.split(spec, posix=posix)
-    return [p.strip("\"'") for p in parts]
+    if posix:
+        return shlex.split(spec)
+    return _win_argv(spec)
 
 
 @dataclass(frozen=True)
