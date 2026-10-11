@@ -11,7 +11,8 @@ Ported `legacy/session-janitor.py` into `src/devin_janitor/`:
 - `inventory.py` — unified `SessionRow`s over `sessions.db` +
   `acp-messages/` via `devin-internals-spec` v0.2.0
 - `tiers.py` — KEEP / AUTO_DELETE / JUDGE classifier (legacy semantics)
-- `judge.py` — pluggable `none` | `command:<cmd>`, fail-open
+- `judge.py` — pluggable `none` | `devin-judge[:<bin>]` | `command:<cmd>`,
+  fail-open
 - `exporter.py` — `--export-cmd` hook, aborts run on failure
 - `execute.py` — row + gui-file deletion, `janitor-pending.json` retry
   queue, orphan-lock pruning, VACUUM only when Devin closed and no locks

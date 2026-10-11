@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `devin-judge` judge backend (`--judge devin-judge`, aliases
+  `poordjaevin`/`judge`, `devin-judge:<bin>` for a custom binary): shells
+  `poordjaevin ask` per ambiguous session and maps the typed answer onto
+  the fail-open verdict contract — only a decided `delete` deletes.
+- Tier3 GUI-state deletion now leaves a `devin.janitor.tombstone/<key>`
+  metadata marker per removed binding (original key, slug, backend,
+  bytes, timestamps) for auditability; the verified snapshot still owns
+  payload restoration. Tombstones are idempotent and never re-scanned.
+
 - Read-only adapters: `devin_janitor.mcp_server` MCP server
   (`janitor_dry_run` + `janitor_classify`, `devin-janitor-mcp` entry
   point, `mcp` extra), Devin skill and `adapters/` plugin root; setup

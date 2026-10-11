@@ -8,20 +8,26 @@ Specs (``--judge``):
 
 - ``none``           — default. Judges nothing; all JUDGE sessions are kept.
                        Purely rules-based operation, no LLM involved.
+- ``devin-judge``    — shells ``poordjaevin ask`` per session (local, typed
+                       answers with calibrated confidence). ``devin-judge:<bin>``
+                       overrides the binary path; ``poordjaevin`` is an alias.
 - ``command:<cmd>``  — pipe a JSON payload to any local CLI; its stdout is
                        parsed as a verdict (``{"keep": bool}`` JSON, or a
                        bare keep/delete/true/false/yes/no token). This is the
-                       extension point: wire in poordjaevin, a Devin ACP
-                       helper, or any script you trust — nothing external is
-                       required.
+                       extension point: wire in any script you trust —
+                       nothing external is required.
 """
 
 from __future__ import annotations
 
 import json
 import re
+import shlex
+import shutil
 import subprocess
+import tempfile
 from dataclasses import dataclass
+from pathlib import Path
 
 from devin_janitor.inventory import SessionRow
 
@@ -141,13 +147,90 @@ class CommandJudge(Judge):
         return Verdict(keep=keep, reason=proc.stdout.strip()[:200])
 
 
+class PoordjaevinJudge(Judge):
+    """devin-judge backend: shells ``poordjaevin ask`` per session.
+
+    The typed-answer contract (``{"keep": {"value": ..., "confidence":
+    ...}}``) maps straight onto :class:`Verdict`. Anything but a decided
+    ``delete`` is a fail-open keep — including abstained, low-confidence,
+    unparseable or missing answers.
+    """
+
+    name = "devin-judge"
+
+    _QUESTIONS = {
+        "keep": {"type": "choice", "options": ["keep", "delete"]},
+    }
+
+    def __init__(
+        self, binary: str = "poordjaevin", timeout: float = COMMAND_TIMEOUT_S
+    ) -> None:
+        self.binary = binary
+        self.timeout = timeout
+
+    def available(self) -> bool:
+        return shutil.which(shlex.split(self.binary)[0]) is not None
+
+    def judge(self, session: SessionRow, statement: str) -> Verdict:
+        with tempfile.TemporaryDirectory(
+            prefix="devin-janitor-judge-"
+        ) as td:
+            state_file = Path(td) / "state.txt"
+            questions_file = Path(td) / "questions.json"
+            state_file.write_text(
+                f"{statement}\n\n{_session_summary(session)}",
+                encoding="utf-8",
+            )
+            questions_file.write_text(
+                json.dumps(self._QUESTIONS), encoding="utf-8"
+            )
+            try:
+                proc = subprocess.run(
+                    [
+                        *shlex.split(self.binary),
+                        "ask",
+                        "--state-file",
+                        str(state_file),
+                        "--questions",
+                        str(questions_file),
+                    ],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=self.timeout,
+                )
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                return Verdict(
+                    keep=None, reason=f"poordjaevin failed: {exc}"
+                )
+        if proc.returncode != 0:
+            return Verdict(keep=None, reason=f"exit {proc.returncode}")
+        try:
+            answer = json.loads(proc.stdout).get("keep") or {}
+        except json.JSONDecodeError:
+            return Verdict(keep=None, reason="unparseable output")
+        value, conf = answer.get("value"), answer.get("confidence")
+        if value == "delete":
+            return Verdict(keep=False, reason=f"poordjaevin delete ({conf})")
+        if value == "keep":
+            return Verdict(keep=True, reason=f"poordjaevin keep ({conf})")
+        return Verdict(
+            keep=None, reason=f"poordjaevin abstained ({value})"
+        )
+
+
 def make_judge(spec: str | None) -> Judge:
     """Build a judge backend from a ``--judge`` spec string."""
     spec = (spec or "none").strip()
     if spec == "none":
         return NoneJudge()
+    if spec in ("devin-judge", "poordjaevin", "judge"):
+        return PoordjaevinJudge()
+    if spec.startswith("devin-judge:"):
+        return PoordjaevinJudge(spec.split(":", 1)[1])
     if spec.startswith("command:"):
         return CommandJudge(spec.split(":", 1)[1])
     raise ValueError(
-        f"unknown judge spec {spec!r} — expected none|command:<cmd>"
+        f"unknown judge spec {spec!r} — expected "
+        "none|devin-judge[:<bin>]|command:<cmd>"
     )

@@ -62,11 +62,12 @@ adapts that pipeline; it does not reinvent deletion.
   and `session_locks/` — no guessing at foreign-key graphs or file naming.
 - Exports transcripts **before** deleting (`--export-cmd` hook, aborts the
   whole run on failure).
-- **Pluggable judge** for ambiguous sessions — `--judge command:<cmd>` pipes a
-  JSON payload to any local CLI you trust (e.g. a
-  [poordjaevin](https://github.com/Icaro0310/devin-judge) or Devin ACP helper),
-  but the default `none` is purely rules-based and keeps everything ambiguous
-  (fail-open). No external model or service is required.
+- **Pluggable judge** for ambiguous sessions — `--judge devin-judge` calls
+  [poordjaevin](https://github.com/Icaro0310/devin-judge)'s local typed-answer
+  CLI directly, and `--judge command:<cmd>` pipes a JSON payload to any local
+  script you trust (e.g. a Devin ACP helper). The default `none` is purely
+  rules-based and keeps everything ambiguous (fail-open). No external model
+  or service is required.
 - Retries locked deletions via a pending queue instead of force-killing
   Devin; `VACUUM` only runs when Devin is closed.
 
@@ -111,6 +112,9 @@ by `report` and selectable via `run --tiers`:
   verified [`devin-backup`](https://github.com/Icaro0310/devin-state)
   snapshot manifest younger than 24h that covers `state.vscdb`, and Devin
   must be closed. `--apply` is never scheduled — deletion stays manual.
+  Each deleted key leaves a metadata-only `devin.janitor.tombstone/…`
+  marker (original key, slug, backend, size, timestamps) so the removal
+  stays auditable; the verified snapshot owns payload restoration.
 
 ### Automatic sessions (bridge labels)
 
@@ -156,10 +160,10 @@ Two honest caveats for restricted machines:
 - `run` is a **dry-run by default**; only `--apply` deletes. Always preview
   first, and consider `--export-cmd "devin-history export"` so transcripts are
   archived before removal.
-- If you want a semantic judge for ambiguous sessions, plug one in via
-  `--judge command:<cmd>` — a small script calling
-  [poordjaevin](https://github.com/Icaro0310/devin-judge) with its Devin ACP
-  backend gives you a Devin-native judge with no extra infrastructure.
+- If you want a semantic judge for ambiguous sessions, `--judge devin-judge`
+  shells `poordjaevin ask` locally (or `--judge command:<cmd>` for your own
+  script). Both stay fail-open: any backend error, timeout or unclear
+  verdict keeps the session.
 
 ## Adapters (MCP server, Devin skill, plugin)
 

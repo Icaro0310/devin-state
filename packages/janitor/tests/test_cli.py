@@ -181,6 +181,66 @@ def test_pending_list_and_retry(devin_dir, tmp_path, capsys):
     assert not pending.exists()  # queue cleared → file removed
 
 
+class _DeleteAllJudge:
+    """Scripted judge: votes 'delete' on every ambiguous session."""
+
+    name = "devin-judge"
+
+    def available(self):
+        return True
+
+    def judge(self, session, statement):
+        from devin_janitor.judge import Verdict
+
+        return Verdict(keep=False, reason="voted delete")
+
+    def close(self):
+        pass
+
+
+def test_judged_delete_never_executes_without_apply(
+    devin_dir, tmp_path, capsys, monkeypatch
+):
+    """Rule 1: a judge 'delete' verdict is a plan, not an execution —
+    without --apply nothing may be mutated, whatever the judge said."""
+    add_session(devin_dir.sessions_db, "ambig-1", title="quick question",
+                user_msgs=1)
+    db_hash = _sha(devin_dir.sessions_db)
+    calls = []
+    monkeypatch.setattr(
+        "devin_janitor.cli.apply_deletions",
+        lambda *a, **k: calls.append(1),
+    )
+    monkeypatch.setattr(
+        "devin_janitor.cli.make_judge", lambda spec: _DeleteAllJudge()
+    )
+    rc = main(_run_args(devin_dir, tmp_path, "--judge", "devin-judge"))
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "DRY-RUN" in out
+    assert "ambig-1" in out  # the judged delete is planned...
+    assert calls == []       # ...but never executed without --apply
+    assert _sha(devin_dir.sessions_db) == db_hash
+
+
+def test_judged_delete_executes_only_with_apply(
+    devin_dir, tmp_path, capsys, monkeypatch
+):
+    """Same verdict, with --apply: the judged delete is eligible."""
+    monkeypatch.setattr(
+        "devin_janitor.cli.vacuum_if_safe", lambda paths: False
+    )
+    add_session(devin_dir.sessions_db, "ambig-1", title="quick question",
+                user_msgs=1)
+    monkeypatch.setattr(
+        "devin_janitor.cli.make_judge", lambda spec: _DeleteAllJudge()
+    )
+    rc = main(_run_args(devin_dir, tmp_path, "--apply",
+                        "--judge", "devin-judge"))
+    assert rc == 0
+    assert "ambig-1" not in _db_ids(devin_dir.sessions_db)
+
+
 def test_run_missing_db(tmp_path, capsys):
     rc = main([
         "run", "--data-dir", str(tmp_path / "nope"),

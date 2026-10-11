@@ -503,7 +503,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--grace-hours", type=float, default=None)
     p.add_argument("--max-delete", type=int, default=None)
     p.add_argument("--judge", default="none",
-                   help="none|command:<cmd>")
+                   help="none|devin-judge[:<bin>]|command:<cmd>")
     p.add_argument("--export-cmd", default=None,
                    help="shell command run BEFORE any deletion; "
                         "non-zero exit aborts the run")
@@ -528,7 +528,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--keep-file", default=DEFAULT_KEEP_FILE)
     p.add_argument("--pending-file", default=DEFAULT_PENDING_FILE)
     p.add_argument("--grace-hours", type=float, default=None)
-    p.add_argument("--judge", default="none", help="none|command:<cmd>")
+    p.add_argument("--judge", default="none",
+                   help="none|devin-judge[:<bin>]|command:<cmd>")
     p.add_argument("--labels-file", default=None,
                    help="bridge session-labels.json override "
                         "(default: bridge state dir)")
