@@ -21,6 +21,7 @@ Specs (``--judge``):
 from __future__ import annotations
 
 import json
+import os
 import re
 import shlex
 import shutil
@@ -33,6 +34,20 @@ from typing import ClassVar
 from devin_janitor.inventory import SessionRow
 
 COMMAND_TIMEOUT_S = 60
+MIN_DELETE_CONFIDENCE = 0.6
+
+
+def _split_binary(spec: str, *, posix: bool | None = None) -> list[str]:
+    r"""Split a ``--judge <bin>`` spec into argv, Windows-path safe.
+
+    POSIX-mode ``shlex.split`` eats backslashes, so ``C:\Tools\poordjaevin.exe``
+    would collapse into ``C:Toolspoordjaevin.exe``; on Windows we split with
+    ``posix=False`` and strip surrounding quotes instead.
+    """
+    if posix is None:
+        posix = os.name != "nt"
+    parts = shlex.split(spec, posix=posix)
+    return [p.strip("\"'") for p in parts]
 
 
 @dataclass(frozen=True)
@@ -170,9 +185,11 @@ class PoordjaevinJudge(Judge):
         self.timeout = timeout
 
     def available(self) -> bool:
-        return shutil.which(shlex.split(self.binary)[0]) is not None
+        parts = _split_binary(self.binary)
+        return bool(parts) and shutil.which(parts[0]) is not None
 
     def judge(self, session: SessionRow, statement: str) -> Verdict:
+        argv = _split_binary(self.binary)
         with tempfile.TemporaryDirectory(
             prefix="devin-janitor-judge-"
         ) as td:
@@ -188,7 +205,7 @@ class PoordjaevinJudge(Judge):
             try:
                 proc = subprocess.run(
                     [
-                        *shlex.split(self.binary),
+                        *argv,
                         "ask",
                         "--state-file",
                         str(state_file),
@@ -207,12 +224,32 @@ class PoordjaevinJudge(Judge):
         if proc.returncode != 0:
             return Verdict(keep=None, reason=f"exit {proc.returncode}")
         try:
-            answer = json.loads(proc.stdout).get("keep") or {}
+            parsed = json.loads(proc.stdout)
         except json.JSONDecodeError:
             return Verdict(keep=None, reason="unparseable output")
+        if not isinstance(parsed, dict):
+            return Verdict(keep=None, reason="unexpected output shape")
+        answer = parsed.get("keep")
+        if not isinstance(answer, dict):
+            return Verdict(keep=None, reason="no typed keep answer")
         value, conf = answer.get("value"), answer.get("confidence")
+        if answer.get("abstained"):
+            return Verdict(
+                keep=None, reason=f"poordjaevin abstained ({value})"
+            )
         if value == "delete":
-            return Verdict(keep=False, reason=f"poordjaevin delete ({conf})")
+            if (
+                isinstance(conf, (int, float))
+                and not isinstance(conf, bool)
+                and conf >= MIN_DELETE_CONFIDENCE
+            ):
+                return Verdict(
+                    keep=False, reason=f"poordjaevin delete ({conf})"
+                )
+            return Verdict(
+                keep=None,
+                reason=f"poordjaevin delete below confidence ({conf})",
+            )
         if value == "keep":
             return Verdict(keep=True, reason=f"poordjaevin keep ({conf})")
         return Verdict(

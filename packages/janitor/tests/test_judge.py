@@ -2,12 +2,14 @@ import sys
 import textwrap
 
 import pytest
+
 from devin_janitor.inventory import SessionRow
 from devin_janitor.judge import (
     CommandJudge,
     NoneJudge,
     PoordjaevinJudge,
     _parse_verdict_text,
+    _split_binary,
     make_judge,
 )
 
@@ -133,6 +135,58 @@ def test_poordjaevin_judge_fail_open(tmp_path):
     assert not missing.available()
     # judged anyway (defence in depth): still abstains
     assert missing.judge(row(), "statement").keep is None
+
+
+def test_poordjaevin_judge_low_confidence_delete_keeps(tmp_path):
+    """Rule 1: a `delete` answer below the confidence floor must not
+    delete — fail-open means abstain, not delete."""
+    for conf in ("0.4", "null", "true", '"high"'):
+        binary = _fake_poordjaevin(
+            tmp_path,
+            f'''
+            print('{{"keep": {{"value": "delete", "confidence": {conf}}}}}')
+            ''',
+        )
+        v = PoordjaevinJudge(binary=binary).judge(row(), "statement")
+        assert v.keep is None, conf
+        assert "confidence" in v.reason
+
+
+def test_poordjaevin_judge_abstained_delete_keeps(tmp_path):
+    binary = _fake_poordjaevin(
+        tmp_path,
+        '''
+        import json
+        print(json.dumps({"keep": {"value": "delete",
+                                   "confidence": 0.99,
+                                   "abstained": True}}))
+        ''',
+    )
+    v = PoordjaevinJudge(binary=binary).judge(row(), "statement")
+    assert v.keep is None
+
+
+def test_poordjaevin_judge_malformed_shapes_keep(tmp_path):
+    """Valid JSON with the wrong shape must abstain, not abort the run."""
+    for body in (
+        'import json; print(json.dumps([]))',
+        'import json; print(json.dumps({"keep": "delete"}))',
+        'import json; print(json.dumps({"keep": null}))',
+        'import json; print(json.dumps("delete"))',
+        'import json; print(json.dumps({"other": {"value": "delete"}}))',
+    ):
+        binary = _fake_poordjaevin(tmp_path, body)
+        v = PoordjaevinJudge(binary=binary).judge(row(), "statement")
+        assert v.keep is None, body
+
+
+def test_split_binary_windows_path():
+    """A Windows binary path keeps its backslashes (posix shlex would
+    eat them: ``C:\\Tools\\x.exe`` -> ``C:Toolsx.exe``)."""
+    parts = _split_binary("C:\\Tools\\poordjaevin.exe", posix=False)
+    assert parts == ["C:\\Tools\\poordjaevin.exe"]
+    quoted = _split_binary('"C:\\Tools\\poordjaevin.exe" -v', posix=False)
+    assert quoted == ["C:\\Tools\\poordjaevin.exe", "-v"]
 
 
 def test_poordjaevin_judge_passes_state_and_questions(tmp_path):
