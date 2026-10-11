@@ -39,21 +39,25 @@ Use `--data-dir`/`--config-dir` for non-default locations.
 
 _Nightly snapshot; pair with a weekly `devin-backup rotate --keep 10 --yes`. Or let the tool self-schedule with `devin-backup install` (cron / Task Scheduler / elapsed backends)._
 
-Quoted path arguments inside `/tr` fail differently in cmd.exe and PowerShell 5.1, so this job goes through a wrapper `.cmd` file (quoting inside the file works normally). `%PUBLIC%` is used because it never contains spaces, keeping the stored action space-free:
+Quoted path arguments inside `/tr` fail differently in cmd.exe and PowerShell 5.1, so this job goes through a wrapper `.cmd` file in your own profile directory (quoting inside the file works normally, and no other user can replace it). Register with the `ScheduledTask` cmdlets, which take the path literally:
 
 ```powershell
-New-Item -ItemType Directory -Force "$env:PUBLIC\devin-tasks"
+New-Item -ItemType Directory -Force "$env:USERPROFILE\devin-tasks"   # cmd.exe: mkdir "%USERPROFILE%\devin-tasks"
 ```
 
-Save this as `%PUBLIC%\devin-tasks\devin-backup.cmd`:
+Save this as `%USERPROFILE%\devin-tasks\devin-backup.cmd`:
 
 ```batch
 devin-backup create --out "%USERPROFILE%\backups"
 ```
 
 ```powershell
-schtasks /create /tn "devin-backup" /tr "%PUBLIC%\devin-tasks\devin-backup.cmd" /sc daily /st 03:15 /f
+$action  = New-ScheduledTaskAction -Execute "$env:USERPROFILE\devin-tasks\devin-backup.cmd"
+$trigger = New-ScheduledTaskTrigger -Daily -At 3:15AM
+Register-ScheduledTask -TaskName "devin-backup" -Action $action -Trigger $trigger
 ```
+
+_cmd.exe users: the same registration works from Task Scheduler's GUI (Action = the .cmd path)._
 
 Runs under your account, no admin needed. Adjust `/sc`/`/st` (or `/sc onlogon` for daemons) to taste.
 
