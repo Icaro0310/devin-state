@@ -38,7 +38,7 @@ Use `--data-dir`/`--config-dir` (plus `--sessions-db`/`--acp-dir`/`--locks-dir` 
 
 ## Recurring runs (optional)
 
-_Daily cleanup. `devin-janitor install` registers the built-in daily report job (cron / Task Scheduler / elapsed hook); prefer it over hand-rolled entries._
+_Daily cleanup with `--apply` as shown. The package also ships `devin-janitor install`, which registers its own daily `report` job (cron / Task Scheduler / elapsed hook); the two jobs are different — `report` only reports, `--apply` actually cleans._
 
 ```cron
 30 4 * * * devin-janitor run --apply
