@@ -77,7 +77,8 @@ fail-open**: unavailable/error/timeout/unclear verdict ⇒ keep.
 | spec                        | behavior                                            |
 |-----------------------------|-----------------------------------------------------|
 | `none` (default)            | abstains on all — purely rules-based, nothing deleted without a tier rule |
-| `command:<cmd>`             | JSON payload on stdin; stdout parsed as verdict (`{"keep": bool}` or bare keep/delete token). Plug in any local CLI (e.g. a poordjaevin/Devin ACP helper). |
+| `devin-judge[:<bin>]`       | shells `poordjaevin ask` per session (local, typed answers with calibrated confidence). Only a decided `delete` deletes; abstained/low-confidence/error keeps. `poordjaevin`, `judge` are aliases; `<bin>` overrides the binary. |
+| `command:<cmd>`             | JSON payload on stdin; stdout parsed as verdict (`{"keep": bool}` or bare keep/delete token). Plug in any local CLI (e.g. a Devin ACP helper). |
 
 ## Pipeline (`run`)
 
@@ -142,7 +143,12 @@ sizes:
   keys in `state.vscdb`. `--apply` refuses tier3 unless `--include-gui`
   **and** `--snapshot PATH` verifies a `devin-backup` manifest <24h old
   covering `state.vscdb` — and Devin must be closed. Refusals exit 4
-  (missing `--include-gui` exits 2).
+  (missing `--include-gui` exits 2). Each deleted key leaves a
+  `devin.janitor.tombstone/<original key>` marker in `ItemTable` — metadata
+  only (`key`, `slug`, `backend`, `bytes`, `last_updated`, `deleted_at`),
+  never the payload; the verified snapshot owns restoration. Tombstones
+  live outside `GUI_STATE_PREFIX`, so they are never re-scanned as stale
+  entries and re-runs stay idempotent.
 
 ## Automatic sessions (JA-4)
 

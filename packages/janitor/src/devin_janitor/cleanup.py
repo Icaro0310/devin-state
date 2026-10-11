@@ -52,6 +52,10 @@ SNAPSHOT_REQUIRED_FRAGMENT = "state.vscdb"
 # family devin-history/devin-graph read for GR-1/HI-1).
 GUI_STATE_PREFIX = "windsurfSpace.sessionWorkspace/"
 
+# Tier3 leaves a metadata-only marker per deleted binding — auditability
+# without keeping the payload (the snapshot owns restoration).
+TOMBSTONE_PREFIX = "devin.janitor.tombstone/"
+
 # Sqlite checkpoint sidecar suffixes (shared with the space report).
 SIDECAR_SUFFIXES = ("-wal", "-shm", "-journal")
 
@@ -486,8 +490,12 @@ def apply_tier3(
        GUI is up; detection failure counts as running — fail-safe).
 
     Deletes only keys proven stale (``lastUpdated`` older than
-    ``stale_before``, or unparseable), then checkpoints + VACUUMs so the
-    bytes are actually reclaimed. Returns counters for the audit log.
+    ``stale_before``, or unparseable). Each deleted key leaves a
+    ``devin.janitor.tombstone/…`` marker recording the original key,
+    slug, backend, size and timestamps — metadata only; the verified
+    snapshot owns payload restoration. Then checkpoints + VACUUMs so
+    the bytes are actually reclaimed. Returns counters for the audit
+    log.
     """
     if not include_gui:
         raise CleanupRefused(
@@ -512,19 +520,40 @@ def apply_tier3(
     ]
     stats = {
         "keys": 0,
+        "tombstoned": 0,
         "bytes": sum(e["bytes"] for e in stale),
         "snapshot": res["snapshot"],
         "snapshot_age_s": res["age_s"],
     }
     if not stale or not db.is_file():
         return stats
+    deleted_at = now if now is not None else time.time()
     con = sqlite3.connect(str(db), timeout=30)
     con.execute("PRAGMA busy_timeout=30000")
     try:
         for e in stale:
+            con.execute(
+                "INSERT OR REPLACE INTO ItemTable (key, value)"
+                " VALUES (?, ?)",
+                (
+                    f"{TOMBSTONE_PREFIX}{e['key']}",
+                    json.dumps(
+                        {
+                            "key": e["key"],
+                            "slug": e["slug"],
+                            "backend": e["backend"],
+                            "bytes": e["bytes"],
+                            "last_updated": e["last_updated"],
+                            "deleted_at": deleted_at,
+                            "tool": "devin-janitor",
+                        }
+                    ),
+                ),
+            )
             con.execute("DELETE FROM ItemTable WHERE key=?", (e["key"],))
         con.commit()
         stats["keys"] = len(stale)
+        stats["tombstoned"] = len(stale)
         try:
             con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             con.execute("VACUUM")

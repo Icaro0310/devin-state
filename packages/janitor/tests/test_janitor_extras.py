@@ -14,6 +14,7 @@ from devin_install_scheduler import install as _sched
 from devin_internals.fixtures import STATE_VSCDB_DDL
 from devin_janitor import install
 from devin_janitor.cleanup import (
+    TOMBSTONE_PREFIX,
     CleanupRefused,
     apply_tier1,
     apply_tier3,
@@ -313,10 +314,40 @@ def test_apply_tier3_deletes_only_stale(devin_dir, tmp_path):
     stats = apply_tier3(devin_dir, stale_before=NOW_S - 48 * 3600,
                         include_gui=True, snapshot=snap, running=False)
     assert stats["keys"] == 1 and stats["bytes"] > 0
+    assert stats["tombstoned"] == 1
     con = sqlite3.connect(str(vdb))
-    keys = {r[0] for r in con.execute("SELECT key FROM ItemTable")}
+    rows = dict(con.execute("SELECT key, value FROM ItemTable"))
     con.close()
-    assert keys == {_gui_key("acp", "fresh")}
+    stale_key = _gui_key("acp", "old")
+    tomb_key = f"{TOMBSTONE_PREFIX}{stale_key}"
+    assert stale_key not in rows
+    assert _gui_key("acp", "fresh") in rows
+    tomb = json.loads(rows[tomb_key])
+    assert tomb["key"] == stale_key and tomb["slug"] == "old"
+    assert tomb["backend"] == "acp" and tomb["tool"] == "devin-janitor"
+    assert tomb["deleted_at"] > 0
+
+
+def test_apply_tier3_tombstones_are_idempotent(devin_dir, tmp_path):
+    """A second run sees no stale keys — tombstones are neither
+    re-tombstoned nor treated as GUI session state."""
+    vdb = _mk_vscdb(vscdb_path(devin_dir), [
+        (_gui_key("acp", "old"),
+         {"lastUpdated": int((NOW_S - 90 * 86400) * 1000)}),
+    ])
+    snap = _mk_snapshot(tmp_path)
+    kw = {"stale_before": NOW_S - 48 * 3600, "include_gui": True,
+          "snapshot": snap, "running": False}
+    first = apply_tier3(devin_dir, **kw)
+    assert first["tombstoned"] == 1
+    second = apply_tier3(devin_dir, **kw)
+    assert second["keys"] == 0 and second["tombstoned"] == 0
+    con = sqlite3.connect(str(vdb))
+    rows = list(con.execute("SELECT key FROM ItemTable"))
+    con.close()
+    assert rows == [(f"{TOMBSTONE_PREFIX}{_gui_key('acp', 'old')}",)]
+    # tombstone markers are not picked up as stale GUI entries
+    assert gui_state_entries(vdb, stale_before=NOW_S - 48 * 3600) == []
 
 
 def test_report_cleanup_tiers(devin_dir):
@@ -378,9 +409,10 @@ def test_run_tier3_full_gate_ok(devin_dir, tmp_path, monkeypatch):
                         "--include-gui", "--snapshot", str(snap)))
     assert rc == 0
     con = sqlite3.connect(str(vscdb_path(devin_dir)))
-    n = con.execute("SELECT COUNT(*) FROM ItemTable").fetchone()[0]
+    keys = [r[0] for r in con.execute("SELECT key FROM ItemTable")]
     con.close()
-    assert n == 0
+    # the stale binding is gone; its tombstone marker remains
+    assert keys == [f"{TOMBSTONE_PREFIX}{_gui_key('acp', 'old')}"]
     log = tmp_path / "janitor-log.jsonl"
     entry = json.loads(log.read_text().splitlines()[0])
     assert entry["tiers"] == [3] and entry["tier3"]["keys"] == 1
