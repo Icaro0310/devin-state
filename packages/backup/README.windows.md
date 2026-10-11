@@ -59,7 +59,7 @@ Register-ScheduledTask -TaskName "devin-backup" -Action $action -Trigger $trigge
 
 _cmd.exe users: the same registration works from Task Scheduler's GUI (Action = the .cmd path)._
 
-Runs under your account, no admin needed. Adjust `/sc`/`/st` (or `/sc onlogon` for daemons) to taste.
+Runs under your account, no admin needed. Adjust the `New-ScheduledTaskTrigger` arguments (or `-AtLogOn` for daemons) to taste.
 
 
 ## Adapters (MCP / Devin skill / plugin)
