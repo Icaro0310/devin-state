@@ -226,7 +226,10 @@ def test_scan_blobs_sqlite_wal_sidecar(tmp_path):
     assert engine.scan_blobs([("s.db", blob)])["publication_status"] == "CLEAN"
     report = engine.scan_blobs([("s.db", blob), ("s.db-wal", wal)])
     assert report["publication_status"] == "BLOCKED"
-    assert report["files_scanned"] == 2
+    # the wal's rows are covered via replay into the temp db; the wal
+    # blob itself then dispatches as binary → non-blocking skipped.
+    assert report["files_scanned"] == 1
+    assert any(e["file"] == "s.db-wal" for e in report["errors"])
 
 
 def test_scan_blobs_orphan_wal_scans_alone():
@@ -238,3 +241,12 @@ def test_scan_blobs_orphan_wal_scans_alone():
     skipped = [e for e in report["errors"] if e["file"] == "gone.db-wal"]
     assert skipped and skipped[0]["error"].startswith("skipped:")
     assert report["publication_status"] == "CLEAN"
+
+
+def test_scan_blobs_attached_sidecar_content_scanned(tmp_path):
+    """An attached ``-journal`` still has its own bytes scanned: a staged
+    sidecar holding plaintext secrets must not pass attached-but-unread."""
+    blob, _ = _wal_db_blobs(tmp_path)
+    journal = f"journal header\nAPI_KEY={FAKE_AWS_KEY}\n".encode()
+    report = engine.scan_blobs([("s.db", blob), ("s.db-journal", journal)])
+    assert report["publication_status"] == "BLOCKED"

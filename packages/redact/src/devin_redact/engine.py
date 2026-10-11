@@ -925,11 +925,12 @@ def scan_blobs(blobs, *, errors: list[dict] | None = None) -> dict:
     rather than the filesystem. ``errors`` seeds the report's error
     list with resolution failures (e.g. paths with no staged blob).
 
-    SQLite sidecar blobs (``<db>-wal``, ``-shm``, ``-journal``) are not
-    scanned standalone: they group with their primary database so a
-    staged WAL-mode store is scanned with its uncheckpointed commits
-    replayed. Attached sidecars count toward ``files_scanned``; orphans
-    (no staged primary) dispatch as ordinary blobs.
+    SQLite sidecar blobs (``<db>-wal``, ``-shm``, ``-journal``) group
+    with their primary database so a staged WAL-mode store is scanned
+    with its uncheckpointed commits replayed — but each sidecar's own
+    bytes are then scanned too: a committed sidecar that contains
+    plaintext secrets must not slip through attached-but-unscanned.
+    Orphans (no staged primary) dispatch as ordinary blobs.
     """
     all_findings: list[Finding] = []
     errs: list[dict] = list(errors or [])
@@ -970,7 +971,8 @@ def scan_blobs(blobs, *, errors: list[dict] | None = None) -> dict:
         if name in sidecars and _blob_kind(name, blob) == "sqlite":
             sc = sidecars.pop(name)
             _scan_one(name, blob, sc)
-            scanned += len(sc)
+            for suffix, sblob in sc.items():
+                _scan_one(name + suffix, sblob)
         else:
             _scan_one(name, blob)
 
