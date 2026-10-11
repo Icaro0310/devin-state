@@ -192,6 +192,10 @@ def test_split_binary_windows_path():
     assert mid == ["tool.exe", "--config=C:\\My Data\\cfg.json"]
     bare = _split_binary("tool -v --flag", posix=False)
     assert bare == ["tool", "-v", "--flag"]
+    single = _split_binary("'C:\\My Tools\\judge.exe' -v", posix=False)
+    assert single == ["C:\\My Tools\\judge.exe", "-v"]
+    empty = _split_binary('tool "" arg', posix=False)
+    assert empty == ["tool", "", "arg"]
 
 
 def test_poordjaevin_judge_passes_state_and_questions(tmp_path):

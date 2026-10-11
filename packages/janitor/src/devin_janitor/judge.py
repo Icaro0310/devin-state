@@ -38,23 +38,27 @@ MIN_DELETE_CONFIDENCE = 0.6
 
 
 def _win_argv(spec: str) -> list[str]:
-    r"""CommandLineToArgvW-style split: ``"`` toggles quoting anywhere in a
-    token (so ``--config="C:\My Data\x"`` stays one argument) and backslashes
-    are literal. Quotes are consumed, never emitted."""
+    r"""Windows argv split: ``"``/``'`` toggle quoting anywhere in a token
+    (so ``--config="C:\My Data\x"`` or a single-quoted path stays one
+    argument), backslashes are literal, and a bare ``""`` yields an empty
+    argument rather than vanishing. Quotes are consumed, never emitted."""
     parts: list[str] = []
     cur: list[str] = []
     quoted = False
+    started = False  # token exists even when it yields no chars ("")
     for ch in spec:
-        if ch == '"':
+        if ch in "\"'":
             quoted = not quoted
+            started = True
             continue
         if ch in " \t" and not quoted:
-            if cur:
+            if started:
                 parts.append("".join(cur))
-                cur = []
+                cur, started = [], False
             continue
         cur.append(ch)
-    if cur:
+        started = True
+    if started:
         parts.append("".join(cur))
     return parts
 
