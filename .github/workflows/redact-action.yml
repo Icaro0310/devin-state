@@ -1,0 +1,26 @@
+name: redact-action (satellite smoke)
+
+# End-to-end proof for the devin-state-redact-action satellite repo
+# (D-2026-10-10d): the Action wraps `devin-redact gate` on the published
+# package. Scope is backup's src tree — the one package whose sources scan
+# CLEAN. janitor/redact self-flag: their own scanner regexes match
+# the env_assignment pattern class (known false positive, recorded
+# in D-2026-10-10e), and test fixtures intentionally contain
+# secret-shaped strings.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: Icaro0310/devin-state-redact-action@v1
+        with:
+          paths: "packages/backup/src"

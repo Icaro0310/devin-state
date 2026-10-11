@@ -173,3 +173,97 @@ def test_scan_text_unit():
     assert findings and findings[0]["category"] == "api_key"
     assert findings[0]["preview"].startswith("sk-F")
     assert "..." in findings[0]["preview"]
+
+
+def test_env_assignment_suppresses_code_constants():
+    """Scanner-config / parser source must not self-flag: names carrying
+    KEY/SECRET/TOKEN bound to code expressions are constants, not env
+    secrets. This is what lets a repo containing the scanner itself
+    (or any regex/policy generator) pass the gate."""
+    code = (
+        "_STRUCTURAL_KEYS = frozenset({'type', 'kind'})\n"
+        "_TRUE_TOKENS = ('keep', 'true')\n"
+        "_PATH_KEY_RE = re.compile(r'path|file')\n"
+        "SECRET_PATTERNS = [r'AKIA[0-9A-Z]{16}']\n"
+        "CREDENTIAL_MAP = {'user': 'pass'}\n"
+        "build_key = lambda: None\n"  # lowercase name: no KEY/SECRET/TOKEN
+    )
+    findings = scan_text(code, file="x.py", location="text")
+    env = [f for f in findings if f["category"] == "env_assignment"]
+    assert env == [], env
+
+
+def test_env_assignment_still_flags_real_values():
+    """The suppression only covers code expressions — bare and quoted
+    secret values must still flag."""
+    code = (
+        "MY_API_KEY = 'abc123secretvalue'\n"
+        "API_TOKEN=plaintext_token_123\n"
+        "export DB_PASSWORD = hunter2!\n"
+        "_PRIVATE_KEY = 'still-a-hardcoded-secret'\n"
+    )
+    findings = scan_text(code, file=".env", location="text")
+    env = [f for f in findings if f["category"] == "env_assignment"]
+    assert len(env) == 4
+
+
+def test_env_assignment_flags_parenthesized_string_literal():
+    """Regression: ``KEY = ("secret")`` is a string literal, not a code
+    expression — parens group, they do not contain. Previously the
+    code-assignment guard suppressed it and the gate went CLEAN."""
+    findings = scan_text(
+        'DB_PASSWORD = ("hunter' + '2fake")\n',
+        file=".env",
+        location="text",
+    )
+    env = [f for f in findings if f["category"] == "env_assignment"]
+    assert len(env) == 1
+
+
+def test_env_assignment_still_suppresses_paren_code():
+    """Parenthesized *expressions* (tuples, calls) remain suppressed —
+    only a lone string literal inside parens flags."""
+    code = (
+        "API_TOKENS = ('keep', 'true')\n"
+        "DB_PASSWORD = (get_secret())\n"
+    )
+    findings = scan_text(code, file="x.py", location="text")
+    env = [f for f in findings if f["category"] == "env_assignment"]
+    assert env == [], env
+
+
+def test_env_assignment_paren_literal_variants_flag():
+    """Every spelling of "one string literal" is the same hardcoded
+    value — nested parens, prefixes, triple quotes, implicit
+    concatenation, a trailing ``#`` comment, even a one-element tuple
+    (``("x",)`` — the wrapped literal one comma away)."""
+    code = (
+        'A_API_KEY = ("v1fake")  # rotate soon\n'
+        "B_API_KEY = ('v2' 'fake')\n"
+        'C_API_KEY = ("v3fake",)\n'
+        'D_API_KEY = (("v4fake"))\n'
+        "E_API_KEY = ('''v5fake''')\n"
+        'F_API_KEY = (b"v6fake")\n'
+        'G_API_KEY = (rb"v7fake")\n'
+    )
+    findings = scan_text(code, file="x.py", location="text")
+    env = [f for f in findings if f["category"] == "env_assignment"]
+    assert len(env) == 7, env
+
+
+def test_env_assignment_paren_expression_variants_suppressed():
+    """Dynamic expressions stay suppressed — calls, f-strings,
+    generator/comprehension expressions, conditionals and real
+    containers are code, not literals."""
+    code = (
+        'A_API_KEY = (f"{get_key()}")\n'
+        "B_API_KEY = (get_key())\n"
+        "C_API_KEY = ('a', 'b')\n"
+        "D_API_KEY = (x for x in y)\n"
+        'E_API_KEY = ("x") if cond else other\n'
+        "F_API_KEY = ['only-one']\n"
+        "G_API_KEY = {'k': 'v'}\n"
+    )
+    findings = scan_text(code, file="x.py", location="text")
+    env = [f for f in findings if f["category"] == "env_assignment"]
+    assert env == [], env

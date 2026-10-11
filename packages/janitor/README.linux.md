@@ -47,6 +47,19 @@ _Daily cleanup. `devin-janitor install` registers the built-in daily report job 
 Equivalent `systemd --user` timer works too; enable lingering if it must run without a login session.
 
 
+## Adapters (MCP / Devin skill / plugin)
+
+- MCP server: `pip install 'devin-janitor[mcp]'` then run `devin-janitor-mcp` (stdio).
+  Read-only tools only.
+- Devin plugin + skill: `devin plugins install
+  Icaro0310/devin-state#packages/janitor/adapters`. The manifest
+  launches the server through `uvx --from 'devin-janitor[mcp]' devin-janitor-mcp`, which
+  resolves once the next PyPI release ships. Until then, an
+  editable install does not change what `uvx --from` resolves —
+  either run the source-installed `devin-janitor-mcp` directly, or
+  point a local manifest copy at the checkout:
+  `uvx --from './packages/janitor[mcp]' devin-janitor-mcp`.
+
 ## Troubleshooting
 
 - If a command is not found, ensure the `uv` tools directory is on `PATH` and run `uv tool update-shell`.

@@ -161,6 +161,18 @@ Two honest caveats for restricted machines:
   [poordjaevin](https://github.com/Icaro0310/devin-judge) with its Devin ACP
   backend gives you a Devin-native judge with no extra infrastructure.
 
+## Adapters (MCP server, Devin skill, plugin)
+
+`devin_janitor.mcp_server` exposes the read-only surface as MCP tools — `janitor_dry_run` (same payload as `report --json`) and
+`janitor_classify` (same as `scan --json`)
+— via the `devin-janitor-mcp` entry point (`pip install 'devin-janitor[mcp]'`). The
+`adapters/` directory is a self-contained Devin plugin root
+(`adapters/.devin-plugin/plugin.json` + `adapters/skills/devin-janitor/SKILL.md`),
+installable with `devin plugins install
+Icaro0310/devin-state#packages/janitor/adapters`. Removing sessions stays a
+human-confirmed CLI action and is deliberately not exposed through any
+adapter.
+
 ## Platform support
 
 Tested on **Windows and Linux** (`windows-latest` + `ubuntu-latest` in CI).

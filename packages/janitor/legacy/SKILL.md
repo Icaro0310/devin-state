@@ -1,11 +1,18 @@
 ---
 name: session-janitor
-description: "Limpeza diária de sessões-poluição do Devin Desktop (vazias, ruído de automação/eval, ciclos efémeros heartbeat/mailbox, duplicadas). Export para Obsidian antes de apagar; Djævin julga casos ambíguos (fail-open)."
+description: "(LEGADO/arquivado — superseded pela skill packaged `devin-janitor`) Documentação do pipeline histórico de limpeza diária de sessões-poluição do Devin Desktop. Para agentes: apenas scan/report dry-run; apply/vacuum corre só via Task Scheduler ou invocação humana explícita."
 triggers:
   - model
 ---
 
-# Session Janitor
+# Session Janitor (LEGADO — arquivado)
+
+> **Estado**: arquivado como proveniência. A superfície atual para agentes
+> é a skill packaged `devin-janitor` (`packages/janitor/adapters/skills/`),
+> que expõe apenas `devin-janitor scan`/`report` — dry-run, sem escrita.
+> Este documento descreve o que a task agendada faz; **um agente nunca
+> corre `--apply`, `--vacuum-only` ou qualquer comando destrutivo** —
+> execução é exclusiva do Task Scheduler ou de invocação humana explícita.
 
 `scripts/session-janitor.py` — corre diariamente via Task Scheduler
 (`DevinSessionJanitor`, 04:30) e mantém o space/session list limpo.
@@ -30,10 +37,17 @@ triggers:
 
 ## Operação
 
+Para um agente, a operação permitida é **somente dry-run** (a forma
+packaged é `devin-janitor scan`/`report`; este script legado corre
+sem flags para o mesmo efeito):
+
 ```bash
 python scripts/session-janitor.py            # dry-run (plano)
-python scripts/session-janitor.py --apply    # executa
+python scripts/session-janitor.py --apply    # EXECUÇÃO — só humano/task agendada
 ```
+
+`--apply` e `--vacuum-only` são operações destrutivas com confirmação
+humana; nunca devem aparecer numa superfície AI-driven.
 
 Flags: `--grace-hours N` · `--max-delete N` · `--no-djævin` · `--no-export`
 

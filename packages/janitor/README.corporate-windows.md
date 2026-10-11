@@ -50,6 +50,16 @@ schtasks /create /tn "devin-janitor" /tr "devin-janitor run --apply" /sc daily /
 User-scope `schtasks` needs no admin. If Group Policy disables Task Scheduler, run the command manually or use the tool's own `install` subcommand where available.
 
 
+## Adapters (MCP / Devin skill / plugin)
+
+- MCP server: `pip install 'devin-janitor[mcp]'` then run `devin-janitor-mcp` (stdio).
+  Read-only tools only.
+- Devin plugin + skill: `devin plugins install
+  Icaro0310/devin-state#packages/janitor/adapters`. The manifest
+  launches the server through `uvx --from 'devin-janitor[mcp]' devin-janitor-mcp`, which
+  resolves once the next PyPI release ships — until then install from
+  source (`pip install -e 'packages/janitor[mcp]'` from a checkout).
+
 ## Troubleshooting
 
 - If a command is not found, reopen PowerShell and run `uv tool update-shell`.

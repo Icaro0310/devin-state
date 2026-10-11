@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Read-only adapters: `devin_backup.mcp_server` MCP server
+  (`backup_verify` + `backup_list` + `backup_diff`,
+  `devin-backup-mcp` entry point, `mcp` extra), Devin skill and
+  `adapters/` plugin root; setup documented in the OS guides.
+
 - README gains the generated `Part of the DEVIN ecosystem` block
   (track/nature/audience/interface rendered from the registry).
 

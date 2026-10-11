@@ -17,15 +17,18 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+mcp = ["mcp>=1.2"]
 
 [project.scripts]
 devin-backup = "devin_backup.cli:main"
+devin-backup-mcp = "devin_backup.mcp_server:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["src"]
 
 [tool.uv.sources]
 devin-install-scheduler = { workspace = true }

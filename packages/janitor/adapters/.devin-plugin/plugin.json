@@ -1,0 +1,15 @@
+{
+  "name": "devin-janitor",
+  "version": "0.1.0",
+  "description": "Advisory session-lifecycle reports for Devin Desktop — tier classification and recoverable-space dry-run. Read-only, never removes anything.",
+  "author": { "name": "Icaro0310" },
+  "repository": "https://github.com/Icaro0310/devin-state",
+  "license": "MIT",
+  "keywords": ["devin", "janitor", "cleanup-report", "sessions.db"],
+  "mcpServers": {
+    "devin-janitor": {
+      "command": "uvx",
+      "args": ["--from", "devin-janitor[mcp]", "devin-janitor-mcp"]
+    }
+  }
+}

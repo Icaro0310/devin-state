@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `gate --staged` + published pre-commit hook: the hook now runs
+  `devin-redact gate --staged`, which scans each path's blob in the git
+  index (`:0:<path>`) via the new `devin_redact.staged` /
+  `engine.scan_blobs` path. Previously the hook scanned working-tree
+  files, so a secret staged and then edited or deleted out of the
+  worktree bypassed the gate while still shipping in the commit. Paths
+  with no staged blob (staged deletions, never-added files) are skipped;
+  an unreadable index entry fails closed (exit 2).
+- `env_assignment` literal detection now parses the right-hand side with
+  `ast.literal_eval` instead of a quote-prefix heuristic — the bare
+  `("secret")` fix from 0.2.1 now also covers nested parens, `r`/`b`/`u`
+  prefixes, triple quotes, implicit concatenation (`("a" "b")`),
+  trailing `#` comments and one-element tuples (`("x",)`). Dynamic
+  expressions — calls, f-strings, comprehensions, conditionals and real
+  containers — stay suppressed.
+
 ### Changed
 
 - README gains the generated `Part of the DEVIN ecosystem` block
@@ -86,6 +104,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.2.1] - 2026-10-10
 
 ### Fixed
+
+- `env_assignment` no longer fires when the matched name is bound to a
+  code expression — `_STRUCTURAL_KEYS = frozenset({...})`,
+  `TOKEN_RE = re.compile(...)`, `SECRET_PATTERNS = [...]`. The pattern
+  anchors on KEY/SECRET/TOKEN-carrying names, which made any repo
+  holding scanner configs, env parsers or policy generators (including
+  this package's own source and devin-janitor's regexes) gate BLOCKED.
+  Suppression covers only right-hand sides that are container literals
+  or calls — shapes an env value can never take; bare and quoted values
+  still flag, so private constants holding real secrets remain caught.
+  Applies to scan and redact identically via `_iter_matches`.
 
 - `__version__` now matches the package version (the 0.2.1 wheel had shipped self-reporting 0.2.0).
 - PyPI publish workflow verifies the wheel's self-reported `__version__` against `pyproject.toml` before upload (`--no-deps` install into an isolated target).

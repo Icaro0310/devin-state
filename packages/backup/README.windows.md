@@ -46,6 +46,19 @@ schtasks /create /tn "devin-backup" /tr "devin-backup create --out %USERPROFILE%
 Runs under your account — no admin needed. Adjust `/sc`/`/st` (or `/sc onlogon` for daemons) to taste.
 
 
+## Adapters (MCP / Devin skill / plugin)
+
+- MCP server: `pip install 'devin-backup[mcp]'` then run `devin-backup-mcp` (stdio).
+  Read-only tools only.
+- Devin plugin + skill: `devin plugins install
+  Icaro0310/devin-state#packages/backup/adapters`. The manifest
+  launches the server through `uvx --from 'devin-backup[mcp]' devin-backup-mcp`, which
+  resolves once the next PyPI release ships. Until then, an
+  editable install does not change what `uvx --from` resolves —
+  either run the source-installed `devin-backup-mcp` directly, or
+  point a local manifest copy at the checkout:
+  `uvx --from './packages/backup[mcp]' devin-backup-mcp`.
+
 ## Troubleshooting
 
 - If a command is not found, reopen PowerShell and run `uv tool update-shell`.

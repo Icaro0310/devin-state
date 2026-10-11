@@ -50,6 +50,16 @@ schtasks /create /tn "devin-backup" /tr "devin-backup create --out %USERPROFILE%
 User-scope `schtasks` needs no admin. If Group Policy disables Task Scheduler, run the command manually or use the tool's own `install` subcommand where available.
 
 
+## Adapters (MCP / Devin skill / plugin)
+
+- MCP server: `pip install 'devin-backup[mcp]'` then run `devin-backup-mcp` (stdio).
+  Read-only tools only.
+- Devin plugin + skill: `devin plugins install
+  Icaro0310/devin-state#packages/backup/adapters`. The manifest
+  launches the server through `uvx --from 'devin-backup[mcp]' devin-backup-mcp`, which
+  resolves once the next PyPI release ships — until then install from
+  source (`pip install -e 'packages/backup[mcp]'` from a checkout).
+
 ## Troubleshooting
 
 - If a command is not found, reopen PowerShell and run `uv tool update-shell`.

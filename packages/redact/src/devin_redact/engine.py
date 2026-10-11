@@ -15,6 +15,7 @@ post-redact open test (rollback + restore on failure).
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import itertools
 import json
@@ -22,6 +23,7 @@ import os
 import re
 import shutil
 import sqlite3
+import tempfile
 from pathlib import Path, PurePosixPath
 
 from . import __version__
@@ -32,6 +34,7 @@ _DB_SUFFIXES = {".db", ".sqlite", ".sqlite3"}
 _SQLITE_MAGIC = b"SQLite format 3\x00"
 _SKIP_DIRS = {".git", ".hg", ".svn", "node_modules", "__pycache__", ".venv", "venv"}
 _BINARY_SNIFF_BYTES = 8192
+_DB_SIDECAR_SUFFIXES = ("-wal", "-shm", "-journal")
 _REDACTED_TAG = "<REDACTED:"
 _SEMANTIC_CATEGORY = "sensitive_tool_output"
 _BLOCKING_CATEGORIES = SECRET_CATEGORIES | {_SEMANTIC_CATEGORY}
@@ -60,6 +63,64 @@ def _line_of(text: str, offset: int) -> int:
     return text.count("\n", 0, offset) + 1
 
 
+_CODE_VALUE_RE = re.compile(
+    r"^\s*(?:[(\[{]|[A-Za-z_][\w.]*\s*\()"
+)
+
+
+def _literal_string_value(rhs: str) -> bool:
+    """True when ``rhs`` still parses as a plain string/bytes literal —
+    a hardcoded value, not a code expression.
+
+    ``ast.literal_eval`` does the parsing, so every spelling of "one
+    literal" flags: parentheses (``("x")`` — they group, they do not
+    contain), nested parens, ``r``/``b``/``u`` prefixes, triple quotes,
+    implicit concatenation (``("a" "b")``) and a trailing ``#``
+    comment. Calls, f-strings, name references and real containers
+    (``("a", "b")``, ``["k"]``, ``{"k": "v"}``) fail the eval and stay
+    suppressed as code. A single-element tuple (``("x",)``) is the same
+    hardcoded literal one comma away, so it flags too.
+    """
+    try:
+        value = ast.literal_eval(rhs.strip())
+    except (ValueError, SyntaxError, TypeError, MemoryError, RecursionError):
+        return False
+    if isinstance(value, (str, bytes)):
+        return True
+    # A one-element tuple — ``("x",)`` — is the wrapped literal plus a
+    # trailing comma: still a hardcoded value, not a container of code.
+    return (
+        isinstance(value, tuple)
+        and len(value) == 1
+        and isinstance(value[0], (str, bytes))
+    )
+
+
+def _looks_like_code_assignment(whole: str) -> bool:
+    """False-positive guard for ``env_assignment`` matches.
+
+    The pattern anchors on names containing KEY/SECRET/TOKEN/etc., which
+    also matches code constants — ``_STRUCTURAL_KEYS = frozenset({...})``,
+    ``TOKEN_RE = re.compile(...)``, ``SECRET_PATTERNS = [...]``. A repo
+    holding scanner configs, env parsers or policy generators hits this
+    on every gate run, including devin-redact's own source.
+
+    Suppress when the right-hand side is a container literal
+    (``(``, ``[``, ``{``) or a call (``name(``): real env values are
+    bare or quoted tokens, never code expressions. An RHS that still
+    parses to a plain string/bytes literal — the only shape that can
+    hold a real hardcoded secret — is flagged even inside parentheses
+    (``PASSWORD = ("hunter2")``): parens group but do not contain.
+    """
+    eq = whole.find("=")
+    if eq == -1:
+        return False
+    rhs = whole[eq + 1 :]
+    if not _CODE_VALUE_RE.match(rhs):
+        return False
+    return not _literal_string_value(rhs)
+
+
 def _iter_matches(text: str):
     """Yield ``(category, pattern_name, match)`` for every pattern hit."""
     for category, regexes in PATTERNS.items():
@@ -67,6 +128,11 @@ def _iter_matches(text: str):
             for m in rx.finditer(text):
                 if _REDACTED_TAG in m.group(0):
                     # Already redacted — don't double-report/re-redact.
+                    continue
+                if (
+                    category == "env_assignment"
+                    and _looks_like_code_assignment(m.group(0))
+                ):
                     continue
                 yield category, pattern_name(category, index), m
 
@@ -755,6 +821,30 @@ def _summarize(findings: list[Finding]) -> tuple[dict[str, int], int, str]:
     return dict(sorted(by_category.items())), secrets, status
 
 
+def _report(
+    scanned: int, findings: list[Finding], errors: list[dict]
+) -> dict:
+    """Assemble the SPEC §6 report shared by ``scan``/``scan_blobs``."""
+    findings.sort(
+        key=lambda x: (str(x["file"]), str(x["location"]), str(x["category"]), str(x["fingerprint"]))
+    )
+    by_category, secrets, status = _summarize(findings)
+    return {
+        "tool": "devin-redact",
+        "version": __version__,
+        "files_scanned": scanned,
+        "secrets": secrets,
+        "emails": by_category.get("email", 0),
+        "absolute_paths": by_category.get("absolute_path", 0),
+        "project_names": by_category.get("project_name", 0),
+        "findings_total": len(findings),
+        "by_category": by_category,
+        "publication_status": status,
+        "findings": findings,
+        "errors": errors,
+    }
+
+
 def scan(paths) -> dict:
     """Scan files/directories and return the report contract (SPEC §6).
 
@@ -780,25 +870,118 @@ def scan(paths) -> dict:
         if err:
             errors.append({"file": display, "error": err})
 
-    all_findings.sort(
-        key=lambda x: (str(x["file"]), str(x["location"]), str(x["category"]), str(x["fingerprint"]))
-    )
-    by_category, secrets, status = _summarize(all_findings)
+    return _report(scanned, all_findings, errors)
 
-    return {
-        "tool": "devin-redact",
-        "version": __version__,
-        "files_scanned": scanned,
-        "secrets": secrets,
-        "emails": by_category.get("email", 0),
-        "absolute_paths": by_category.get("absolute_path", 0),
-        "project_names": by_category.get("project_name", 0),
-        "findings_total": len(all_findings),
-        "by_category": by_category,
-        "publication_status": status,
-        "findings": all_findings,
-        "errors": errors,
-    }
+
+def _blob_kind(name: str, blob: bytes) -> str:
+    """Dispatch a ``(name, content)`` blob — the in-memory counterpart
+    of :func:`_target_type`: sqlite by suffix first then magic header,
+    binary by NUL byte, text otherwise."""
+    if Path(name).suffix.lower() in _DB_SUFFIXES:
+        return "sqlite"
+    head = blob[:_BINARY_SNIFF_BYTES]
+    if head.startswith(_SQLITE_MAGIC):
+        return "sqlite"
+    if b"\x00" in head:
+        return "binary"
+    return "text"
+
+
+def _scan_blob_db(
+    name: str, blob: bytes, sidecars: dict[str, bytes] | None = None
+) -> tuple[list[Finding], str | None]:
+    """Scan a SQLite blob via a temp file — ``sqlite3`` needs a real path.
+
+    ``sidecars`` carries the staged ``-wal``/``-shm``/``-journal`` siblings
+    of ``name`` as ``{suffix: content}``. A WAL-mode store staged between
+    checkpoints keeps committed rows only in ``<db>-wal``, so that file is
+    materialized next to the temp db and sqlite replays it on open — the
+    same view a checkout of the commit produces. ``-shm`` is a transient
+    index sqlite rebuilds and ``-journal`` only triggers the rollback a
+    checkout would run anyway, so neither is materialized.
+    """
+    fd, tmp_name = tempfile.mkstemp(suffix=".db")
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(blob)
+        wal = (sidecars or {}).get("-wal")
+        if wal is not None:
+            Path(tmp_name + "-wal").write_bytes(wal)
+        return _scan_db(Path(tmp_name), name)
+    finally:
+        Path(tmp_name).unlink(missing_ok=True)
+        Path(tmp_name + "-wal").unlink(missing_ok=True)
+        Path(tmp_name + "-shm").unlink(missing_ok=True)
+
+
+def scan_blobs(blobs, *, errors: list[dict] | None = None) -> dict:
+    """Scan ``(display_name, content_bytes)`` pairs and return the same
+    report contract as :func:`scan`.
+
+    This is the staged-blob path of the pre-commit gate
+    (``devin_redact.staged``): the working tree is not authoritative for
+    what a commit records — content may be edited or deleted after
+    ``git add`` — so the bytes come from the caller (the git index)
+    rather than the filesystem. ``errors`` seeds the report's error
+    list with resolution failures (e.g. paths with no staged blob).
+
+    SQLite sidecar blobs (``<db>-wal``, ``-shm``, ``-journal``) group
+    with their primary database so a staged WAL-mode store is scanned
+    with its uncheckpointed commits replayed — but each sidecar's own
+    bytes are then scanned too: a committed sidecar that contains
+    plaintext secrets must not slip through attached-but-unscanned.
+    Orphans (no staged primary) dispatch as ordinary blobs.
+    """
+    all_findings: list[Finding] = []
+    errs: list[dict] = list(errors or [])
+    scanned = 0
+
+    sidecars: dict[str, dict[str, bytes]] = {}
+    primaries: list[tuple[str, bytes]] = []
+    for name, blob in blobs:
+        suffix = next(
+            (s for s in _DB_SIDECAR_SUFFIXES if name.endswith(s)), None
+        )
+        if suffix is None:
+            primaries.append((name, blob))
+        else:
+            sidecars.setdefault(name[: -len(suffix)], {})[suffix] = blob
+
+    def _scan_one(
+        name: str, blob: bytes, sc: dict[str, bytes] | None = None
+    ) -> None:
+        nonlocal scanned
+        kind = _blob_kind(name, blob)
+        if kind == "sqlite":
+            findings, err = _scan_blob_db(name, blob, sc)
+        elif kind == "binary":
+            errs.append({"file": name, "error": "skipped: binary file"})
+            return
+        else:
+            findings = scan_text(
+                blob.decode("utf-8", "replace"), file=name, location="text"
+            )
+            err = None
+        scanned += 1
+        all_findings.extend(findings)
+        if err:
+            errs.append({"file": name, "error": err})
+
+    for name, blob in primaries:
+        if name in sidecars and _blob_kind(name, blob) == "sqlite":
+            sc = sidecars.pop(name)
+            _scan_one(name, blob, sc)
+            for suffix, sblob in sc.items():
+                _scan_one(name + suffix, sblob)
+        else:
+            _scan_one(name, blob)
+
+    # Sidecars whose primary is absent or not a SQLite blob stand alone.
+    for base, sc in sidecars.items():
+        for suffix, blob in sc.items():
+            _scan_one(base + suffix, blob)
+
+    return _report(scanned, all_findings, errs)
 
 
 def session_exists(db_path, session_id: str) -> bool | None:

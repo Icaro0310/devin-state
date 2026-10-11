@@ -104,6 +104,7 @@ cross-references when gating a `devin-history` export dir.
 | `sessionend-scan [db]` | `devin-redact: findings=N publication_status=X` | always (incl. BLOCKED) | — | hard error |
 | `session-end` | side file `<data-dir>/redact/<id>.json` (+ summary line) | always (incl. SKIPPED/BLOCKED) | — | usage error |
 | `gate <targets…>` | `CLEAN` / `REVIEW` / `BLOCKED` | CLEAN or REVIEW | BLOCKED | hard error |
+| `gate --staged <paths…>` | same, but scans the *staged index blobs* | CLEAN or REVIEW | BLOCKED | unreadable index |
 | `verify <targets…>` | human summary (`--json` for the report) | CLEAN only | any finding | — |
 | `verify-publish <export-dir>` | per-session verdicts for a `devin-history` export | CLEAN only | any session not CLEAN | usage error |
 
@@ -111,3 +112,11 @@ cross-references when gating a `devin-history` export dir.
 `devin-history` can run it before export and skip/flag exports that are
 `BLOCKED`. The same verdict is available as the top-level
 `publication_status` field of `scan --format json` (the SPEC §6 report).
+
+With `--staged`, each path is resolved to its blob in the git index
+(`git cat-file blob :0:<path>`) and *that* content is scanned — the
+mode the published `devin-redact-gate` pre-commit hook runs in. The
+working tree is not authoritative for a commit: content staged and then
+edited or deleted still ships, so the gate reads the index rather than
+the file on disk. A path with no staged blob (staged deletion, never
+`git add`ed) is skipped — nothing staged means nothing is committed.

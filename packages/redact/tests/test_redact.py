@@ -78,6 +78,13 @@ def test_redact_text_masks_and_keeps_key():
     assert any(e["category"] == "env_assignment" for e in edits)
 
 
+def test_redact_text_parenthesized_assignment():
+    new, edits = redact_text('DB_PASSWORD = ("hunter' + '2fake")\n')
+    assert "hunter" + "2fake" not in new
+    assert new.startswith("DB_PASSWORD =<REDACTED:")
+    assert any(e["category"] == "env_assignment" for e in edits)
+
+
 def test_redact_text_idempotent():
     once, _ = redact_text("token " + FAKE_GITHUB_TOKEN + " end")
     twice, edits2 = redact_text(once)

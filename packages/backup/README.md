@@ -139,6 +139,19 @@ Snapshots contain real session data (prompts, paths, commands). Treat the
 backup destination as sensitive: keep it on a private/encrypted volume and
 apply the same care you give the original stores.
 
+## Adapters (MCP server, Devin skill, plugin)
+
+`devin_backup.mcp_server` exposes the read-only surface as MCP tools — `backup_verify`, `backup_list` and
+`backup_diff` (same payloads as the corresponding `--json` CLI
+commands)
+— via the `devin-backup-mcp` entry point (`pip install 'devin-backup[mcp]'`). The
+`adapters/` directory is a self-contained Devin plugin root
+(`adapters/.devin-plugin/plugin.json` + `adapters/skills/devin-backup/SKILL.md`),
+installable with `devin plugins install
+Icaro0310/devin-state#packages/backup/adapters`. Restoring a snapshot stays a
+human-confirmed CLI action and is deliberately not exposed through any
+adapter.
+
 ## Platform support
 
 Tested on **Windows and Linux** (`windows-latest` + `ubuntu-latest` in CI).
