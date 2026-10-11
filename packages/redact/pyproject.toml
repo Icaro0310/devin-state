@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "devin-redact"
-version = "0.2.0"
+version = "0.2.1"
 description = "Secret and PII redaction that understands Devin tool-call semantics, in-place in SQLite (unofficial)"
 readme = "README.md"
 license = { text = "MIT" }
