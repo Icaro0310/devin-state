@@ -23,32 +23,16 @@ permissions:
   contents: read
 
 jobs:
-  # Wheel __version__ gate lives in one place — every package except
-  # install-scheduler (no __version__) is verified before publish runs.
-  verify:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - {dir: packages/redact, mod: devin_redact}
-          - {dir: packages/backup, mod: devin_backup}
-          - {dir: packages/janitor, mod: devin_janitor}
-    uses: Icaro0310/devin-powerups/.github/workflows/verify-wheel-version.yml@v1
-    with:
-      package-dir: ${{ matrix.dir }}
-      module: ${{ matrix.mod }}
-      python-version: "3.12"
-
-  publish:
-    needs: verify
+  # The tag (or dispatch input) names exactly one package. Resolve it
+  # once and verify only that package — a matrix over all four would
+  # let a stale __version__ in a sibling block this release.
+  resolve:
     runs-on: ubuntu-latest
-    environment: pypi
-    permissions:
-      id-token: write
-      contents: read
+    outputs:
+      dir: ${{ steps.pkg.outputs.dir }}
+      mod: ${{ steps.pkg.outputs.mod }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - name: Resolve package directory
+      - name: Resolve package directory and module
         id: pkg
         env:
           REF: ${{ github.ref_name }}
@@ -56,21 +40,56 @@ jobs:
         run: |
           base="${SEL:-${REF%%-v*}}"
           case "$base" in
-              redact) echo "dir=packages/redact" >> "$GITHUB_OUTPUT" ;;
-              backup) echo "dir=packages/backup" >> "$GITHUB_OUTPUT" ;;
-              janitor) echo "dir=packages/janitor" >> "$GITHUB_OUTPUT" ;;
-              scheduler) echo "dir=shared/install-scheduler" >> "$GITHUB_OUTPUT" ;;
+              redact) echo "dir=packages/redact" >> "$GITHUB_OUTPUT"; echo "mod=devin_redact" >> "$GITHUB_OUTPUT" ;;
+              backup) echo "dir=packages/backup" >> "$GITHUB_OUTPUT"; echo "mod=devin_backup" >> "$GITHUB_OUTPUT" ;;
+              janitor) echo "dir=packages/janitor" >> "$GITHUB_OUTPUT"; echo "mod=devin_janitor" >> "$GITHUB_OUTPUT" ;;
+              # install-scheduler ships no __version__ — empty mod skips the gate.
+              scheduler) echo "dir=shared/install-scheduler" >> "$GITHUB_OUTPUT"; echo "mod=" >> "$GITHUB_OUTPUT" ;;
             *) echo "unknown package: $base" >&2; exit 1 ;;
           esac
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+
+  # Wheel __version__ gate lives in one place — verified before publish
+  # runs, on the resolved package only.
+  verify:
+    needs: resolve
+    if: needs.resolve.outputs.mod != ''
+    uses: Icaro0310/devin-powerups/.github/workflows/verify-wheel-version.yml@61bf0b6bf9d726a8b7b5217556e0f6ed432fbc62 # v1
+    with:
+      package-dir: ${{ needs.resolve.outputs.dir }}
+      module: ${{ needs.resolve.outputs.mod }}
+      python-version: "3.12"
+
+  publish:
+    needs: [resolve, verify]
+    # A skipped verify (install-scheduler has no __version__) must not
+    # cancel the publish leg; a failed one still must.
+    if: ${{ always() && !cancelled() && needs.verify.result != 'failure' }}
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      # Ship the exact dist/ that passed the verify gate — rebuilding
+      # here would upload an unchecked wheel.
+      - name: Download verified dist artifact
+        if: needs.verify.result == 'success'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          python-version: "3.12"
+          name: dist
+          path: dist/
+      # install-scheduler skipped verification, so it builds here.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        if: needs.verify.result == 'skipped'
       - name: Build sdist and wheel
-        working-directory: ${{ steps.pkg.outputs.dir }}
+        if: needs.verify.result == 'skipped'
+        working-directory: ${{ needs.resolve.outputs.dir }}
         run: |
           python -m pip install --upgrade build twine
           python -m build
           python -m twine check dist/*
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          cp dist/* "$GITHUB_WORKSPACE/dist/"
       # Supply-chain guard: redact 0.2.1 and evals 0.3.x once reached
       # PyPI via dispatch from unmerged branches, leaving the index ahead
       # of main. Refuse to upload when the publish origin is not merged.
@@ -87,5 +106,5 @@ jobs:
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
         with:
           password: ${{ secrets.PYPI_API_TOKEN }}
-          packages-dir: ${{ steps.pkg.outputs.dir }}/dist
+          packages-dir: dist
           skip-existing: true
