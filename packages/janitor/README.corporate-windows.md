@@ -58,7 +58,7 @@ Zscaler é comum em ambientes corporativos e se comporta diferente de um proxy g
 
 ## Recurring runs (optional)
 
-_Daily cleanup with `--apply` as shown. The package also ships `devin-janitor install`, which registers its own daily `report` job (cron / Task Scheduler / elapsed hook); the two jobs are different — `report` only reports, `--apply` actually cleans._
+_Daily cleanup. `devin-janitor install` registers the built-in daily report job (cron / Task Scheduler / elapsed hook); prefer it over hand-rolled entries._
 
 ```powershell
 schtasks /create /tn "devin-janitor" /tr "devin-janitor run --apply" /sc daily /st 04:30 /f

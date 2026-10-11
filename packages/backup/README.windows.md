@@ -37,7 +37,7 @@ Use `--data-dir`/`--config-dir` for non-default locations.
 
 ## Recurring runs (optional)
 
-_Nightly snapshot; pair with a weekly `devin-backup rotate --keep 10 --yes`. Or let the tool self-schedule with `devin-backup install` (cron / Task Scheduler / elapsed backends)._
+_Nightly snapshot; pair with a weekly `devin-backup rotate --keep 10 --yes` pointed at the same `--out` directory (rotate uses the default backups dir otherwise and finds nothing). Or let the tool self-schedule with `devin-backup install` (cron / Task Scheduler / elapsed backends)._
 
 Quoted path arguments inside `/tr` fail differently in cmd.exe and PowerShell 5.1, so this job goes through a wrapper `.cmd` file in your own profile directory (quoting inside the file works normally, and no other user can replace it). The task inherits your user `PATH`, so the wrapper first prepends the standard tool directory (`%USERPROFILE%\.local\bin`); if the tool lives elsewhere, write its full path inside the `.cmd`. Register from PowerShell with the `ScheduledTask` cmdlets, which take the path literally and replace cleanly on rerun (`-Force`):
 
