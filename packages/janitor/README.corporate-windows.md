@@ -61,7 +61,7 @@ Zscaler é comum em ambientes corporativos e se comporta diferente de um proxy g
 _Daily cleanup. `devin-janitor install` registers the built-in daily report job (cron / Task Scheduler / elapsed hook); prefer it over hand-rolled entries._
 
 ```powershell
-schtasks /create /tn "devin-janitor" /tr 'devin-janitor run --apply' /sc daily /st 04:30 /f
+schtasks /create /tn "devin-janitor" /tr "devin-janitor run --apply" /sc daily /st 04:30 /f
 ```
 
 User-scope `schtasks` needs no admin. If Group Policy disables Task Scheduler (`0x80070005` "Access is denied"), run the command manually or use the tool's own `install` subcommand where available. Options needing elevation, "Run whether user is logged on or not", highest privileges, are usually policy-blocked; when they are, a user-scope logon trigger (`/sc onlogon`) is the realistic fallback.

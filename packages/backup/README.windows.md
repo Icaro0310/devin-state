@@ -39,8 +39,14 @@ Use `--data-dir`/`--config-dir` for non-default locations.
 
 _Nightly snapshot; pair with a weekly `devin-backup rotate --keep 10 --yes`. Or let the tool self-schedule with `devin-backup install` (cron / Task Scheduler / elapsed backends)._
 
+Save this as `%USERPROFILE%\devin-tasks\devin-backup.cmd` (quoting works normally inside a `.cmd` file):
+
+```batch
+devin-backup create --out "%USERPROFILE%\backups"
+```
+
 ```powershell
-schtasks /create /tn "devin-backup" /tr 'devin-backup create --out %USERPROFILE%\backups' /sc daily /st 03:15 /f
+schtasks /create /tn "devin-backup" /tr "%USERPROFILE%\devin-tasks\devin-backup.cmd" /sc daily /st 03:15 /f
 ```
 
 Runs under your account, no admin needed. Adjust `/sc`/`/st` (or `/sc onlogon` for daemons) to taste.

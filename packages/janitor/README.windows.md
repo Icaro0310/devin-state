@@ -40,7 +40,7 @@ Use `--data-dir`/`--config-dir` (plus `--sessions-db`/`--acp-dir`/`--locks-dir` 
 _Daily cleanup. `devin-janitor install` registers the built-in daily report job (cron / Task Scheduler / elapsed hook); prefer it over hand-rolled entries._
 
 ```powershell
-schtasks /create /tn "devin-janitor" /tr 'devin-janitor run --apply' /sc daily /st 04:30 /f
+schtasks /create /tn "devin-janitor" /tr "devin-janitor run --apply" /sc daily /st 04:30 /f
 ```
 
 Runs under your account, no admin needed. Adjust `/sc`/`/st` (or `/sc onlogon` for daemons) to taste.
