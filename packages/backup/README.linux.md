@@ -1,4 +1,4 @@
-# devin-backup — Linux guide
+# devin-backup, Linux guide
 
 This guide covers Linux setup only. See [README.md](README.md) for features, shared commands, limitations, and the safety model.
 
@@ -29,11 +29,11 @@ Use `--data-dir`/`--config-dir` for non-default locations.
 
 ## Linux specifics
 
-- **Installer choice:** `uv tool install` is the recommended path (isolated environment, managed Python). `pipx install` works identically for PyPI packages; `pip install --user` is the last-resort fallback — no isolation, watch dependency conflicts.
+- **Installer choice:** `uv tool install` is the recommended path (isolated environment, managed Python). `pipx install` works identically for PyPI packages; `pip install --user` is the last-resort fallback, no isolation, watch dependency conflicts.
 - **PATH:** executables land in `~/.local/bin`. If a command is not found, add `export PATH="$HOME/.local/bin:$PATH"` to `~/.bashrc`/`~/.zshrc` and open a new shell.
-- **Distros:** tested on Ubuntu; Debian, Fedora and Arch follow the same steps — only `uv`/Python acquisition differs (distro package or the uv installer script).
-- **Headless and minimal environments:** no display is needed — every CLI is text-only. In containers or WSL, install `uv` and Git and follow the same steps; `XDG_*` paths resolve normally.
-- **Permissions:** tools read Devin data under `$XDG_DATA_HOME/devin` and write only their own config/state — no root or sudo is required.
+- **Distros:** tested on Ubuntu; Debian, Fedora and Arch follow the same steps, only `uv`/Python acquisition differs (distro package or the uv installer script).
+- **Headless and minimal environments:** no display is needed, every CLI is text-only. In containers or WSL, install `uv` and Git and follow the same steps; `XDG_*` paths resolve normally.
+- **Permissions:** tools read Devin data under `$XDG_DATA_HOME/devin` and write only their own config/state, no root or sudo is required.
 - **Scheduling:** optional recurring work belongs to `systemd --user` timers or cron; installation never creates jobs.
 
 ## Recurring runs (optional)
