@@ -5,46 +5,9 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.2.2] - 2026-10-11
-
-### Fixed
-
-- `__version__` now matches the published artifact: the 0.2.1 wheel on
-  PyPI self-reports 0.2.0 (built from an unmerged branch before the
-  verify gate existed). This release exists so the index carries a
-  wheel whose metadata and self-report agree.
-
 ## [Unreleased]
 
-### Fixed
-
-- `gate --staged` + published pre-commit hook: the hook now runs
-  `devin-redact gate --staged`, which scans each path's blob in the git
-  index (`:0:<path>`) via the new `devin_redact.staged` /
-  `engine.scan_blobs` path. Previously the hook scanned working-tree
-  files, so a secret staged and then edited or deleted out of the
-  worktree bypassed the gate while still shipping in the commit. Paths
-  with no staged blob (staged deletions, never-added files) are skipped;
-  an unreadable index entry fails closed (exit 2).
-- `env_assignment` literal detection now parses the right-hand side with
-  `ast.literal_eval` instead of a quote-prefix heuristic — the bare
-  `("secret")` fix from 0.2.1 now also covers nested parens, `r`/`b`/`u`
-  prefixes, triple quotes, implicit concatenation (`("a" "b")`),
-  trailing `#` comments and one-element tuples (`("x",)`). Dynamic
-  expressions — calls, f-strings, comprehensions, conditionals and real
-  containers — stay suppressed.
-
-### Changed
-
-- README gains the generated `Part of the DEVIN ecosystem` block
-  (track/nature/audience/interface rendered from the registry).
-- Test fixtures are allowlisted via `.secrets-scan-allow`
-  (`path sha256=<hash>` entries) now that the shared secrets-scan drops
-  its blanket `fixtures` directory exclusion.
-
-- `labeler.yml` is now a thin caller of the shared reusable workflow in `devin-powerups` (`@v1`); PR labeling behavior is unchanged.
-
-- Install section now recommends pypi `uv tool install devin-redact` as the primary route, with `pipx`/source installs documented as alternatives.
+## [0.2.2] - 2026-10-11
 
 ### Added
 
@@ -107,8 +70,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- README gains the generated `Part of the DEVIN ecosystem` block
+  (track/nature/audience/interface rendered from the registry).
+- Test fixtures are allowlisted via `.secrets-scan-allow`
+  (`path sha256=<hash>` entries) now that the shared secrets-scan drops
+  its blanket `fixtures` directory exclusion.
+
+- `labeler.yml` is now a thin caller of the shared reusable workflow in `devin-powerups` (`@v1`); PR labeling behavior is unchanged.
+
+- Install section now recommends pypi `uv tool install devin-redact` as the primary route, with `pipx`/source installs documented as alternatives.
+
 - `llms.txt` no longer states a hard-coded ecosystem size; the registry owns the count.
 - Platform guides and the README install command no longer pin a release; they install the latest published version.
+
+### Fixed
+
+- `__version__` now matches the published artifact: the 0.2.1 wheel on
+  PyPI self-reports 0.2.0 (built from an unmerged branch before the
+  verify gate existed). This release exists so the index carries a
+  wheel whose metadata and self-report agree.
+
+- `gate --staged` + published pre-commit hook: the hook now runs
+  `devin-redact gate --staged`, which scans each path's blob in the git
+  index (`:0:<path>`) via the new `devin_redact.staged` /
+  `engine.scan_blobs` path. Previously the hook scanned working-tree
+  files, so a secret staged and then edited or deleted out of the
+  worktree bypassed the gate while still shipping in the commit. Paths
+  with no staged blob (staged deletions, never-added files) are skipped;
+  an unreadable index entry fails closed (exit 2).
+- `env_assignment` literal detection now parses the right-hand side with
+  `ast.literal_eval` instead of a quote-prefix heuristic — the bare
+  `("secret")` fix from 0.2.1 now also covers nested parens, `r`/`b`/`u`
+  prefixes, triple quotes, implicit concatenation (`("a" "b")`),
+  trailing `#` comments and one-element tuples (`("x",)`). Dynamic
+  expressions — calls, f-strings, comprehensions, conditionals and real
+  containers — stay suppressed.
 
 ## [0.2.1] - 2026-10-10
 
