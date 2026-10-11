@@ -89,7 +89,7 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "devin-redact"
-version = "0.2.0"
+version = "0.2.1"
 source = { editable = "packages/redact" }
 
 [package.optional-dependencies]

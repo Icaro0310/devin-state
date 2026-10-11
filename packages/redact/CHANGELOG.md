@@ -83,6 +83,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `llms.txt` no longer states a hard-coded ecosystem size; the registry owns the count.
 - Platform guides and the README install command no longer pin a release; they install the latest published version.
 
+## [0.2.1] - 2026-10-10
+
+### Fixed
+
+- `__version__` now matches the package version (the 0.2.1 wheel had shipped self-reporting 0.2.0).
+- PyPI publish workflow verifies the wheel's self-reported `__version__` against `pyproject.toml` before upload (`--no-deps` install into an isolated target).
+- Release workflow passes `github.ref_name` through `env:` instead of interpolating it into `run:` shell source.
+
+### Added
+
+- GHCR image `ghcr.io/icaro0310/devin-redact` tagged `<version>` + `latest` (linux/amd64 + linux/arm64); the image installs the published wheel, never the checkout.
+
 ## [0.2.0] - 2026-09-29
 
 ### Added
