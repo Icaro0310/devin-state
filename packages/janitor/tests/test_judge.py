@@ -2,7 +2,6 @@ import sys
 import textwrap
 
 import pytest
-
 from devin_janitor.inventory import SessionRow
 from devin_janitor.judge import (
     CommandJudge,
