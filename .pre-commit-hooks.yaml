@@ -1,13 +1,14 @@
 - id: devin-redact-gate
   name: devin-redact secret scan
   description: >-
-    Gate staged files with `devin-redact gate`: exits non-zero when the
-    scan verdict is BLOCKED, so secrets never reach the commit. While
-    the hook runs, pre-commit has already stashed unstaged changes, so
-    the files on disk are exactly the versions being committed — the
-    scan never sees a tree that differs from the index. The hook only
+    Gate staged files with `devin-redact gate --staged`: exits non-zero
+    when the scan verdict is BLOCKED, so secrets never reach the commit.
+    The hook reads each staged path's index blob (`git cat-file blob
+    :0:<path>`), not the working-tree file — content staged with `git
+    add` and then edited or deleted out of the working tree still ships
+    in the commit, and only the index copy can see it. The hook only
     scans — redaction is never applied automatically; fix findings
     manually from the CLI.
-  entry: devin-redact gate
+  entry: devin-redact gate --staged
   language: system
   types: [file]

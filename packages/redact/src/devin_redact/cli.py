@@ -7,7 +7,7 @@ import json
 import sys
 from pathlib import Path
 
-from . import __version__, engine, paths, publish, session_end
+from . import __version__, engine, paths, publish, session_end, staged
 from .sarif import report_to_sarif
 
 
@@ -52,6 +52,13 @@ def _build_parser() -> argparse.ArgumentParser:
         "exits 0 for CLEAN/REVIEW, 1 for BLOCKED, 2 on error",
     )
     gate_p.add_argument("paths", nargs="+", type=Path, help="files or directories to gate")
+    gate_p.add_argument(
+        "--staged",
+        action="store_true",
+        help="scan each path's staged index blob (git :0:<path>) instead "
+        "of the working-tree file — the pre-commit mode, so edits or "
+        "deletions after `git add` cannot bypass the gate",
+    )
 
     hook_p = sub.add_parser(
         "sessionend-scan",
@@ -190,7 +197,15 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if report["publication_status"] == "CLEAN" else 1
 
     if args.command == "gate":
-        report = engine.scan(args.paths)
+        if args.staged:
+            try:
+                blobs, errs = staged.staged_blobs(args.paths)
+            except staged.StagedScanError as exc:
+                print(f"devin-redact: {exc}", file=sys.stderr)
+                return 2
+            report = engine.scan_blobs(blobs, errors=errs)
+        else:
+            report = engine.scan(args.paths)
         hard = _blocking_errors(report)
         if hard:
             for e in hard:

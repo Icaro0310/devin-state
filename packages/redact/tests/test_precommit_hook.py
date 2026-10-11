@@ -21,8 +21,15 @@ def test_hooks_manifest_exists():
 def test_hook_entry_runs_gate():
     text = _text()
     assert "id: devin-redact-gate" in text
-    assert "entry: devin-redact gate" in text
     assert "language: system" in text
+
+
+def test_hook_entry_scans_staged_blobs():
+    """The gate must read the staged index blobs (`--staged`), not the
+    working tree — a file edited or deleted after `git add` still
+    ships its staged content in the commit."""
+    text = _text()
+    assert "entry: devin-redact gate --staged" in text
 
 
 def test_hook_receives_staged_filenames():

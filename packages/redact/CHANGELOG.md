@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `gate --staged` + published pre-commit hook: the hook now runs
+  `devin-redact gate --staged`, which scans each path's blob in the git
+  index (`:0:<path>`) via the new `devin_redact.staged` /
+  `engine.scan_blobs` path. Previously the hook scanned working-tree
+  files, so a secret staged and then edited or deleted out of the
+  worktree bypassed the gate while still shipping in the commit. Paths
+  with no staged blob (staged deletions, never-added files) are skipped;
+  an unreadable index entry fails closed (exit 2).
+- `env_assignment` literal detection now parses the right-hand side with
+  `ast.literal_eval` instead of a quote-prefix heuristic — the bare
+  `("secret")` fix from 0.2.1 now also covers nested parens, `r`/`b`/`u`
+  prefixes, triple quotes, implicit concatenation (`("a" "b")`),
+  trailing `#` comments and one-element tuples (`("x",)`). Dynamic
+  expressions — calls, f-strings, comprehensions, conditionals and real
+  containers — stay suppressed.
+
 ### Changed
 
 - README gains the generated `Part of the DEVIN ecosystem` block

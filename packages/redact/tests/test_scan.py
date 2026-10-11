@@ -230,3 +230,40 @@ def test_env_assignment_still_suppresses_paren_code():
     findings = scan_text(code, file="x.py", location="text")
     env = [f for f in findings if f["category"] == "env_assignment"]
     assert env == [], env
+
+
+def test_env_assignment_paren_literal_variants_flag():
+    """Every spelling of "one string literal" is the same hardcoded
+    value — nested parens, prefixes, triple quotes, implicit
+    concatenation, a trailing ``#`` comment, even a one-element tuple
+    (``("x",)`` — the wrapped literal one comma away)."""
+    code = (
+        'A_API_KEY = ("v1fake")  # rotate soon\n'
+        "B_API_KEY = ('v2' 'fake')\n"
+        'C_API_KEY = ("v3fake",)\n'
+        'D_API_KEY = (("v4fake"))\n'
+        "E_API_KEY = ('''v5fake''')\n"
+        'F_API_KEY = (b"v6fake")\n'
+        'G_API_KEY = (rb"v7fake")\n'
+    )
+    findings = scan_text(code, file="x.py", location="text")
+    env = [f for f in findings if f["category"] == "env_assignment"]
+    assert len(env) == 7, env
+
+
+def test_env_assignment_paren_expression_variants_suppressed():
+    """Dynamic expressions stay suppressed — calls, f-strings,
+    generator/comprehension expressions, conditionals and real
+    containers are code, not literals."""
+    code = (
+        'A_API_KEY = (f"{get_key()}")\n'
+        "B_API_KEY = (get_key())\n"
+        "C_API_KEY = ('a', 'b')\n"
+        "D_API_KEY = (x for x in y)\n"
+        'E_API_KEY = ("x") if cond else other\n'
+        "F_API_KEY = ['only-one']\n"
+        "G_API_KEY = {'k': 'v'}\n"
+    )
+    findings = scan_text(code, file="x.py", location="text")
+    env = [f for f in findings if f["category"] == "env_assignment"]
+    assert env == [], env

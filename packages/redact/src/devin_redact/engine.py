@@ -15,6 +15,7 @@ post-redact open test (rollback + restore on failure).
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import itertools
 import json
@@ -22,6 +23,7 @@ import os
 import re
 import shutil
 import sqlite3
+import tempfile
 from pathlib import Path, PurePosixPath
 
 from . import __version__
@@ -63,28 +65,34 @@ def _line_of(text: str, offset: int) -> int:
 _CODE_VALUE_RE = re.compile(
     r"^\s*(?:[(\[{]|[A-Za-z_][\w.]*\s*\()"
 )
-_STR_PREFIX_RE = re.compile(r"^[rRuUbBfF]{0,3}(['\"])")
 
 
-def _paren_wrapped_string_literal(rhs: str) -> bool:
-    """True when ``rhs`` is a single string literal wrapped only in
-    parentheses — ``("hunter2")``, ``((b'tok'))``.
+def _literal_string_value(rhs: str) -> bool:
+    """True when ``rhs`` still parses as a plain string/bytes literal —
+    a hardcoded value, not a code expression.
 
-    Parentheses group but do not contain: ``("x")`` evaluates to the
-    string ``"x"``, so this shape is a hardcoded value, not a code
-    expression. Tuples/comprehensions inside parens (``('a', 'b')``),
-    real containers (``['x']``, ``{'k': 'v'}``) and calls still count
-    as code.
+    ``ast.literal_eval`` does the parsing, so every spelling of "one
+    literal" flags: parentheses (``("x")`` — they group, they do not
+    contain), nested parens, ``r``/``b``/``u`` prefixes, triple quotes,
+    implicit concatenation (``("a" "b")``) and a trailing ``#``
+    comment. Calls, f-strings, name references and real containers
+    (``("a", "b")``, ``["k"]``, ``{"k": "v"}``) fail the eval and stay
+    suppressed as code. A single-element tuple (``("x",)``) is the same
+    hardcoded literal one comma away, so it flags too.
     """
-    s = rhs.strip()
-    while s.startswith("(") and s.endswith(")"):
-        s = s[1:-1].strip()
-    m = _STR_PREFIX_RE.match(s)
-    if not m or len(s) <= m.end() or not s.endswith(m.group(1)):
+    try:
+        value = ast.literal_eval(rhs.strip())
+    except (ValueError, SyntaxError, TypeError, MemoryError, RecursionError):
         return False
-    # A quote of the same kind inside means separate literals —
-    # e.g. ('a', 'b') is a tuple, not one value.
-    return m.group(1) not in s[m.end() : -1]
+    if isinstance(value, (str, bytes)):
+        return True
+    # A one-element tuple — ``("x",)`` — is the wrapped literal plus a
+    # trailing comma: still a hardcoded value, not a container of code.
+    return (
+        isinstance(value, tuple)
+        and len(value) == 1
+        and isinstance(value[0], (str, bytes))
+    )
 
 
 def _looks_like_code_assignment(whole: str) -> bool:
@@ -98,11 +106,10 @@ def _looks_like_code_assignment(whole: str) -> bool:
 
     Suppress when the right-hand side is a container literal
     (``(``, ``[``, ``{``) or a call (``name(``): real env values are
-    bare or quoted tokens, never code expressions. Literal string
-    values — the only shape that can be a real hardcoded secret — are
-    still flagged, including when merely wrapped in parentheses
-    (``PASSWORD = ("hunter2")``), since parens alone do not build a
-    container.
+    bare or quoted tokens, never code expressions. An RHS that still
+    parses to a plain string/bytes literal — the only shape that can
+    hold a real hardcoded secret — is flagged even inside parentheses
+    (``PASSWORD = ("hunter2")``): parens group but do not contain.
     """
     eq = whole.find("=")
     if eq == -1:
@@ -110,7 +117,7 @@ def _looks_like_code_assignment(whole: str) -> bool:
     rhs = whole[eq + 1 :]
     if not _CODE_VALUE_RE.match(rhs):
         return False
-    return not _paren_wrapped_string_literal(rhs)
+    return not _literal_string_value(rhs)
 
 
 def _iter_matches(text: str):
@@ -813,6 +820,30 @@ def _summarize(findings: list[Finding]) -> tuple[dict[str, int], int, str]:
     return dict(sorted(by_category.items())), secrets, status
 
 
+def _report(
+    scanned: int, findings: list[Finding], errors: list[dict]
+) -> dict:
+    """Assemble the SPEC §6 report shared by ``scan``/``scan_blobs``."""
+    findings.sort(
+        key=lambda x: (str(x["file"]), str(x["location"]), str(x["category"]), str(x["fingerprint"]))
+    )
+    by_category, secrets, status = _summarize(findings)
+    return {
+        "tool": "devin-redact",
+        "version": __version__,
+        "files_scanned": scanned,
+        "secrets": secrets,
+        "emails": by_category.get("email", 0),
+        "absolute_paths": by_category.get("absolute_path", 0),
+        "project_names": by_category.get("project_name", 0),
+        "findings_total": len(findings),
+        "by_category": by_category,
+        "publication_status": status,
+        "findings": findings,
+        "errors": errors,
+    }
+
+
 def scan(paths) -> dict:
     """Scan files/directories and return the report contract (SPEC §6).
 
@@ -838,25 +869,66 @@ def scan(paths) -> dict:
         if err:
             errors.append({"file": display, "error": err})
 
-    all_findings.sort(
-        key=lambda x: (str(x["file"]), str(x["location"]), str(x["category"]), str(x["fingerprint"]))
-    )
-    by_category, secrets, status = _summarize(all_findings)
+    return _report(scanned, all_findings, errors)
 
-    return {
-        "tool": "devin-redact",
-        "version": __version__,
-        "files_scanned": scanned,
-        "secrets": secrets,
-        "emails": by_category.get("email", 0),
-        "absolute_paths": by_category.get("absolute_path", 0),
-        "project_names": by_category.get("project_name", 0),
-        "findings_total": len(all_findings),
-        "by_category": by_category,
-        "publication_status": status,
-        "findings": all_findings,
-        "errors": errors,
-    }
+
+def _blob_kind(name: str, blob: bytes) -> str:
+    """Dispatch a ``(name, content)`` blob — the in-memory counterpart
+    of :func:`_target_type`: sqlite by suffix first then magic header,
+    binary by NUL byte, text otherwise."""
+    if Path(name).suffix.lower() in _DB_SUFFIXES:
+        return "sqlite"
+    head = blob[:_BINARY_SNIFF_BYTES]
+    if head.startswith(_SQLITE_MAGIC):
+        return "sqlite"
+    if b"\x00" in head:
+        return "binary"
+    return "text"
+
+
+def _scan_blob_db(name: str, blob: bytes) -> tuple[list[Finding], str | None]:
+    """Scan a SQLite blob via a temp file — ``sqlite3`` needs a real path."""
+    fd, tmp_name = tempfile.mkstemp(suffix=".db")
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(blob)
+        return _scan_db(Path(tmp_name), name)
+    finally:
+        Path(tmp_name).unlink(missing_ok=True)
+
+
+def scan_blobs(blobs, *, errors: list[dict] | None = None) -> dict:
+    """Scan ``(display_name, content_bytes)`` pairs and return the same
+    report contract as :func:`scan`.
+
+    This is the staged-blob path of the pre-commit gate
+    (``devin_redact.staged``): the working tree is not authoritative for
+    what a commit records — content may be edited or deleted after
+    ``git add`` — so the bytes come from the caller (the git index)
+    rather than the filesystem. ``errors`` seeds the report's error
+    list with resolution failures (e.g. paths with no staged blob).
+    """
+    all_findings: list[Finding] = []
+    errs: list[dict] = list(errors or [])
+    scanned = 0
+    for name, blob in blobs:
+        kind = _blob_kind(name, blob)
+        if kind == "sqlite":
+            findings, err = _scan_blob_db(name, blob)
+        elif kind == "binary":
+            errs.append({"file": name, "error": "skipped: binary file"})
+            continue
+        else:
+            findings = scan_text(
+                blob.decode("utf-8", "replace"), file=name, location="text"
+            )
+            err = None
+        scanned += 1
+        all_findings.extend(findings)
+        if err:
+            errs.append({"file": name, "error": err})
+
+    return _report(scanned, all_findings, errs)
 
 
 def session_exists(db_path, session_id: str) -> bool | None:

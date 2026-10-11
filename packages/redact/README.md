@@ -125,6 +125,11 @@ devin-redact verify sessions.db --json
 # status word; exits 0 for CLEAN/REVIEW, 1 for BLOCKED, 2 on error
 devin-redact gate sessions.db exports/
 
+# Pre-commit mode: scan the staged index blobs instead of the working
+# tree — what the commit will record, even if the file was edited or
+# deleted after `git add` (this is what .pre-commit-hooks.yaml runs)
+devin-redact gate --staged file1.py path/to/file2.env
+
 # SessionEnd hook handler: read-only scan of the default sessions.db,
 # one compact verdict line, exit 0 unless a hard error occurs
 devin-redact sessionend-scan
