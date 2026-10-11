@@ -39,8 +39,20 @@ Use `--data-dir`/`--config-dir` for non-default locations.
 
 _Nightly snapshot; pair with a weekly `devin-backup rotate --keep 10 --yes`. Or let the tool self-schedule with `devin-backup install` (cron / Task Scheduler / elapsed backends)._
 
+Quoted path arguments inside `/tr` fail differently in cmd.exe and PowerShell 5.1, so this job goes through a wrapper `.cmd` file (quoting inside the file works normally). `%PUBLIC%` is used because it never contains spaces, keeping the stored action space-free:
+
 ```powershell
-schtasks /create /tn "devin-backup" /tr 'devin-backup create --out %USERPROFILE%\backups' /sc daily /st 03:15 /f
+New-Item -ItemType Directory -Force "$env:PUBLIC\devin-tasks"
+```
+
+Save this as `%PUBLIC%\devin-tasks\devin-backup.cmd`:
+
+```batch
+devin-backup create --out "%USERPROFILE%\backups"
+```
+
+```powershell
+schtasks /create /tn "devin-backup" /tr "%PUBLIC%\devin-tasks\devin-backup.cmd" /sc daily /st 03:15 /f
 ```
 
 Runs under your account, no admin needed. Adjust `/sc`/`/st` (or `/sc onlogon` for daemons) to taste.
