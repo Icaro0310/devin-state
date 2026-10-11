@@ -1,0 +1,75 @@
+name: docker-publish
+on:
+  pull_request:
+    paths:
+      - "packages/redact/Dockerfile"
+      - ".github/workflows/docker-publish.yml"
+  workflow_run:
+    workflows: ["publish"]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  redact:
+    # workflow_run only proceeds for redact-v* tag runs: backup/janitor/
+    # scheduler releases would otherwise rebuild and repush this image.
+    # Dispatch-triggered redact publishes can be followed by a manual
+    # docker-publish run.
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       startsWith(github.event.workflow_run.head_branch, 'redact-v'))
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          # workflow_run carries the released commit in head_sha; checking
+          # out the default branch there could build the wrong revision.
+          ref: ${{ github.event.workflow_run.head_sha || github.ref }}
+      - name: Resolve package version
+        id: v
+        # On PRs the pyproject may hold a not-yet-published bump
+        # (chicken-and-egg), so the smoke resolves the latest published
+        # wheel from PyPI. On publish/dispatch the pyproject pin is
+        # authoritative and equals the just-released version.
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            ver=$(curl -sf https://pypi.org/pypi/devin-redact/json | python3 -c "import json,sys; print(json.load(sys.stdin)['info']['version'])")
+          else
+            ver=$(sed -n 's/^version = "\(.*\)"/\1/p' packages/redact/pyproject.toml)
+          fi
+          test -n "$ver"
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+        if: github.event_name != 'pull_request'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
+        with:
+          context: .
+          file: packages/redact/Dockerfile
+          # Multi-arch on push; PR legs build native-only because the
+          # docker driver cannot --load a multi-platform manifest list.
+          platforms: ${{ github.event_name == 'pull_request' && 'linux/amd64' || 'linux/amd64,linux/arm64' }}
+          push: ${{ github.event_name != 'pull_request' }}
+          load: ${{ github.event_name == 'pull_request' }}
+          build-args: VERSION=${{ steps.v.outputs.version }}
+          tags: |
+            ghcr.io/icaro0310/devin-redact:${{ steps.v.outputs.version }}
+            ghcr.io/icaro0310/devin-redact:latest
+      - name: Smoke
+        run: |
+          docker run --rm ghcr.io/icaro0310/devin-redact:latest --help
+          mkdir -p "$RUNNER_TEMP/fixture"
+          echo "hello world" > "$RUNNER_TEMP/fixture/a.txt"
+          docker run --rm -v "$RUNNER_TEMP/fixture:/work" \
+            ghcr.io/icaro0310/devin-redact:latest scan /work

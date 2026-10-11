@@ -3,10 +3,22 @@ name: auto-approve
 # Thin caller: approves PRs from trusted authors so the required
 # approving-review rule is satisfiable. The reusable workflow lives in
 # devin-powerups; required status checks still gate merges.
+#
+# Re-triggers: pull_request_review[submitted] re-runs the gate when a late
+# Devin Review lands (thread resolutions ride along — Devin resolves
+# findings inside its re-review, which submits a review), and the `status`
+# event re-runs it when the Devin Review commit status flips to success
+# — a clean analysis posts a status but no review object, so without
+# this the PR would sit in REVIEW_REQUIRED forever.
+# (pull_request_review_thread is a webhook but NOT a supported Actions
+# trigger — resolving a thread alone cannot start a run.)
 
 on:
   pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review]
+  pull_request_review:
+    types: [submitted]
+  status: {}
 
 permissions:
   contents: read
@@ -14,7 +26,13 @@ permissions:
 
 jobs:
   approve:
+    # Skip non-Devin statuses early — every CI status would otherwise
+    # invoke the reusable workflow. Full verification happens inside.
+    if: >-
+      github.event_name != 'status' ||
+      (github.event.context == 'Devin Review' &&
+       github.event.state == 'success')
     permissions:
       contents: read
       pull-requests: write
-    uses: Icaro0310/devin-powerups/.github/workflows/pr-approve.yml@v1
+    uses: Icaro0310/devin-powerups/.github/workflows/pr-approve.yml@v1.1

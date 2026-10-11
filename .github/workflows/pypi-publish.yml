@@ -23,7 +23,24 @@ permissions:
   contents: read
 
 jobs:
+  # Wheel __version__ gate lives in one place — every package except
+  # install-scheduler (no __version__) is verified before publish runs.
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {dir: packages/redact, mod: devin_redact}
+          - {dir: packages/backup, mod: devin_backup}
+          - {dir: packages/janitor, mod: devin_janitor}
+    uses: Icaro0310/devin-powerups/.github/workflows/verify-wheel-version.yml@v1
+    with:
+      package-dir: ${{ matrix.dir }}
+      module: ${{ matrix.mod }}
+      python-version: "3.12"
+
   publish:
+    needs: verify
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
@@ -54,6 +71,18 @@ jobs:
           python -m pip install --upgrade build twine
           python -m build
           python -m twine check dist/*
+      # Supply-chain guard: redact 0.2.1 and evals 0.3.x once reached
+      # PyPI via dispatch from unmerged branches, leaving the index ahead
+      # of main. Refuse to upload when the publish origin is not merged.
+      - name: Require publish origin merged into main
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          status=$(gh api "repos/${{ github.repository }}/compare/main...${GITHUB_SHA}" --jq .status)
+          case "$status" in
+            behind|identical) ;;
+            *) echo "::error::publish origin is '$status' vs main — refusing to publish an unmerged commit"; exit 1 ;;
+          esac
       - name: Upload to PyPI
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
         with:

@@ -39,6 +39,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `ghcr.io/icaro0310/devin-redact` container image: the `devin-redact`
+  CLI on `python:3.12-slim` running as a non-root user, published after
+  each `redact-v*` release.
 - `devin_redact.paths`: default `sessions.db` discovery matching the
   ecosystem convention (`%APPDATA%\devin\cli\sessions.db`,
   `~/Library/Application Support/…`, `$XDG_DATA_HOME`/`$XDG_CONFIG_HOME`/`~`
@@ -112,6 +115,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   or calls — shapes an env value can never take; bare and quoted values
   still flag, so private constants holding real secrets remain caught.
   Applies to scan and redact identically via `_iter_matches`.
+
+- `__version__` now matches the package version (the 0.2.1 wheel had shipped self-reporting 0.2.0).
+- PyPI publish workflow verifies the wheel's self-reported `__version__` against `pyproject.toml` before upload (`--no-deps` install into an isolated target).
+- Release workflow passes `github.ref_name` through `env:` instead of interpolating it into `run:` shell source.
+
+### Added
+
+- GHCR image `ghcr.io/icaro0310/devin-redact` tagged `<version>` + `latest` (linux/amd64 + linux/arm64); the image installs the published wheel, never the checkout.
 
 ## [0.2.0] - 2026-09-29
 
