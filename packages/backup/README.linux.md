@@ -19,7 +19,7 @@ uv tool install 'devin-backup'
 ## Devin paths
 
 Session data normally lives under `${XDG_DATA_HOME:-$HOME/.local/share}/devin/cli/`; UI state and ACP stores under `${XDG_CONFIG_HOME:-$HOME/.config}/Devin/User/`.
-Use the tool's documented `--data-dir` or `--config-dir` flags for non-default locations.
+Use `--data-dir`/`--config-dir` for non-default locations.
 
 ## Environment notes
 
@@ -59,6 +59,7 @@ Equivalent `systemd --user` timer works too; enable lingering if it must run wit
   either run the source-installed `devin-backup-mcp` directly, or
   point a local manifest copy at the checkout:
   `uvx --from './packages/backup[mcp]' devin-backup-mcp`.
+
 
 ## Troubleshooting
 

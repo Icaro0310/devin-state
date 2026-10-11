@@ -19,7 +19,7 @@ uv tool install "devin-janitor"
 ## Devin paths
 
 Session data normally lives under `%APPDATA%\devin\cli\`; UI state and ACP stores under `%APPDATA%\Devin\User\`.
-Use the tool's documented `--data-dir` or `--config-dir` flags for non-default locations.
+Use `--data-dir`/`--sessions-db`/`--acp-dir` for non-default locations.
 
 ## Environment notes
 
@@ -40,7 +40,7 @@ Use the tool's documented `--data-dir` or `--config-dir` flags for non-default l
 _Daily cleanup. `devin-janitor install` registers the built-in daily report job (cron / Task Scheduler / elapsed hook) — prefer it over hand-rolled entries._
 
 ```powershell
-schtasks /create /tn "devin-janitor" /tr "devin-janitor run --apply" /sc daily /st 04:00 /f
+schtasks /create /tn "devin-janitor" /tr "devin-janitor run --apply" /sc daily /st 04:30 /f
 ```
 
 Runs under your account — no admin needed. Adjust `/sc`/`/st` (or `/sc onlogon` for daemons) to taste.
@@ -58,6 +58,7 @@ Runs under your account — no admin needed. Adjust `/sc`/`/st` (or `/sc onlogon
   either run the source-installed `devin-janitor-mcp` directly, or
   point a local manifest copy at the checkout:
   `uvx --from './packages/janitor[mcp]' devin-janitor-mcp`.
+
 
 ## Troubleshooting
 

@@ -19,7 +19,7 @@ uv tool install "devin-backup"
 ## Devin paths
 
 Session data normally lives under `%APPDATA%\devin\cli\`; UI state and ACP stores under `%APPDATA%\Devin\User\`.
-Use the tool's documented `--data-dir` or `--config-dir` flags for non-default locations.
+Use `--data-dir`/`--config-dir` for non-default locations.
 
 ## Environment notes
 
@@ -37,17 +37,32 @@ Use the tool's documented `--data-dir` or `--config-dir` flags for non-default l
 - **Long paths:** keep checkout/install roots short (`C:\dev`) — MAX_PATH (260 chars) can still bite inside virtualenvs; `LongPathsEnabled` needs admin, short roots do not.
 - **EDR/antivirus:** if a scan kills the install, retry with an exclusion or ask IT to allowlist `%LOCALAPPDATA%\uv` and `%USERPROFILE%\.local\bin`. These tools never elevate or listen on the network by default.
 - **Offline/air-gapped:** `pip download <package> -d wheels\` on a connected machine, copy the folder, then `pip install --no-index --find-links wheels\` on the target (pure-Python tools; native deps need a matching platform wheel). For `source_only` tools installed from a copied checkout, stage the build backend too (`pip download setuptools wheel`), then install with `pip install --no-index --find-links wheels\ --no-build-isolation .` inside the checkout.
-- **Fully local runtime:** installed tools make no required network calls — they read `sessions.db` and local stores only. The single exception is devin-doctor's optional update check (fetches the DevKit manifest); it self-skips when the registry is unreachable, or force it off with `DEVIN_DOCTOR_OFFLINE=1`.
+- **Fully local runtime:** installed tools make no required network calls — this tool has none; it reads `sessions.db` and local stores only.
+
+## Zscaler
+
+Zscaler é comum em ambientes corporativos e se comporta diferente de um proxy genérico. Dois produtos importam aqui: **Zscaler Internet Access (ZIA)**, proxy com inspeção de TLS, e **Zscaler Private Access (ZPA)**, túnel/VPN para aplicações internas.
+
+- **Certificado raiz:** a inspeção de TLS da ZIA substitui o certificado dos sites pelo da Zscaler. Sem a raiz no bundle correto, `pip`/`uv`/`npm`/`git` falham com `SSL: CERTIFICATE_VERIFY_FAILED`. A raiz normalmente está em `C:\ProgramData\Zscaler\` (ou pode ser exportada pelo Zscaler Client Connector). Aponte as variáveis para esse arquivo:
+  ```powershell
+  $env:REQUESTS_CA_BUNDLE="C:\path\zscaler-root.pem"   # pip, uv, requests
+  $env:NODE_EXTRA_CA_CERTS="C:\path\zscaler-root.pem"  # node/npm
+  git config --global http.sslCAInfo "C:\path\zscaler-root.pem"
+  ```
+- **PAC file / auto-config:** se o proxy vem de um PAC em vez de variável fixa, `HTTPS_PROXY` manual pode não bastar. Descubra o proxy ativo antes de setar a variável: `netsh winhttp show proxy`, ou o painel do Zscaler Client Connector. Para downloads pontuais, copie o endereço que o PAC resolve para `HTTPS_PROXY`/`HTTP_PROXY`.
+- **Portas e protocolos:** todos os MCP servers deste ecossistema usam transporte `stdio` — nenhuma porta não-padrão é necessária, e ZPA não interfere. Se uma ferramenta futura expuser SSE/WebSocket, portas não-padrão podem ser bloqueadas pela ZPA; hoje isso não se aplica.
+- **"É a Zscaler ou outra coisa?":** `SSL: CERTIFICATE_VERIFY_FAILED` cujo emissor do certificado é `Zscaler` → inspeção de TLS, resolva pela raiz acima. Timeout ou `connection refused` → mais provável firewall/regra de rede, não TLS — valide o proxy ativo e reporte ao TI com o host e a porta.
+
 
 ## Recurring runs (optional)
 
 _Nightly snapshot; pair with a weekly `devin-backup rotate --keep 10 --yes`. Or let the tool self-schedule with `devin-backup install` (cron / Task Scheduler / elapsed backends)._
 
 ```powershell
-schtasks /create /tn "devin-backup" /tr "devin-backup create --out %USERPROFILE%\backups" /sc daily /st 04:00 /f
+schtasks /create /tn "devin-backup" /tr "devin-backup create --out %USERPROFILE%\backups" /sc daily /st 03:15 /f
 ```
 
-User-scope `schtasks` needs no admin. If Group Policy disables Task Scheduler, run the command manually or use the tool's own `install` subcommand where available.
+User-scope `schtasks` needs no admin. If Group Policy disables Task Scheduler (`0x80070005` "Access is denied"), run the command manually or use the tool's own `install` subcommand where available. Options needing elevation — "Run whether user is logged on or not", highest privileges — are usually policy-blocked; when they are, a user-scope logon trigger (`/sc onlogon`) is the realistic fallback.
 
 
 ## Adapters (MCP / Devin skill / plugin)
@@ -59,6 +74,7 @@ User-scope `schtasks` needs no admin. If Group Policy disables Task Scheduler, r
   launches the server through `uvx --from 'devin-backup[mcp]' devin-backup-mcp`, which
   resolves once the next PyPI release ships — until then install from
   source (`pip install -e 'packages/backup[mcp]'` from a checkout).
+
 
 ## Troubleshooting
 
