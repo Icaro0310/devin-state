@@ -12,6 +12,7 @@ on:
 permissions:
   contents: read
   packages: write
+  id-token: write
 
 jobs:
   redact:
@@ -53,6 +54,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build image
+        id: build
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
         with:
           context: .
@@ -66,6 +68,13 @@ jobs:
           tags: |
             ghcr.io/icaro0310/devin-redact:${{ steps.v.outputs.version }}
             ghcr.io/icaro0310/devin-redact:latest
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        if: github.event_name != 'pull_request'
+      - name: Sign image
+        if: github.event_name != 'pull_request'
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: cosign sign --yes "ghcr.io/icaro0310/devin-redact@$DIGEST"
       - name: Smoke
         run: |
           docker run --rm ghcr.io/icaro0310/devin-redact:latest --help
