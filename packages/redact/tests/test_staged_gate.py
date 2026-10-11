@@ -9,6 +9,7 @@ staged blob is what gets scanned.
 """
 
 import shutil
+import sqlite3
 import subprocess
 from pathlib import Path
 
@@ -156,3 +157,84 @@ def test_gate_without_staged_scans_worktree(repo, capsys):
     assert capsys.readouterr().out.strip() == "CLEAN"
     assert cli.main(["gate", "--staged", "dirty.env"]) == 1
     assert capsys.readouterr().out.strip() == "BLOCKED"
+
+
+# --- staged_blobs: directory arguments expand to index descendants ------
+
+
+@needs_git
+def test_staged_blobs_directory_expands(repo):
+    """staged_blobs returns one blob per index descendant for a
+    directory argument — the index holds files, not directories."""
+    sub = repo / "cfg"
+    sub.mkdir()
+    (sub / "a.txt").write_text("a\n")
+    (sub / "b.txt").write_text("b\n")
+    _git(repo, "add", "cfg")
+    blobs, errors = staged.staged_blobs(["cfg"])
+    assert errors == []
+    assert sorted(name for name, _ in blobs) == ["cfg/a.txt", "cfg/b.txt"]
+
+
+@needs_git
+def test_gate_staged_directory_scans_descendants(repo, capsys):
+    """`gate --staged <dir>` must expand to staged descendants instead
+    of exiting 2 on the directory as an unreadable blob."""
+    sub = repo / "cfg"
+    sub.mkdir()
+    (sub / "ok.txt").write_text("nothing sensitive\n")
+    (sub / "leak.env").write_text(f"API_KEY={FAKE_AWS_KEY}\n")
+    _git(repo, "add", "cfg")
+    assert cli.main(["gate", "--staged", "cfg"]) == 1
+    assert capsys.readouterr().out.strip() == "BLOCKED"
+
+
+@needs_git
+def test_gate_staged_directory_clean_descendants(repo, capsys):
+    """Clean staged directory → CLEAN (exit 0, not the old error path)."""
+    sub = repo / "cfg"
+    sub.mkdir()
+    (sub / "a.txt").write_text("fine\n")
+    _git(repo, "add", "cfg")
+    assert cli.main(["gate", "--staged", "cfg"]) == 0
+    assert capsys.readouterr().out.strip() == "CLEAN"
+
+
+# --- scan_blobs: SQLite sidecars replay with their primary --------------
+
+
+def _wal_db_blobs(tmp_path: Path) -> tuple[bytes, bytes]:
+    """``(db_blob, wal_blob)`` for a WAL-mode store whose committed row
+    lives only in the uncheckpointed ``-wal``."""
+    db = tmp_path / "s.db"
+    con = sqlite3.connect(db)
+    con.execute("PRAGMA journal_mode=WAL")
+    con.execute("CREATE TABLE secrets(v TEXT)")
+    con.execute("INSERT INTO secrets VALUES (?)", (f"key={FAKE_AWS_KEY}",))
+    con.commit()
+    wal = Path(str(db) + "-wal").read_bytes()  # read before close:
+    blob = db.read_bytes()                     # closing checkpoints
+    con.close()
+    assert wal
+    return blob, wal
+
+
+def test_scan_blobs_sqlite_wal_sidecar(tmp_path):
+    """Committed-but-uncheckpointed rows live in the WAL — a staged
+    ``.db-wal`` must replay with its db or the scan misses them."""
+    blob, wal = _wal_db_blobs(tmp_path)
+    assert engine.scan_blobs([("s.db", blob)])["publication_status"] == "CLEAN"
+    report = engine.scan_blobs([("s.db", blob), ("s.db-wal", wal)])
+    assert report["publication_status"] == "BLOCKED"
+    assert report["files_scanned"] == 2
+
+
+def test_scan_blobs_orphan_wal_scans_alone():
+    """A ``-wal`` blob with no staged ``.db`` dispatches as an ordinary
+    binary blob — non-blocking ``skipped:``, never a hard error."""
+    report = engine.scan_blobs(
+        [("gone.db-wal", b"\x37\x7f\x06\x82" + b"\x00" * 16)]
+    )
+    skipped = [e for e in report["errors"] if e["file"] == "gone.db-wal"]
+    assert skipped and skipped[0]["error"].startswith("skipped:")
+    assert report["publication_status"] == "CLEAN"

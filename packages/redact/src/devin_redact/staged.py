@@ -59,6 +59,11 @@ def staged_blobs(paths, cwd=None) -> tuple[list[Blob], list[dict]]:
     means the commit records nothing for it. A path the index *does*
     hold but whose blob cannot be read (unmerged conflict stages,
     gitlinks) is a blocking error — the gate fails closed.
+
+    Directories are not index entries — the index holds files only — so
+    a directory argument expands via ``git ls-files`` to its staged
+    descendants and each of those blobs is scanned: ``gate --staged
+    cfg/`` must not error out on the directory itself.
     """
     cwd = Path(cwd) if cwd is not None else Path.cwd()
     root = _repo_root(cwd)
@@ -76,12 +81,32 @@ def staged_blobs(paths, cwd=None) -> tuple[list[Blob], list[dict]]:
         if proc.returncode == 0:
             blobs.append((name, proc.stdout))
             continue
-        check = _git(["ls-files", "--error-unmatch", "--", name], root)
-        if check.returncode == 0:
-            detail = proc.stderr.decode("utf-8", "replace").strip()
-            errors.append(
-                {"file": name, "error": f"staged blob unreadable: {detail}"}
-            )
-        else:
+        # Not a readable blob: either nothing is staged under ``name``
+        # or it is a directory. ``ls-files`` pathspec matching lists the
+        # index descendants either way — a file returns itself (once
+        # per unmerged stage), a directory returns its staged files.
+        listing = _git(["ls-files", "-z", "--", f":(literal){name}"], root)
+        entries = (
+            [
+                e
+                for e in listing.stdout.decode(
+                    "utf-8", "surrogateescape"
+                ).split("\0")
+                if e
+            ]
+            if listing.returncode == 0
+            else []
+        )
+        if not entries:
             errors.append({"file": name, "error": "skipped: no staged blob"})
+            continue
+        for entry in dict.fromkeys(entries):
+            sub = _git(["cat-file", "blob", f":0:{entry}"], root)
+            if sub.returncode == 0:
+                blobs.append((entry, sub.stdout))
+            else:
+                detail = sub.stderr.decode("utf-8", "replace").strip()
+                errors.append(
+                    {"file": entry, "error": f"staged blob unreadable: {detail}"}
+                )
     return blobs, errors

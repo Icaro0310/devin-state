@@ -34,6 +34,7 @@ _DB_SUFFIXES = {".db", ".sqlite", ".sqlite3"}
 _SQLITE_MAGIC = b"SQLite format 3\x00"
 _SKIP_DIRS = {".git", ".hg", ".svn", "node_modules", "__pycache__", ".venv", "venv"}
 _BINARY_SNIFF_BYTES = 8192
+_DB_SIDECAR_SUFFIXES = ("-wal", "-shm", "-journal")
 _REDACTED_TAG = "<REDACTED:"
 _SEMANTIC_CATEGORY = "sensitive_tool_output"
 _BLOCKING_CATEGORIES = SECRET_CATEGORIES | {_SEMANTIC_CATEGORY}
@@ -886,15 +887,31 @@ def _blob_kind(name: str, blob: bytes) -> str:
     return "text"
 
 
-def _scan_blob_db(name: str, blob: bytes) -> tuple[list[Finding], str | None]:
-    """Scan a SQLite blob via a temp file — ``sqlite3`` needs a real path."""
+def _scan_blob_db(
+    name: str, blob: bytes, sidecars: dict[str, bytes] | None = None
+) -> tuple[list[Finding], str | None]:
+    """Scan a SQLite blob via a temp file — ``sqlite3`` needs a real path.
+
+    ``sidecars`` carries the staged ``-wal``/``-shm``/``-journal`` siblings
+    of ``name`` as ``{suffix: content}``. A WAL-mode store staged between
+    checkpoints keeps committed rows only in ``<db>-wal``, so that file is
+    materialized next to the temp db and sqlite replays it on open — the
+    same view a checkout of the commit produces. ``-shm`` is a transient
+    index sqlite rebuilds and ``-journal`` only triggers the rollback a
+    checkout would run anyway, so neither is materialized.
+    """
     fd, tmp_name = tempfile.mkstemp(suffix=".db")
     try:
         with os.fdopen(fd, "wb") as fh:
             fh.write(blob)
+        wal = (sidecars or {}).get("-wal")
+        if wal is not None:
+            Path(tmp_name + "-wal").write_bytes(wal)
         return _scan_db(Path(tmp_name), name)
     finally:
         Path(tmp_name).unlink(missing_ok=True)
+        Path(tmp_name + "-wal").unlink(missing_ok=True)
+        Path(tmp_name + "-shm").unlink(missing_ok=True)
 
 
 def scan_blobs(blobs, *, errors: list[dict] | None = None) -> dict:
@@ -907,17 +924,38 @@ def scan_blobs(blobs, *, errors: list[dict] | None = None) -> dict:
     ``git add`` — so the bytes come from the caller (the git index)
     rather than the filesystem. ``errors`` seeds the report's error
     list with resolution failures (e.g. paths with no staged blob).
+
+    SQLite sidecar blobs (``<db>-wal``, ``-shm``, ``-journal``) are not
+    scanned standalone: they group with their primary database so a
+    staged WAL-mode store is scanned with its uncheckpointed commits
+    replayed. Attached sidecars count toward ``files_scanned``; orphans
+    (no staged primary) dispatch as ordinary blobs.
     """
     all_findings: list[Finding] = []
     errs: list[dict] = list(errors or [])
     scanned = 0
+
+    sidecars: dict[str, dict[str, bytes]] = {}
+    primaries: list[tuple[str, bytes]] = []
     for name, blob in blobs:
+        suffix = next(
+            (s for s in _DB_SIDECAR_SUFFIXES if name.endswith(s)), None
+        )
+        if suffix is None:
+            primaries.append((name, blob))
+        else:
+            sidecars.setdefault(name[: -len(suffix)], {})[suffix] = blob
+
+    def _scan_one(
+        name: str, blob: bytes, sc: dict[str, bytes] | None = None
+    ) -> None:
+        nonlocal scanned
         kind = _blob_kind(name, blob)
         if kind == "sqlite":
-            findings, err = _scan_blob_db(name, blob)
+            findings, err = _scan_blob_db(name, blob, sc)
         elif kind == "binary":
             errs.append({"file": name, "error": "skipped: binary file"})
-            continue
+            return
         else:
             findings = scan_text(
                 blob.decode("utf-8", "replace"), file=name, location="text"
@@ -927,6 +965,19 @@ def scan_blobs(blobs, *, errors: list[dict] | None = None) -> dict:
         all_findings.extend(findings)
         if err:
             errs.append({"file": name, "error": err})
+
+    for name, blob in primaries:
+        if name in sidecars and _blob_kind(name, blob) == "sqlite":
+            sc = sidecars.pop(name)
+            _scan_one(name, blob, sc)
+            scanned += len(sc)
+        else:
+            _scan_one(name, blob)
+
+    # Sidecars whose primary is absent or not a SQLite blob stand alone.
+    for base, sc in sidecars.items():
+        for suffix, blob in sc.items():
+            _scan_one(base + suffix, blob)
 
     return _report(scanned, all_findings, errs)
 
