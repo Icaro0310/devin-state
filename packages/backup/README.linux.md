@@ -38,7 +38,7 @@ Use `--data-dir`/`--config-dir` for non-default locations.
 
 ## Recurring runs (optional)
 
-_Nightly snapshot; pair with a weekly `devin-backup rotate --keep 10 --yes`. Or let the tool self-schedule with `devin-backup install` (cron / Task Scheduler / elapsed backends)._
+_Nightly snapshot; pair with a weekly `devin-backup rotate --keep 10 --yes` pointed at the same `--out` directory (rotate uses the default backups dir otherwise and finds nothing). Or let the tool self-schedule with `devin-backup install` (cron / Task Scheduler / elapsed backends)._
 
 ```cron
 15 3 * * * devin-backup create --out ~/backups
