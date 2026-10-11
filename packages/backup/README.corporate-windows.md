@@ -60,14 +60,20 @@ Zscaler é comum em ambientes corporativos e se comporta diferente de um proxy g
 
 _Nightly snapshot; pair with a weekly `devin-backup rotate --keep 10 --yes`. Or let the tool self-schedule with `devin-backup install` (cron / Task Scheduler / elapsed backends)._
 
-Save this as `%USERPROFILE%\devin-tasks\devin-backup.cmd` (quoting works normally inside a `.cmd` file):
+Quoted path arguments inside `/tr` fail differently in cmd.exe and PowerShell 5.1, so this job goes through a wrapper `.cmd` file (quoting inside the file works normally). `%PUBLIC%` is used because it never contains spaces, keeping the stored action space-free:
+
+```powershell
+New-Item -ItemType Directory -Force "$env:PUBLIC\devin-tasks"
+```
+
+Save this as `%PUBLIC%\devin-tasks\devin-backup.cmd`:
 
 ```batch
 devin-backup create --out "%USERPROFILE%\backups"
 ```
 
 ```powershell
-schtasks /create /tn "devin-backup" /tr "%USERPROFILE%\devin-tasks\devin-backup.cmd" /sc daily /st 03:15 /f
+schtasks /create /tn "devin-backup" /tr "%PUBLIC%\devin-tasks\devin-backup.cmd" /sc daily /st 03:15 /f
 ```
 
 User-scope `schtasks` needs no admin. If Group Policy disables Task Scheduler (`0x80070005` "Access is denied"), run the command manually or use the tool's own `install` subcommand where available. Options needing elevation, "Run whether user is logged on or not", highest privileges, are usually policy-blocked; when they are, a user-scope logon trigger (`/sc onlogon`) is the realistic fallback.
