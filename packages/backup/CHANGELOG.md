@@ -25,6 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+
+- Docs: guias de plataforma regenerados; o job agendado documentado usa wrapper `.cmd` em `%PUBLIC%\devin-tasks` (cross-shell cmd.exe/PS5.1).
 - `labeler.yml` is now a thin caller of the shared reusable workflow in `devin-powerups` (`@v1`); PR labeling behavior is unchanged.
 
 - Published to PyPI; the README install section prescribes `uv tool install`/`pip install` from the index and the source-only `DIST-STATUS` banner is gone.
