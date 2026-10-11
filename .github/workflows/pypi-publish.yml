@@ -105,8 +105,7 @@ jobs:
       - name: Upload to PyPI
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
         with:
-          # No password: a set token disables Trusted Publishing (OIDC)
-          # and triggers PyPI warning emails. Secret kept in repo as
-          # dormant rollback only — it is never passed.
+          # No password: a set token disables Trusted Publishing (OIDC).
+          # There is no token fallback — do not reintroduce PYPI_API_TOKEN.
           packages-dir: dist
           skip-existing: true
