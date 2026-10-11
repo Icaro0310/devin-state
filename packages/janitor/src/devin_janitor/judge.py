@@ -28,6 +28,7 @@ import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import ClassVar
 
 from devin_janitor.inventory import SessionRow
 
@@ -158,7 +159,7 @@ class PoordjaevinJudge(Judge):
 
     name = "devin-judge"
 
-    _QUESTIONS = {
+    _QUESTIONS: ClassVar[dict] = {
         "keep": {"type": "choice", "options": ["keep", "delete"]},
     }
 

@@ -336,8 +336,8 @@ def test_apply_tier3_tombstones_are_idempotent(devin_dir, tmp_path):
          {"lastUpdated": int((NOW_S - 90 * 86400) * 1000)}),
     ])
     snap = _mk_snapshot(tmp_path)
-    kw = dict(stale_before=NOW_S - 48 * 3600, include_gui=True,
-              snapshot=snap, running=False)
+    kw = {"stale_before": NOW_S - 48 * 3600, "include_gui": True,
+          "snapshot": snap, "running": False}
     first = apply_tier3(devin_dir, **kw)
     assert first["tombstoned"] == 1
     second = apply_tier3(devin_dir, **kw)
