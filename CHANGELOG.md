@@ -3,7 +3,7 @@
 ## Unreleased
 
 - **CI** — `actions/checkout` bumped to 7.0.1 across `ci.yml`,
-  `docker-publish.yml`, `pypi-publish.yml` and `labeler.yml` (dependabot).
+  `docker-publish.yml`, `pypi-publish.yml` and `redact-action.yml` (dependabot).
 - **Docker** — `docker-publish.yml` builds and pushes
   `ghcr.io/icaro0310/devin-redact` after `redact-v*` releases; PRs
   smoke-build against the latest published PyPI wheel.
