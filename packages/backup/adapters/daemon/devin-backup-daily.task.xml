@@ -58,9 +58,10 @@
       <Command>cmd.exe</Command>
       <!-- install-task.ps1 replaces __BACKUP_EXE__ with the resolved
            absolute path of the devin-backup executable before
-           registering (cmd.exe quoting: outer pair wraps the whole
-           /c line). -->
-      <Arguments>/c "__BACKUP_EXE__" create</Arguments>
+           registering. /s preserves the inner quotes — a plain /c would
+           strip them when the path contains & or other metacharacters,
+           splitting it into separate commands. -->
+      <Arguments>/s /c ""__BACKUP_EXE__" create"</Arguments>
     </Exec>
   </Actions>
 </Task>

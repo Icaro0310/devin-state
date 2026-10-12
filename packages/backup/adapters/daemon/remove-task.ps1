@@ -51,7 +51,13 @@ if (Test-Path $regPath) {
         if ($reg.jobs -and $reg.jobs.PSObject.Properties.Name -contains $TaskName) {
             if ($PSCmdlet.ShouldProcess($TaskName, 'Remove scheduled.json job record')) {
                 $reg.jobs.PSObject.Properties.Remove($TaskName)
-                $reg | ConvertTo-Json -Depth 10 | Set-Content -Path $regPath -Encoding UTF8
+                # PS 5.1 -Encoding UTF8 writes a BOM; the Python scheduler
+                # reads scheduled.json as utf-8 and resets a BOM'd file to an
+                # empty registry, discarding every other job. Write BOM-less.
+                $regJson = $reg | ConvertTo-Json -Depth 10
+                [System.IO.File]::WriteAllText(
+                    $regPath, $regJson,
+                    (New-Object System.Text.UTF8Encoding($false)))
                 Write-Host "Removed '$TaskName' record from $regPath"
             }
         }
