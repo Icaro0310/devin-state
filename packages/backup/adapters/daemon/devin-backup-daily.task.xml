@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Windows Scheduled Task: devin-backup daily snapshot.
+
+  Same job that `devin-backup install` registers (job "devin-backup-daily")
+  — prefer `install-task.ps1`, which drives that canonical installer when
+  the CLI is on PATH and falls back to importing this XML.
+
+  Trigger: at logon + once daily, StartWhenAvailable — suspend-safe.
+
+  Manual import:
+    schtasks /create /tn "devin-backup-daily" /xml devin-backup-daily.task.xml
+-->
+<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>Daily snapshot of all Devin stores via `devin-backup create`. Snapshots land under &lt;data-dir&gt;\backups (autodetected; DEVIN_BACKUP_DIR overrides).</Description>
+    <URI>\devin-backup-daily</URI>
+  </RegistrationInfo>
+  <Triggers>
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+    </LogonTrigger>
+    <CalendarTrigger>
+      <StartBoundary>2026-01-01T03:30:00</StartBoundary>
+      <Enabled>true</Enabled>
+      <ScheduleByDay>
+        <DaysInterval>1</DaysInterval>
+      </ScheduleByDay>
+    </CalendarTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>LeastPrivilege</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <AllowHardTerminate>true</AllowHardTerminate>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
+    <AllowStartOnDemand>true</AllowStartOnDemand>
+    <Enabled>true</Enabled>
+    <Hidden>false</Hidden>
+    <ExecutionTimeLimit>PT1H</ExecutionTimeLimit>
+    <Priority>7</Priority>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>cmd.exe</Command>
+      <Arguments>/c devin-backup create</Arguments>
+    </Exec>
+  </Actions>
+</Task>

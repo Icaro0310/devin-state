@@ -1,0 +1,17 @@
+# devin-backup daily snapshot timer.
+#
+# Persistent=true: a machine suspended or powered off at 03:30 catches up
+# at next activation — daily backups that silently skip are worse than no
+# schedule at all.
+
+[Unit]
+Description=Daily devin-backup snapshot
+Documentation=https://github.com/Icaro0310/devin-state/tree/main/packages/backup
+
+[Timer]
+OnCalendar=*-*-* 03:30
+Persistent=true
+Unit=devin-backup-daily.service
+
+[Install]
+WantedBy=timers.target
