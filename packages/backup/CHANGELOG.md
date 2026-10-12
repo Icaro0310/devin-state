@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Daemon adapters for the daily snapshot (`adapters/daemon/`):
+  `devin-backup-daily.{service,timer}` user-level systemd units and a
+  Windows `task.xml` + `install-task.ps1`/`remove-task.ps1` pair —
+  native-scheduler faces of the same `devin-backup create` job
+  `devin-backup install` registers. The installer runs the canonical
+  `devin-backup install --backend tasksch` for the registry entry, then
+  overlays the XML task (logon + daily triggers, `StartWhenAvailable`,
+  resolved absolute exe path — Task Scheduler's PATH lacks
+  `%USERPROFILE%\.local\bin`); removal also cleans the job's
+  `scheduled.json` record. `verify.sh` + `tests/test_daemon_adapter.py`
+  cover the artifacts.
+
 - Read-only adapters: `devin_backup.mcp_server` MCP server
   (`backup_verify` + `backup_list` + `backup_diff`,
   `devin-backup-mcp` entry point, `mcp` extra), Devin skill and

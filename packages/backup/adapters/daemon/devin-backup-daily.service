@@ -1,0 +1,39 @@
+# devin-backup daily snapshot — systemd user service.
+#
+# This is the native-systemd face of the SAME job that
+# `devin-backup install` registers (job name "devin-backup-daily",
+# canonical cross-platform installer — cron / Task Scheduler / elapsed
+# hook). Pick one: `devin-backup install` if you want the shared
+# scheduling foundation and its .devin-ecosystem registry entry, or these
+# units if you specifically want systemd user timers. They run the
+# identical package command — `devin-backup create` — so the scheduled
+# logic is never duplicated.
+#
+# Enable devin-backup-daily.timer; this service is the payload.
+
+[Unit]
+Description=devin-backup daily snapshot (all Devin stores)
+Documentation=https://github.com/Icaro0310/devin-state/tree/main/packages/backup
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h
+# uv/pipx install devin-backup into ~/.local/bin — not in systemd's
+# compiled-in search path, so resolve through env(1).
+Environment=PATH=%h/.local/bin:%h/bin:/usr/local/bin:/usr/bin:/bin
+# Snapshots land under <data-dir>/backups (autodetected) — override with
+# DEVIN_BACKUP_DIR or `devin-backup create --out DIR` if you keep them
+# elsewhere; extend ReadWritePaths to match.
+ExecStart=/usr/bin/env devin-backup create
+
+# create reads every Devin store (including credentials-bearing ones —
+# use --exclude-secrets if the backups dir is less trusted) and writes
+# only under the backups dir. Writes are whitelisted to the three
+# autodetect candidates; reads elsewhere stay allowed.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=%h/.local/share/devin/backups %h/.config/devin/backups %h/devin/backups
+
+[Install]
+# Enabled via devin-backup-daily.timer; install nothing here.
