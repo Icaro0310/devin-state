@@ -15,22 +15,24 @@ cd adapters\daemon
 powershell -ExecutionPolicy Bypass -File .\install-task.ps1
 ```
 
-`install-task.ps1` prefers the canonical path: when `devin-backup` is on
-`PATH` it runs `devin-backup install --backend tasksch`, which registers
-the same `devin-backup-daily` job **and** writes the
-`.devin-ecosystem\scheduled.json` registry entry. Without the CLI it
-imports the XML via `Register-ScheduledTask` — same command, same
-schedule, minus the registry entry. Neither path needs admin.
+`install-task.ps1` does a two-step registration when `devin-backup` is
+on `PATH`: first `devin-backup install --backend tasksch` (the canonical
+installer — writes the `.devin-ecosystem\scheduled.json` registry entry),
+then it imports this XML with `-Force`, overwriting the daily-only task
+with this adapter's triggers (logon + daily + `StartWhenAvailable`) and
+an action pointing at the **resolved absolute exe path**. That last bit
+matters: Task Scheduler's environment lacks `%USERPROFILE%\.local\bin`,
+where `uv tool install` puts the shim — a bare `devin-backup` name is
+not found at run time. Without the CLI it still imports the XML, falling
+back to that documented default location and skipping the registry
+entry. Neither path needs admin.
 
-Equivalent one-liner without the script:
+Equivalent one-liner without the script — replace the `__BACKUP_EXE__`
+token in the XML with your exe path first:
 
 ```powershell
 schtasks /create /tn "devin-backup-daily" /xml devin-backup-daily.task.xml /f
 ```
-
-Do not combine this task with `devin-backup install` defaults — two
-registrations of the same job name overwrite each other (`/f`), but a
-manually renamed copy would double-run.
 
 ## Smoke check — did it run without silent failure?
 
@@ -49,5 +51,7 @@ powershell -ExecutionPolicy Bypass -File .\remove-task.ps1
 # or: schtasks /delete /tn "devin-backup-daily" /f
 ```
 
-Existing snapshots and the `scheduled.json` job record (if the canonical
-installer wrote one) are left in place.
+`remove-task.ps1` also deletes the job's record from
+`%APPDATA%\Devin\.devin-ecosystem\scheduled.json` when present (the
+schtasks fallback leaves it behind — delete the job key by hand).
+Existing snapshots are left in place either way.

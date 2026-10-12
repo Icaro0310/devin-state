@@ -50,6 +50,12 @@ devin-backup list           # newest snapshot should carry today's date
 devin-backup verify <dir>   # integrity check on that snapshot
 ```
 
+## Headless check
+
+`./verify.sh` in this directory lints the units (`systemd-analyze
+verify` when available), parses the task XML, and cross-checks the ps1
+scripts — the same checks `tests/test_daemon_adapter.py` runs in CI.
+
 ## Uninstall
 
 ```bash

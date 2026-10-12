@@ -26,8 +26,9 @@ never happens.
 
 If Task Scheduler is fully blocked by policy, the canonical installer
 still has a fallback: `devin-backup install --backend elapsed` writes
-only the `.devin-ecosystem\scheduled.json` job record, ticked by a
-`UserPromptSubmit` hook — no Task Scheduler involved.
+only the `.devin-ecosystem\scheduled.json` job record (under
+`%APPDATA%\Devin`), ticked by a `UserPromptSubmit` hook — no Task
+Scheduler involved.
 
 ## Secrets in snapshots
 

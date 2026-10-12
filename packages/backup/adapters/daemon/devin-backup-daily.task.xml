@@ -3,12 +3,18 @@
   Windows Scheduled Task: devin-backup daily snapshot.
 
   Same job that `devin-backup install` registers (job "devin-backup-daily")
-  — prefer `install-task.ps1`, which drives that canonical installer when
-  the CLI is on PATH and falls back to importing this XML.
+  — prefer `install-task.ps1`, which runs the canonical installer for its
+  registry entry and then imports this XML for the proper triggers.
 
   Trigger: at logon + once daily, StartWhenAvailable — suspend-safe.
 
-  Manual import:
+  IMPORTANT — two placeholders install-task.ps1 resolves before
+  registering:
+    __BACKUP_EXE__  absolute path of the installed devin-backup
+                    executable (Task Scheduler's PATH lacks
+                    %USERPROFILE%\.local\bin, where `uv tool install`
+                    puts it — a bare `devin-backup` name is not found).
+  To import the XML by hand, replace the token with your exe path first:
     schtasks /create /tn "devin-backup-daily" /xml devin-backup-daily.task.xml
 -->
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
@@ -50,7 +56,11 @@
   <Actions Context="Author">
     <Exec>
       <Command>cmd.exe</Command>
-      <Arguments>/c devin-backup create</Arguments>
+      <!-- install-task.ps1 replaces __BACKUP_EXE__ with the resolved
+           absolute path of the devin-backup executable before
+           registering (cmd.exe quoting: outer pair wraps the whole
+           /c line). -->
+      <Arguments>/c "__BACKUP_EXE__" create</Arguments>
     </Exec>
   </Actions>
 </Task>
