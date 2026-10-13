@@ -2,30 +2,31 @@
 """session-janitor.py — limpeza diária de sessões-poluição do Devin Desktop.
 
 Pipeline (ordem de segurança):
-  1. Exporta tudo para o Obsidian (devin-history-export.py) — rede de
-     segurança: transcript cru fica em `Sessões/` antes de apagar.
+  1. Exporta tudo para o arquivo de transcrições (history-export.py) —
+     rede de segurança: transcript cru fica arquivado antes de apagar.
   2. Classifica cada sessão em tiers:
        KEEP        — marcada "não apagar", allowlist, ou dentro da janela de
                      graça (default 48h desde última atividade)
-       AUTO-DELETE — vazias; ruído de automação/eval (DJAEVIN, classificações,
+       AUTO-DELETE — vazias; ruído de automação/eval (classificações,
                      probes); ciclos efémeros heartbeat/mailbox; duplicadas
                      (fica a irmã com mais atividade)
-       JUDGE       — sinais fracos mas ambíguas → pergunta ao Djævin
-                     (djaevin-local `judge`) se vale a pena preservar
+       JUDGE       — sinais fracos mas ambíguas → pergunta a um juiz local
+                     se vale a pena preservar
   3. Apaga candidatas: rows em sessions.db + ficheiros acp-messages/*.db.
      Ficheiros bloqueados (Devin aberto) ficam em `.devin/janitor-pending.json`
      e são re-tentados em cada corrida.
   4. VACUUM só se o Devin.exe estiver fechado.
 
-Djævin é fail-open: se o backend estiver em baixo, sessões
+O juiz é fail-open: se o backend estiver em baixo, sessões
 ambíguas são CONSERVADAS — nunca apagadas sem veredito.
 
 Uso:
-    python scripts/session-janitor.py              # dry-run: mostra o plano
-    python scripts/session-janitor.py --apply      # executa a limpeza
-    python scripts/session-janitor.py --apply --no-djævin --grace-hours 72
+    python session-janitor.py              # dry-run: mostra o plano
+    python session-janitor.py --apply      # executa a limpeza
+    python session-janitor.py --apply --no-judge --grace-hours 72
 
-Agendamento diário (Task Scheduler): ver skill .devin/skills/session-janitor.
+Agendamento diário (agendador do SO): ver a documentação arquivada nesta
+pasta.
 """
 
 import argparse
@@ -41,14 +42,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from audit_sessions import gui_rows, session_rows
+from session_audit import gui_rows, session_rows
 
 HOME = Path.home()
 DB = HOME / "AppData/Roaming/devin/cli/sessions.db"
 GUI_DIR = HOME / "AppData/Roaming/devin/User/acp-messages"
 LOCKS_DIR = HOME / "AppData/Roaming/devin/cli/session_locks"
 WS = Path(__file__).resolve().parent.parent
-EXPORTER = WS / "scripts/devin-history-export.py"
+EXPORTER = WS / "scripts/history-export.py"
 KEEP_FILE = WS / ".devin/janitor-keep.json"
 PENDING_FILE = WS / ".devin/janitor-pending.json"
 LOG_FILE = WS / ".devin/memory/janitor-log.jsonl"
@@ -64,24 +65,27 @@ NOISE_RE = re.compile(
     re.IGNORECASE)
 
 # Ciclos one-shot cujo conhecimento durável já vive noutro lado
-# (slack-brain sessions, heartbeat/state.json, vault, skills learned-*)
+# (sessões de ponte, estado local da automação, arquivo de notas, skills
+# learned-*)
 EPHEMERAL_RE = re.compile(
     r"inbox|slack-bridge|slack bridge|Tarefa Slack|Processamento|"
     r"Processar ficheiros|timeout ACP|heartbeat", re.IGNORECASE)
 
-# Veredito do Djævin sobre sessões ambíguas
+# Veredito do juiz sobre sessões ambíguas
 JUDGE_STATEMENT = (
     "This session transcript contains durable, reusable knowledge — "
     "decisions, conventions, fixes or project context worth preserving "
     "for future work.")
 
-DJAEVIN_PYTHON = (WS / "vendor/poorjev/.venv/Scripts/python.exe")
-DJAEVIN_ENV = {
+JUDGE_PYTHON = Path(os.environ.get(
+    "JANITOR_JUDGE_PYTHON",
+    str(WS / "vendor/judge/.venv/Scripts/python.exe")))
+JUDGE_ENV = {
     **os.environ,
-    # Legacy/archived: usa o backend local NLI do poordjaevin (offline, sem
-    # serviço externo). O backend Ollama foi removido do ecossistema.
-    "POORJEV_BACKEND": os.environ.get("JANITOR_JEV_BACKEND", "nli"),
-    "POORJEV_CALIBRATOR": str(WS / "results/djaevin-eval/calibrator.json"),
+    # Legacy/archived: usa um backend NLI local (offline, sem serviço
+    # externo).
+    "JUDGE_BACKEND": os.environ.get("JANITOR_JUDGE_BACKEND", "nli"),
+    "JUDGE_CALIBRATOR": str(WS / "results/judge-eval/calibrator.json"),
 }
 
 
@@ -114,10 +118,10 @@ def norm_title(t: str) -> str:
     return re.sub(r"[^a-z0-9]", "", t.lower())[:60]
 
 
-# ------------------------------------------------------------------- Djævin
+# ------------------------------------------------------------------ juiz
 
-class DjævinJudge:
-    """Cliente stdio mínimo para `poorjev serve` (tool judge). Fail-open."""
+class LocalJudge:
+    """Cliente stdio mínimo para o bridge `judge`. Fail-open."""
 
     def __init__(self):
         self.proc = None
@@ -125,9 +129,9 @@ class DjævinJudge:
         self.available = False
         try:
             self.proc = subprocess.Popen(
-                [str(DJAEVIN_PYTHON), "-m", "poorjev.cli", "serve"],
+                [str(JUDGE_PYTHON), "-m", "judge_bridge.cli", "serve"],
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL, text=True, env=DJAEVIN_ENV, cwd=str(WS))
+                stderr=subprocess.DEVNULL, text=True, env=JUDGE_ENV, cwd=str(WS))
             self._call("initialize", {
                 "protocolVersion": "2024-11-05", "capabilities": {},
                 "clientInfo": {"name": "session-janitor", "version": "1.0"}})
@@ -147,7 +151,7 @@ class DjævinJudge:
         while True:
             line = self.proc.stdout.readline()
             if not line:
-                raise RuntimeError("djævin closed stdout")
+                raise RuntimeError("judge closed stdout")
             msg = json.loads(line)
             if msg.get("id") == self._id:
                 if "error" in msg:
@@ -155,7 +159,7 @@ class DjævinJudge:
                 return msg["result"]
 
     def judge(self, text: str) -> dict | None:
-        """Devolve verdict do Djævin ou None se abstém/indisponível."""
+        """Devolve verdict do juiz ou None se abstém/indisponível."""
         if not self.available:
             return None
         try:
@@ -274,7 +278,7 @@ def main() -> int:
                     help="executa (sem isto é dry-run)")
     ap.add_argument("--grace-hours", type=float, default=48)
     ap.add_argument("--max-delete", type=int, default=100)
-    ap.add_argument("--no-djævin", action="store_true")
+    ap.add_argument("--no-judge", action="store_true")
     ap.add_argument("--no-export", action="store_true")
     args = ap.parse_args()
 
@@ -285,14 +289,14 @@ def main() -> int:
 
     auto, judge_cands, kept = classify(rows, keep_ids, keep_re, grace_ts)
 
-    # ---- Djævin julga as ambíguas
+    # ---- juiz decide as ambíguas
     judge = None
-    judged_del, judged_keep, djævin_down = [], [], 0
-    if judge_cands and not args.no_djævin:
-        judge = DjævinJudge()
+    judged_del, judged_keep, judge_down = [], [], 0
+    if judge_cands and not args.no_judge:
+        judge = LocalJudge()
         if not judge.available:
-            print("Djævin indisponível — ambíguas conservadas (fail-open).")
-            djævin_down = len(judge_cands)
+            print("Juiz indisponível — ambíguas conservadas (fail-open).")
+            judge_down = len(judge_cands)
         else:
             for r in judge_cands:
                 text = f"{r['title']}\n\n{r['prompt']}"
@@ -301,13 +305,13 @@ def main() -> int:
                     judged_keep.append(r)
                 elif v.get("value") is False:
                     judged_del.append(
-                        (r, (f"djævin: sem conhecimento durável "
+                        (r, (f"judge: sem conhecimento durável "
                              f"(p={v.get('prob_true')})")))
                 else:
                     judged_keep.append(r)
             judge.close()
     else:
-        judged_keep = judge_cands if args.no_djævin else []
+        judged_keep = judge_cands if args.no_judge else []
 
     targets = auto + judged_del
     targets = targets[: args.max_delete]
@@ -315,7 +319,7 @@ def main() -> int:
     # ---- relatório do plano
     print(f"{'DRY-RUN' if not args.apply else 'APPLY'} · {len(rows)} sessões · "
           f"graça {args.grace_hours:.0f}h")
-    print(f"  manter: {len(kept) + len(judged_keep) + djævin_down} "
+    print(f"  manter: {len(kept) + len(judged_keep) + judge_down} "
           f"(allowlist/graça/substantivo + {len(judged_keep)} julgadas úteis)")
     print(f"  apagar: {len(targets)}")
     for r, why in targets:
@@ -330,7 +334,7 @@ def main() -> int:
 
     # ---- 1. export (rede de segurança)
     if not args.no_export:
-        print("\n== export para Obsidian ==")
+        print("\n== export de transcrições ==")
         rc = subprocess.run([sys.executable, str(EXPORTER)],
                             timeout=900, check=False).returncode
         if rc != 0:
@@ -375,7 +379,7 @@ def main() -> int:
         print("vacuum executado (Devin fechado)")
     else:
         print("Devin aberto — vacuum adiado "
-              "(corre session-db-maintenance.py --vacuum-only ao fechar)")
+              "(corre a manutenção --vacuum-only ao fechar)")
 
     # ---- 4. log + pending
     LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -386,7 +390,7 @@ def main() -> int:
                          "title": r["title"], "why": w}
                         for r, w in targets],
             "judged_keep": [r["id"] for r in judged_keep],
-            "djævin_down": djævin_down,
+            "judge_down": judge_down,
             "pending_locked": list(pending),
             "orphan_locks_removed": len(orphan),
         }, ensure_ascii=False) + "\n")

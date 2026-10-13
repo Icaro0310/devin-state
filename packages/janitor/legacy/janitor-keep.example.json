@@ -1,7 +1,7 @@
 {
-  "_comment": "Sessões que o session-janitor nunca apaga. ids exatos ou title_patterns (regex). SLACK-BRAIN e 'não apagar' já estão hard-coded.",
+  "_comment": "Sessões que o session-janitor nunca apaga. ids exatos ou title_patterns (regex). 'não apagar' e os padrões protegidos já estão hard-coded.",
   "ids": [
-    "scandalous-dracorex"
+    "example-session-id"
   ],
   "title_patterns": [
     "KICKOFF"
