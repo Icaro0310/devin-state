@@ -2,10 +2,9 @@
 exposes scan only — no mutation surface exists to call."""
 
 from pathlib import Path
-import tomllib
 
 import pytest
-
+import tomllib
 from devin_redact.mcp_server import do_scan
 
 FIXTURES = Path(__file__).parent / "fixtures"
