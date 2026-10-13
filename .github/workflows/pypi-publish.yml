@@ -53,7 +53,7 @@ jobs:
   verify:
     needs: resolve
     if: needs.resolve.outputs.mod != ''
-    uses: Icaro0310/devin-powerups/.github/workflows/verify-wheel-version.yml@61bf0b6bf9d726a8b7b5217556e0f6ed432fbc62 # v1
+    uses: Icaro0310/devin-powerups/.github/workflows/verify-wheel-version.yml@e2612c9e448a366a0539ea4593f70da47b4cec80 # v1
     with:
       package-dir: ${{ needs.resolve.outputs.dir }}
       module: ${{ needs.resolve.outputs.mod }}

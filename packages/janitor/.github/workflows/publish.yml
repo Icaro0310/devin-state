@@ -17,6 +17,6 @@ jobs:
   publish:
     permissions:
       id-token: write
-    uses: Icaro0310/devin-powerups/.github/workflows/pypi-publish.yml@6016b68ae41c4012bce2bfdfaaa57b51949d9f1d # main
+    uses: Icaro0310/devin-powerups/.github/workflows/pypi-publish.yml@e2612c9e448a366a0539ea4593f70da47b4cec80 # main
     secrets:
       PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
