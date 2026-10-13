@@ -1,0 +1,15 @@
+{
+  "name": "devin-redact",
+  "version": "0.2.0",
+  "description": "Scan files or a sessions.db for secrets and PII before sharing session content. Read-only scan — reports findings, never rewrites the store.",
+  "author": { "name": "Icaro0310" },
+  "repository": "https://github.com/Icaro0310/devin-state",
+  "license": "MIT",
+  "keywords": ["devin", "redact", "secrets", "pii", "sessions.db"],
+  "mcpServers": {
+    "devin-redact": {
+      "command": "uvx",
+      "args": ["--from", "devin-redact[mcp]", "devin-redact-mcp"]
+    }
+  }
+}

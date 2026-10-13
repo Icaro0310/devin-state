@@ -64,6 +64,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   0 even on `BLOCKED` — non-zero (2) only on hard error. Registration
   documented in `docs/HOOKS.md` with the `hooks.json` entry for the
   planned `devin-powerups` hook dispatcher.
+- Read-only adapters: `devin_redact.mcp_server` MCP server
+  (`redact_scan` + `redact_verify_publish`, `devin-redact-mcp` entry
+  point, `mcp` extra), Devin skill and `adapters/` plugin root. Session
+  scans honor a `sessions.db` passed via `scan_paths`, report absent
+  sessions as `no_session` instead of `CLEAN`, and surface missing scan
+  targets as `missing_paths`/`no_targets` rather than silently scanning
+  zero files.
 - CLI `gate`: machine gate for pipelines like `devin-history` (RD-4).
   Prints just the `publication_status` word; exits 0 for CLEAN/REVIEW,
   1 for BLOCKED, 2 on error.

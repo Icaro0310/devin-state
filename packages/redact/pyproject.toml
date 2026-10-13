@@ -14,9 +14,11 @@ dependencies = []
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+mcp = ["mcp>=1.2"]
 
 [project.scripts]
 devin-redact = "devin_redact.cli:main"
+devin-redact-mcp = "devin_redact.mcp_server:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

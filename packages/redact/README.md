@@ -287,6 +287,18 @@ SQLite store in place — it writes `.bak` backups first, and running
 recommended extra safety net. Detection is heuristic: review the report
 before applying.
 
+## Adapters (MCP server, Devin skill, plugin)
+
+`devin_redact.mcp_server` exposes the read-only half of the CLI as MCP
+tools — `redact_scan` (same JSON `scan` prints by default) and
+`redact_verify_publish` (same as `verify-publish --json`) — via the
+`devin-redact-mcp` entry point (`pip install 'devin-redact[mcp]'`). The
+`adapters/` directory is a self-contained Devin plugin root
+(`adapters/.devin-plugin/plugin.json` + `adapters/skills/devin-redact/SKILL.md`),
+installable with `devin plugins install Icaro0310/devin-state#packages/redact/adapters`.
+Applying redactions stays a human CLI action and is deliberately not
+exposed through any adapter.
+
 ## Platform support
 
 Pure stdlib Python — identical behavior on Windows, Linux and macOS. CI runs
