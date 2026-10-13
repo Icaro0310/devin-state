@@ -299,6 +299,30 @@ installable with `devin plugins install Icaro0310/devin-state#packages/redact/ad
 Applying redactions stays a human CLI action and is deliberately not
 exposed through any adapter.
 
+The same stdio server registers in other MCP hosts:
+
+**Zed** — `context_servers` in `settings.json`:
+
+```json
+{
+  "context_servers": {
+    "devin-redact": { "command": { "path": "devin-redact-mcp", "args": [] } }
+  }
+}
+```
+
+**JetBrains** — Settings → Tools → AI Assistant → Model Context Protocol → Add:
+
+```json
+{ "mcpServers": { "devin-redact": { "command": "devin-redact-mcp" } } }
+```
+
+**Antigravity** — `~/.gemini/config/mcp_config.json`:
+
+```json
+{ "mcpServers": { "devin-redact": { "command": "devin-redact-mcp" } } }
+```
+
 ## Platform support
 
 Pure stdlib Python — identical behavior on Windows, Linux and macOS. CI runs
