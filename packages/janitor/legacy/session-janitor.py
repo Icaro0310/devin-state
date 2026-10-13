@@ -49,7 +49,9 @@ DB = HOME / "AppData/Roaming/devin/cli/sessions.db"
 GUI_DIR = HOME / "AppData/Roaming/devin/User/acp-messages"
 LOCKS_DIR = HOME / "AppData/Roaming/devin/cli/session_locks"
 WS = Path(__file__).resolve().parent.parent
-EXPORTER = WS / "scripts/history-export.py"
+EXPORTER = Path(os.environ.get(
+    "JANITOR_EXPORTER",
+    str(WS / "scripts/devin-history-export.py")))
 KEEP_FILE = WS / ".devin/janitor-keep.json"
 PENDING_FILE = WS / ".devin/janitor-pending.json"
 LOG_FILE = WS / ".devin/memory/janitor-log.jsonl"
@@ -80,6 +82,9 @@ JUDGE_STATEMENT = (
 JUDGE_PYTHON = Path(os.environ.get(
     "JANITOR_JUDGE_PYTHON",
     str(WS / "vendor/judge/.venv/Scripts/python.exe")))
+# The private bridge module name was scrubbed for distribution — point
+# JANITOR_JUDGE_MODULE at a real installation's module to re-enable.
+JUDGE_MODULE = os.environ.get("JANITOR_JUDGE_MODULE", "judge_bridge.cli")
 JUDGE_ENV = {
     **os.environ,
     # Legacy/archived: usa um backend NLI local (offline, sem serviço
@@ -129,7 +134,7 @@ class LocalJudge:
         self.available = False
         try:
             self.proc = subprocess.Popen(
-                [str(JUDGE_PYTHON), "-m", "judge_bridge.cli", "serve"],
+                [str(JUDGE_PYTHON), "-m", JUDGE_MODULE, "serve"],
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL, text=True, env=JUDGE_ENV, cwd=str(WS))
             self._call("initialize", {

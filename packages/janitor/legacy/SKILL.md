@@ -54,7 +54,9 @@ Flags: `--grace-hours N` · `--max-delete N` · `--no-judge` · `--no-export`
 
 - Log por corrida: `.devin/memory/janitor-log.jsonl` (apagadas + porquê)
 - Proteger sessão: `.devin/janitor-keep.json` (`ids` / `title_patterns`)
-- A tarefa diária corre sob o agendador do SO (Task Scheduler/cron).
+- A tarefa diária corre sob o Task Scheduler do Windows — o script é
+  Windows-only (caminhos `AppData`, `tasklist`, `Devin.exe`); não há
+  variante cron.
 
 ## Lições
 

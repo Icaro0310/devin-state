@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Docs/janitor-legacy** — archived script fixes from Devin Review on
+  the scrub PR: `EXPORTER` is now `JANITOR_EXPORTER`-overridable with
+  the historical script name as default, the judge bridge module is
+  `JANITOR_JUDGE_MODULE`-configurable (scrubbed name is a placeholder),
+  and SKILL.md no longer implies cron support for the Windows-only
+  script.
 - **CI** — `actions/checkout` bumped to 7.0.1 across `ci.yml`,
   `docker-publish.yml`, `pypi-publish.yml` and `redact-action.yml` (dependabot).
 - **Docker** — `docker-publish.yml` builds and pushes
