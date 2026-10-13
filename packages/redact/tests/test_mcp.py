@@ -1,7 +1,6 @@
 """MCP adapter contract: do_scan mirrors `scan --json`; the tool layer
 exposes scan only — no mutation surface exists to call."""
 
-import json
 import tomllib
 from pathlib import Path
 
