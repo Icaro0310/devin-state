@@ -177,6 +177,30 @@ Icaro0310/devin-state#packages/janitor/adapters`. Removing sessions stays a
 human-confirmed CLI action and is deliberately not exposed through any
 adapter.
 
+The same stdio server registers in other MCP hosts:
+
+**Zed** — `context_servers` in `settings.json`:
+
+```json
+{
+  "context_servers": {
+    "devin-janitor": { "command": { "path": "devin-janitor-mcp", "args": [] } }
+  }
+}
+```
+
+**JetBrains** — Settings → Tools → AI Assistant → Model Context Protocol → Add:
+
+```json
+{ "mcpServers": { "devin-janitor": { "command": "devin-janitor-mcp" } } }
+```
+
+**Antigravity** — `~/.gemini/config/mcp_config.json`:
+
+```json
+{ "mcpServers": { "devin-janitor": { "command": "devin-janitor-mcp" } } }
+```
+
 ## Platform support
 
 Tested on **Windows and Linux** (`windows-latest` + `ubuntu-latest` in CI).
