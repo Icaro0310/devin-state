@@ -24,3 +24,7 @@ jobs:
     permissions:
       contents: read
     uses: Icaro0310/devin-powerups/.github/workflows/secrets-scan.yml@v1
+  adapters-check:
+    permissions:
+      contents: read
+    uses: Icaro0310/devin-powerups/.github/workflows/adapters-check.yml@v1
