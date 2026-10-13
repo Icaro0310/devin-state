@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **CI** — `ci.yml` calls the reusable `adapters-check` sensor (`devin-powerups` `@v1`): scans distributed adapter/skill files for personal paths, internal names, token shapes and SKILL.md command coherence.
 - **CI** — `actions/checkout` bumped to 7.0.1 across `ci.yml`,
   `docker-publish.yml`, `pypi-publish.yml` and `redact-action.yml` (dependabot).
 - **Docker** — `docker-publish.yml` builds and pushes
