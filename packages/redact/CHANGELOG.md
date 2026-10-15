@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `devin-redact-mcp` exits with a one-line install hint when the `mcp`
+  extra is missing instead of dumping a traceback; startup
+  `ImportError`s from `.run()` keep their traceback.
+
+
+### Fixed
+
 - `gate --staged` + published pre-commit hook: the hook now runs
   `devin-redact gate --staged`, which scans each path's blob in the git
   index (`:0:<path>`) via the new `devin_redact.staged` /
