@@ -164,3 +164,19 @@ def test_main_missing_mcp_extra_exits_with_hint(monkeypatch, capsys):
     err = capsys.readouterr().err
     assert "mcp" in err
     assert "Traceback" not in err
+
+
+def test_main_run_import_error_keeps_traceback(monkeypatch):
+    """An ImportError raised by ``server.run()`` is a startup failure,
+    not a missing extra: it must propagate with its traceback instead
+    of exiting 1 with the install hint."""
+    from devin_redact import mcp_server  # noqa: PLC0415
+
+    class _StubServer:
+        def run(self, **_kwargs):
+            raise ImportError("runtime dep gone")
+
+    monkeypatch.setattr(
+        mcp_server, "build_server", lambda *_a, **_k: _StubServer())
+    with pytest.raises(ImportError, match="runtime dep gone"):
+        mcp_server.main()
