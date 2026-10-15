@@ -14,6 +14,7 @@ needs the ``mcp`` extra: ``pip install 'devin-backup[mcp]'``.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from devin_backup.diff import diff_snapshot
@@ -132,7 +133,11 @@ def build_server():
 
 
 def main() -> None:
-    build_server().run(transport="stdio")
+    try:
+        build_server().run(transport="stdio")
+    except ImportError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
