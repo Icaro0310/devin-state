@@ -188,3 +188,34 @@ def test_mcp_tool_surface_is_pinned():
     tool only lands after a deliberate edit here — check it stays
     read-only before widening."""
     assert _registered_tool_names() == {"janitor_classify","janitor_dry_run"}
+
+
+def test_main_missing_mcp_extra_exits_with_hint(monkeypatch, capsys):
+    from devin_janitor import mcp_server
+    def _boom(*_a, **_k):
+        raise ImportError(
+            "The MCP server needs the 'mcp' extra: "
+            "pip install 'devin-janitor[mcp]'")
+    monkeypatch.setattr(mcp_server, "build_server", _boom)
+    with pytest.raises(SystemExit) as exc:
+        mcp_server.main()
+    assert exc.value.code == 1
+    err = capsys.readouterr().err
+    assert "mcp" in err
+    assert "Traceback" not in err
+
+
+def test_main_run_import_error_keeps_traceback(monkeypatch):
+    """An ImportError raised by ``server.run()`` is a startup failure,
+    not a missing extra: it must propagate with its traceback instead
+    of exiting 1 with the install hint."""
+    from devin_janitor import mcp_server  # noqa: PLC0415
+
+    class _StubServer:
+        def run(self, **_kwargs):
+            raise ImportError("runtime dep gone")
+
+    monkeypatch.setattr(
+        mcp_server, "build_server", lambda *_a, **_k: _StubServer())
+    with pytest.raises(ImportError, match="runtime dep gone"):
+        mcp_server.main()
