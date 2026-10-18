@@ -10,6 +10,9 @@
   script.
 - **CI** — `actions/checkout` bumped to 7.0.1 across `ci.yml`,
   `docker-publish.yml`, `pypi-publish.yml` and `redact-action.yml` (dependabot).
+- **CI** — `pr-approve` caller bumped from v1.1 to v1.3 in
+  `auto-approve.yml` (devin-powerups reusable; the referenced workflow
+  file is identical at both tags, so no caller-visible change).
 - **Docker** — `docker-publish.yml` builds and pushes
   `ghcr.io/icaro0310/devin-redact` after `redact-v*` releases; PRs
   smoke-build against the latest published PyPI wheel.
