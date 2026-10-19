@@ -17,7 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   vars, flag > env > detection precedence, Linux detection order) and
   maps the archived legacy script's `JANITOR_*` vars to their package
   equivalents; the Stores table now shows the real Linux data root
-  (`$XDG_DATA_HOME/devin`).
+  (`$XDG_DATA_HOME/devin`). README.linux.md now also documents the
+  data-root detection fallback for migrated installs (first of
+  `$XDG_DATA_HOME`, `$XDG_CONFIG_HOME`, `~/devin` containing
+  `cli/sessions.db`), the `--data-dir` self-contained coupling, and
+  that `JANITOR_JUDGE_PYTHON` maps by role only, not by value.
 
 
 ### Added

@@ -31,9 +31,13 @@ Inside the root:
 
 ## Environment overrides
 
-Every root is env-overridable. Precedence is always explicit CLI flag
+Every root is env-overridable. Precedence per root is explicit CLI flag
 (`--data-dir`, `--config-dir`, `--labels-file`) > `DEVIN_*` env var >
-platform convention:
+platform convention — with one coupling to know: when `--data-dir` is
+given but `--config-dir` is not, the ACP store resolves *under that
+data root* (`<data-dir>/User/acp-messages`) and `DEVIN_CONFIG_DIR` is
+not consulted. An explicit data dir is treated as a self-contained
+Devin home.
 
 | env var                  | overrides                                        | platform default |
 |--------------------------|--------------------------------------------------|------------------|
@@ -54,7 +58,7 @@ package equivalent:
 | legacy var              | legacy purpose                         | package equivalent |
 |-------------------------|----------------------------------------|--------------------|
 | `JANITOR_EXPORTER`      | history-export script run before delete | `--export-cmd CMD` |
-| `JANITOR_JUDGE_PYTHON`  | interpreter for the judge subprocess   | `devin-judge:<bin>` binary override |
+| `JANITOR_JUDGE_PYTHON`  | interpreter for the judge subprocess   | `devin-judge:<bin>` — role equivalent only: the legacy var held a Python *interpreter*, the package flag takes the `poordjaevin` *binary*; values are not interchangeable |
 | `JANITOR_JUDGE_MODULE`  | private bridge module to shell         | `--judge command:<cmd>` (any backend spec) |
 | `JANITOR_JUDGE_BACKEND` | backend selector exported to the judge | chosen by the `--judge` spec |
 
