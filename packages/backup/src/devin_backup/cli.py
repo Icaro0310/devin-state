@@ -94,6 +94,10 @@ def _cmd_list(args) -> int:
 
 
 def _smoke_detail(result: dict) -> str:
+    if not result["ok"]:
+        # surface the real cause ('store is missing', hash mismatch,
+        # 'not a readable database') instead of the sqlite label
+        return result["detail"] or result["integrity"]
     if not result["sqlite"]:
         return "not a sqlite store"
     schema = (
@@ -101,7 +105,8 @@ def _smoke_detail(result: dict) -> str:
         if result["schema_version"] is not None
         else "schema unknown"
     )
-    return f"integrity {result['integrity']} · {schema}"
+    digest = f" · hash {result['hash']}" if result.get("hash") else ""
+    return f"integrity {result['integrity']}{digest} · {schema}"
 
 
 def _print_smoke(report: dict, scope: str) -> None:

@@ -160,3 +160,67 @@ def test_cli_restore_apply_without_smoke_unchanged(
     rc = cli.main(["restore", str(snap), "--to", str(target), "--apply"])
     assert rc == 0
     assert "smoke" not in capsys.readouterr().out
+
+
+def _trash_db_header(path):
+    """Overwrite with non-SQLite bytes — 'file is not a database'."""
+    path.write_bytes(b"not a sqlite file at all" * 64)
+
+
+def test_smoke_flags_db_that_is_not_a_database(data_dir, backups_dir):
+    """A .db file with a destroyed header is corrupt, not 'skipped'."""
+    snap = snapshot.create_snapshot(data_dir, backups_dir)
+    _trash_db_header(snap / "cli" / "sessions.db")
+    report = smoke.smoke_snapshot(snap)
+    assert report["ok"] is False
+    result = {r["path"]: r for r in report["results"]}["cli/sessions.db"]
+    assert result["ok"] is False
+    assert result["integrity"] == "skipped"
+    assert result["detail"] == "not a readable database"
+
+
+def test_smoke_flags_hash_mismatch_on_restored_copy(
+    data_dir, backups_dir, tmp_path
+):
+    """A restored file whose content diverges from the manifest hash
+    fails smoke even when the database itself is healthy."""
+    snap = snapshot.create_snapshot(data_dir, backups_dir)
+    target = tmp_path / "restore-target"
+    restore.restore_snapshot(snap, target, dry_run=False)
+    (target / ".devin" / "config.json").write_text('{"tampered": true}')
+    report = smoke.smoke_restored(snap, target)
+    assert report["ok"] is False
+    result = {r["path"]: r for r in report["results"]}[
+        ".devin/config.json"]
+    assert result["hash"] == "mismatch"
+    assert result["detail"] == "content hash differs from manifest"
+
+
+def test_smoke_snapshot_expands_home(data_dir, backups_dir, tmp_path,
+                                     monkeypatch):
+    """'~/backups/x' works in dry-run smoke, like restore/verify."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    home_backups = tmp_path / "backups"
+    home_backups.mkdir()
+    snap = snapshot.create_snapshot(data_dir, home_backups)
+    rel = snap.relative_to(tmp_path)
+    report = smoke.smoke_snapshot(f"~/{rel}")
+    assert report["ok"] is True
+    assert report["checked"] == 5
+
+
+def test_cli_smoke_missing_file_shows_real_cause(
+    data_dir, backups_dir, tmp_path, capsys
+):
+    """A missing plain file must not report 'not a sqlite store'."""
+    assert _create(data_dir, backups_dir) == 0
+    snap = next(backups_dir.iterdir())
+    (snap / ".devin" / "config.json").unlink()
+    capsys.readouterr()
+    rc = cli.main(
+        ["restore", str(snap), "--to", str(tmp_path / "t"), "--smoke"]
+    )
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "store is missing" in out
+    assert "not a sqlite store" not in out

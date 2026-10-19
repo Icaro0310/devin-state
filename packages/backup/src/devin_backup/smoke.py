@@ -1,8 +1,9 @@
 """Post-restore smoke checks (``devin-backup restore --smoke``).
 
 Verifies the stores a restore touches by running ``PRAGMA integrity_check``
-on every SQLite store and detecting its schema version via
-``devin-internals-spec``. Two modes, same checks:
+on every SQLite store, comparing each file's ``sha256`` against the
+manifest (copy fidelity, not just structure) and detecting its schema
+version via ``devin-internals-spec``. Two modes, same checks:
 
 - ``smoke_restored`` — the files ``restore --apply`` just wrote, at the
   target roots.
@@ -22,7 +23,7 @@ from pathlib import Path
 from devin_internals.schema import SchemaError, detect_schema_version
 
 from devin_backup.restore import _check_paths, _display_path
-from devin_backup.snapshot import load_manifest
+from devin_backup.snapshot import load_manifest, sha256_file
 from devin_backup.stores import default_config_dir, is_sqlite_store
 from devin_backup.verify import _integrity_check
 
@@ -44,6 +45,7 @@ def _check_store(entry: dict, path: Path, display: str) -> dict:
             "integrity": "missing",
             "schema_version": None,
             "sqlite": is_db,
+            "hash": "missing",
             "detail": "store is missing",
         }
     integrity = "skipped"
@@ -51,14 +53,33 @@ def _check_store(entry: dict, path: Path, display: str) -> dict:
     if is_db:
         integrity = _integrity_check(path)
         schema_version = _detect_version(path)
-    ok = integrity in ("ok", "skipped")
+    # A declared database that cannot be read as one is corrupt, not
+    # skipped — 'skipped' is only acceptable for non-database files.
+    ok = integrity == "ok" if is_db else integrity == "skipped"
+    hash_state = None
+    expected = entry.get("sha256")
+    if expected:
+        hash_state = (
+            "ok" if sha256_file(path) == expected else "mismatch"
+        )
+        if hash_state == "mismatch":
+            ok = False
+    detail = None
+    if not ok:
+        if integrity not in ("ok", "skipped"):
+            detail = integrity
+        elif is_db and integrity == "skipped":
+            detail = "not a readable database"
+        else:
+            detail = "content hash differs from manifest"
     return {
         "path": display,
         "ok": ok,
         "integrity": integrity,
         "schema_version": schema_version,
         "sqlite": is_db,
-        "detail": None if ok else integrity,
+        "hash": hash_state,
+        "detail": detail,
     }
 
 
@@ -79,7 +100,7 @@ def smoke_snapshot(snapshot_dir: str | Path) -> dict:
     Raises :class:`devin_backup.snapshot.SnapshotError` if the manifest is
     missing or unreadable.
     """
-    snapshot_dir = Path(snapshot_dir)
+    snapshot_dir = Path(snapshot_dir).expanduser()
     manifest = load_manifest(snapshot_dir)
     root = snapshot_dir.resolve()
     results = []
@@ -94,6 +115,7 @@ def smoke_snapshot(snapshot_dir: str | Path) -> dict:
                 "integrity": "invalid-path",
                 "schema_version": None,
                 "sqlite": False,
+                "hash": "skipped",
                 "detail": "snapshot path escapes the snapshot",
             })
             continue

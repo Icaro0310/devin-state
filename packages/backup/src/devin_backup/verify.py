@@ -83,7 +83,7 @@ def verify_snapshot(snapshot_dir: str | Path) -> dict:
     Raises :class:`devin_backup.snapshot.SnapshotError` if the manifest is
     missing or unreadable.
     """
-    snapshot_dir = Path(snapshot_dir)
+    snapshot_dir = Path(snapshot_dir).expanduser()
     manifest = load_manifest(snapshot_dir)
     results = [_verify_file(snapshot_dir, e) for e in manifest["files"]]
     failed = sum(1 for r in results if not r["ok"])
