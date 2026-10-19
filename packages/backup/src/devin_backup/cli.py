@@ -8,7 +8,15 @@ import os
 import sys
 from pathlib import Path
 
-from devin_backup import __version__, diff, restore, rotate, snapshot, verify
+from devin_backup import (
+    __version__,
+    diff,
+    restore,
+    rotate,
+    smoke,
+    snapshot,
+    verify,
+)
 from devin_backup.stores import (
     DataDirError,
     default_backups_dir,
@@ -85,6 +93,29 @@ def _cmd_list(args) -> int:
     return 0
 
 
+def _smoke_detail(result: dict) -> str:
+    if not result["sqlite"]:
+        return "not a sqlite store"
+    schema = (
+        f"schema v{result['schema_version']}"
+        if result["schema_version"] is not None
+        else "schema unknown"
+    )
+    return f"integrity {result['integrity']} · {schema}"
+
+
+def _print_smoke(report: dict, scope: str) -> None:
+    print(f"smoke — {scope}:")
+    for r in report["results"]:
+        mark = "ok  " if r["ok"] else "FAIL"
+        print(f"  {mark} {r['path']}  ({_smoke_detail(r)})")
+    state = "ok" if report["ok"] else "FAILED"
+    print(
+        f"smoke {state}: {report['checked']} checked, "
+        f"{report['failed']} failed"
+    )
+
+
 def _cmd_restore(args) -> int:
     plan = restore.restore_snapshot(
         args.snapshot_dir,
@@ -107,7 +138,18 @@ def _cmd_restore(args) -> int:
         if plan["pre_restore_backup"]:
             print(f"pre-restore backup: {plan['pre_restore_backup']}")
         print(f"restored {len(plan['written'])} file(s) to {plan['target']}")
-    return 0
+    if not args.smoke:
+        return 0
+    if plan["dry_run"]:
+        report = smoke.smoke_snapshot(args.snapshot_dir)
+        scope = "snapshot sources (dry-run — nothing was written)"
+    else:
+        report = smoke.smoke_restored(
+            args.snapshot_dir, plan["target"], plan["config_target"]
+        )
+        scope = "restored stores"
+    _print_smoke(report, scope)
+    return 0 if report["ok"] else 1
 
 
 def _fmt_size(size) -> str:
@@ -245,6 +287,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_restore.add_argument(
         "--no-backup", action="store_true",
         help="skip the pre-restore backup (refuses to overwrite anything)",
+    )
+    p_restore.add_argument(
+        "--smoke", action="store_true",
+        help="integrity-check every store the restore touches and report "
+        "its schema version — the restored files with --apply, the "
+        "snapshot sources in dry-run (read-only either way); "
+        "exit 1 if any store fails",
     )
     p_restore.set_defaults(func=_cmd_restore)
 
