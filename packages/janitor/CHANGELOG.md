@@ -12,6 +12,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `devin-janitor-mcp` exits with a one-line install hint when the `mcp`
   extra is missing instead of dumping a traceback; startup
   `ImportError`s from `.run()` keep their traceback.
+- `docs/SPEC.md` documents the full environment-override contract
+  (`DEVIN_DATA_DIR`/`DEVIN_CONFIG_DIR`/`DEVIN_BRIDGE_STATE_DIR`, platform
+  vars, flag > env > detection precedence, Linux detection order) and
+  maps the archived legacy script's `JANITOR_*` vars to their package
+  equivalents; the Stores table now shows the real Linux data root
+  (`$XDG_DATA_HOME/devin`). README.linux.md now also documents the
+  data-root detection fallback for migrated installs (first of
+  `$XDG_DATA_HOME`, `$XDG_CONFIG_HOME`, `~/devin` containing
+  `cli/sessions.db`), the `--data-dir` self-contained coupling, and
+  that `JANITOR_JUDGE_PYTHON` maps by role only, not by value.
 
 
 ### Added
