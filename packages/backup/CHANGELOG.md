@@ -16,6 +16,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `restore --smoke` + `devin_backup.smoke`: post-restore integrity
+  verification. With `--apply` it runs `PRAGMA integrity_check` and
+  `devin-internals-spec` schema-version detection on every restored
+  SQLite store and reports per store; in dry-run it smoke-checks the
+  snapshot sources instead (read-only preview, nothing written).
+  Exit code 1 if any store fails integrity.
+
 - Daemon adapters for the daily snapshot (`adapters/daemon/`):
   `devin-backup-daily.{service,timer}` user-level systemd units and a
   Windows `task.xml` + `install-task.ps1`/`remove-task.ps1` pair —
