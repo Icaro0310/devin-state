@@ -180,13 +180,22 @@ def apply_deletions(
     targets: list[tuple[SessionRow, str]],
     pending: dict[str, int],
 ) -> dict[str, int]:
-    """Delete target rows + gui files; returns counters for the report."""
-    stats = {"cli_rows": 0, "gui_sessions": 0, "still_locked": 0}
+    """Delete target rows + gui files; returns counters for the report.
+
+    ``sessions`` counts unique sessions actually removed — the inventory
+    merges both stores by id, so a session holding a ``sessions.db`` row
+    AND ``acp-messages`` files counts once and the total never exceeds
+    ``len(targets)``. The per-store counters (``cli_rows``,
+    ``gui_sessions``) are unchanged for the printed run summary.
+    """
+    stats = {"cli_rows": 0, "gui_sessions": 0, "still_locked": 0,
+             "sessions": 0}
     con = sqlite3.connect(str(paths.sessions_db), timeout=30)
     con.execute("PRAGMA busy_timeout=30000")
     try:
         for row, _why in targets:
-            if delete_session_rows(con, row.id):
+            removed = delete_session_rows(con, row.id)
+            if removed:
                 stats["cli_rows"] += 1
             files = list(paths.acp_messages_dir.glob(f"{row.id}.db*")) if (
                 paths.acp_messages_dir.is_dir()
@@ -194,6 +203,9 @@ def apply_deletions(
             if (row.origin == "gui" or files) \
                     and delete_gui_files(paths.acp_messages_dir, row.id, pending):
                 stats["gui_sessions"] += 1
+                removed = True
+            if removed:
+                stats["sessions"] += 1
         retry_pending(paths.acp_messages_dir, pending)
         con.commit()
     finally:

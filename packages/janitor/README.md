@@ -85,6 +85,7 @@ devin-janitor run --apply          # execute the pipeline
 devin-janitor run --apply --grace-hours 72 \
     --export-cmd "devin-history export"   # safe recipe: export first
 devin-janitor run --judge "command:python my_judge.py"   # plug your own judge
+devin-janitor run --apply --notify-cmd "my-notifier"     # post-run JSON summary on its stdin
 devin-janitor pending --list       # locked files queued for retry
 devin-janitor pending --retry      # retry them now
 devin-janitor report               # recoverable-space report (advisory)
@@ -136,6 +137,29 @@ Windows, or an elapsed-time job record in
 `UserPromptSubmit` hook when neither scheduler exists. Pin a backend with
 `--backend auto|tasksch|cron|elapsed`. Only `report` is ever scheduled —
 `--apply` stays a manual decision.
+
+### Post-run notification
+
+`run --notify-cmd "<command>"` (or `JANITOR_NOTIFY_CMD` when the flag is
+absent) pipes a compact JSON summary to the command's stdin after every
+run — the mirror of `--export-cmd`, which runs before deletion instead:
+
+```json
+{"apply": true, "total": 12, "planned": 3, "deleted": 3,
+ "retained": 9, "pending": 0, "rc": 0}
+```
+
+`planned` is what the plan selected for deletion (a dry-run reports it
+with `apply: false` and `deleted: 0`); `retained` counts sessions the
+run leaves alone (keepers plus deletes outside `--tiers`/`--max-delete`);
+`deleted` counts unique sessions actually removed — a session spanning
+both stores counts once; `rc` is the run's exit code, so a failed purge
+notifies too.
+Notification is **fail-open**: a missing command, non-zero exit or the
+10s timeout prints a stderr warning and never changes the exit code.
+The janitor ships no notifier — point the flag at any local command (a
+slack-webhook wrapper, `mail`, a devin-bridge helper). The flag beats the
+env var; an explicit `--notify-cmd ""` disables notification entirely.
 
 Session data defaults to `%APPDATA%\devin` on Windows and
 `$XDG_DATA_HOME/devin` (normally `~/.local/share/devin`) on Linux. UI ACP files
