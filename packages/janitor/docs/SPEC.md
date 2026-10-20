@@ -154,7 +154,12 @@ fail-open**: unavailable/error/timeout/unclear verdict ⇒ keep.
    leaves alone — keepers plus deletes outside `--tiers`/`--max-delete`;
    `deleted` counts unique sessions actually removed (a session holding
    both a `sessions.db` row and `acp-messages` files counts once).
-   Notification is
+   The printed plan's `keep:` line and the payload's `retained` measure
+   different things on purpose: the console figure counts *classified
+   keepers* (allowlist/grace/substantive + judged-kept + judge-down),
+   while `retained` counts *sessions the run leaves alone* — the two
+   diverge exactly when `--tiers` or `--max-delete` leaves selected-able
+   deletes untouched. Notification is
    **fail-open** — an unrunnable command, non-zero exit or the 10s
    timeout prints a stderr warning and never changes the exit code.
    Flag beats env; an explicit `--notify-cmd ""` disables it. The janitor
