@@ -35,4 +35,4 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
-    uses: Icaro0310/devin-powerups/.github/workflows/pr-approve.yml@v1.1
+    uses: Icaro0310/devin-powerups/.github/workflows/pr-approve.yml@v1.3
