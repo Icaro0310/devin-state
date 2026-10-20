@@ -70,6 +70,11 @@ jobs:
       id-token: write
       contents: read
     steps:
+      # Checkout first and unconditionally: the wheel-content check
+      # below reads the package's pyproject.toml on both verify legs,
+      # and checkout must precede the artifact download — it cleans the
+      # workspace and would wipe a dist/ downloaded before it.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Ship the exact dist/ that passed the verify gate — rebuilding
       # here would upload an unchecked wheel.
       - name: Download verified dist artifact
@@ -79,9 +84,6 @@ jobs:
           name: dist
           path: dist/
       # install-scheduler skipped verification, so it builds here.
-      # Checkout is unconditional: the wheel-content check below reads
-      # the package's pyproject.toml regardless of which verify leg ran.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Build sdist and wheel
         if: needs.verify.result == 'skipped'
         working-directory: ${{ needs.resolve.outputs.dir }}
