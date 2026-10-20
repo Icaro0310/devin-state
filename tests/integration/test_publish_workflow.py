@@ -74,7 +74,6 @@ import sys
 import textwrap
 import zipfile
 
-import pytest
 
 
 def _gate_script() -> str:
@@ -127,7 +126,7 @@ def _run_gate(tmp_path: Path, script: str) -> subprocess.CompletedProcess:
     # The workflow interpolates needs.resolve.outputs.dir — the fixture
     # substitutes the fabricated package dir directly.
     rendered = script.replace(
-        "${{ needs.resolve.outputs.dir }}", str(pkg_dir))
+        "${{ needs.resolve.outputs.dir }}", pkg_dir.as_posix())
     return subprocess.run(
         [sys.executable, "-c", rendered],
         capture_output=True,
@@ -183,7 +182,7 @@ def test_gate_passes_for_scriptless_package(tmp_path):
     _wheel(dist, "pkg-0.1.0.dist-info", entry_points=None, extras=[])
     pkg_dir = _pyproject(tmp_path, scripts=None, extras=None)
     rendered = script.replace(
-        "${{ needs.resolve.outputs.dir }}", str(pkg_dir))
+        "${{ needs.resolve.outputs.dir }}", pkg_dir.as_posix())
     res = subprocess.run(
         [sys.executable, "-c", rendered],
         capture_output=True, text=True, cwd=tmp_path, check=False,
