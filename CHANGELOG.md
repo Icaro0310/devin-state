@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **CI/publish** — the wheel gate in `pypi-publish.yml` no longer crashes
+  with `StopIteration` on wheels without `entry_points.txt` (the
+  install-scheduler shape, which ships no console scripts). Scriptless
+  wheels now pass the script/extra coverage check honestly while
+  declared-but-missing scripts still fail; the gate's python block is
+  exercised by tests against fixture wheels.
 - **Docs/janitor-legacy** — archived script fixes from Devin Review on
   the scrub PR: `EXPORTER` is now `JANITOR_EXPORTER`-overridable with
   the historical script name as default, the judge bridge module is
