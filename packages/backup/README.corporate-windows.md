@@ -91,7 +91,8 @@ User-scope registration (`schtasks` or the `ScheduledTask` cmdlets) needs no adm
 - Devin plugin + skill: `devin plugins install
   Icaro0310/devin-state#packages/backup/adapters`. The manifest
   launches the server through `uvx --from 'devin-backup[mcp]' devin-backup-mcp`, which
-  resolves once the next PyPI release ships, until then install from
+  resolves from PyPI as of 0.1.1 (the 0.1.0 wheel predates the entry
+  point); on 0.1.0 install from
   source (`pip install -e 'packages/backup[mcp]'` from a checkout).
 
 

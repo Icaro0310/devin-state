@@ -53,7 +53,8 @@ Runs under your account, no admin needed. Adjust `/sc`/`/st` (or `/sc onlogon` f
 - Devin plugin + skill: `devin plugins install
   Icaro0310/devin-state#packages/janitor/adapters`. The manifest
   launches the server through `uvx --from 'devin-janitor[mcp]' devin-janitor-mcp`, which
-  resolves once the next PyPI release ships. Until then, an
+  resolves from PyPI as of 0.1.1 (the 0.1.0 wheel predates both the
+  entry point and the `mcp` extra). On 0.1.0 or a source checkout, an
   editable install does not change what `uvx --from` resolves —
   either run the source-installed `devin-janitor-mcp` directly, or
   point a local manifest copy at the checkout:
