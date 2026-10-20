@@ -7,7 +7,7 @@ import zipfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from check_wheel_metadata import check_wheel  # noqa: E402
+from check_wheel_metadata import check_wheel
 
 
 def _pkg(tmp_path: Path, *, scripts: bool = True, extras: bool = True) -> Path:

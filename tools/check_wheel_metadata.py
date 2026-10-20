@@ -15,9 +15,10 @@ from __future__ import annotations
 
 import argparse
 import sys
-import tomllib
 import zipfile
 from pathlib import Path
+
+import tomllib
 
 
 def check_wheel(dist: Path, package_dir: Path) -> list[str]:
