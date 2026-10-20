@@ -83,7 +83,7 @@ devin-backup create  [--data-dir <session-data-root>] [--config-dir <ui-config-r
 devin-backup verify  <snapshot-dir>
 devin-backup diff    <snapshot-dir> [--data-dir <session-data-root>] [--config-dir <ui-config-root>] [--json]
 devin-backup list    [--out <backups-dir>]
-devin-backup restore <snapshot-dir> --to <session-data-root> [--config-to <ui-config-root>] [--apply] [--no-backup]
+devin-backup restore <snapshot-dir> --to <session-data-root> [--config-to <ui-config-root>] [--apply] [--no-backup] [--smoke]
 devin-backup rotate  [--keep N] --yes
 ```
 
@@ -104,6 +104,10 @@ devin-backup rotate  [--keep N] --yes
   `--to` and config-root files to `--config-to` (default: detected UI config
   root). Pass `--apply` to write. Existing files are saved to a
   `pre-restore-<ts>` backup first; `--no-backup` refuses overwrites.
+  `--smoke` runs a post-restore integrity pass: `PRAGMA integrity_check`
+  plus schema-version detection per SQLite store, printed per store —
+  the restored files with `--apply`, the snapshot sources (a pre-restore
+  preview, still read-only) without it. Exits 1 if any store fails.
 - `rotate` keeps the newest N snapshots (default `$DEVIN_BACKUP_KEEP` or 10)
   and is a no-op until `--yes`. `pre-restore-*` dirs are never rotated.
 - **A snapshot is a copy of every secret the stores hold.** Snapshot dirs
@@ -121,12 +125,13 @@ on Windows and `$XDG_CONFIG_HOME/Devin` (normally `~/.config/Devin`) on Linux.
 `--out` defaults to `$DEVIN_BACKUP_DIR` or `<data-root>/backups`.
 
 ```python
-from devin_backup import diff, snapshot, verify, restore
+from devin_backup import diff, restore, smoke, snapshot, verify
 
 snap = snapshot.create_snapshot(data_dir, backups_dir, config_dir=config_dir)
 verify.verify_snapshot(snap)                       # {"ok": True, ...}
 diff.diff_snapshot(snap, data_dir, config_dir=config_dir)  # read-only report
 restore.restore_snapshot(snap, data_dir, config_dir=config_dir)  # dry-run
+smoke.smoke_restored(snap, data_dir)               # integrity + schema per store
 ```
 
 ## Works with Devin alone (Devin-only mode)

@@ -249,7 +249,7 @@ wheels = [
 
 [[package]]
 name = "devin-backup"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "packages/backup" }
 dependencies = [
     { name = "devin-install-scheduler" },
@@ -298,7 +298,7 @@ wheels = [
 
 [[package]]
 name = "devin-janitor"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "packages/janitor" }
 dependencies = [
     { name = "devin-install-scheduler" },
@@ -324,7 +324,7 @@ provides-extras = ["dev", "mcp"]
 
 [[package]]
 name = "devin-redact"
-version = "0.2.2"
+version = "0.2.3"
 source = { editable = "packages/redact" }
 
 [package.optional-dependencies]

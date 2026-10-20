@@ -7,14 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-20
+
 ### Fixed
 
+- Ship the `devin-backup-mcp` console script in the wheel: the entry
+  point has been declared in `[project.scripts]` since the MCP server
+  landed, but the published 0.1.0 wheel predates it (its
+  `entry_points.txt` ships only `devin-backup`, and the metadata has
+  no `mcp` extra). This release also publishes the `mcp` extra the
+  plugin manifest's `uvx --from 'devin-backup[mcp]'` launch needs.
 - `devin-backup-mcp` exits with a one-line install hint when the `mcp`
   extra is missing instead of dumping a traceback; startup
   `ImportError`s from `.run()` keep their traceback.
+- `test_smoke_snapshot_expands_home` now stubs `USERPROFILE` alongside
+  `HOME`: `Path.expanduser()` ignores `HOME` on Windows, so the `~`
+  expansion check deterministically failed there since it landed.
 
 
 ### Added
+
+- `restore --smoke` + `devin_backup.smoke`: post-restore integrity
+  verification. With `--apply` it runs `PRAGMA integrity_check` and
+  `devin-internals-spec` schema-version detection on every restored
+  SQLite store and reports per store; in dry-run it smoke-checks the
+  snapshot sources instead (read-only preview, nothing written).
+  Exit code 1 if any store fails integrity.
 
 - Daemon adapters for the daily snapshot (`adapters/daemon/`):
   `devin-backup-daily.{service,timer}` user-level systemd units and a

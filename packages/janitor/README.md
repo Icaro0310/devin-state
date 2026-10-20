@@ -140,7 +140,8 @@ Windows, or an elapsed-time job record in
 Session data defaults to `%APPDATA%\devin` on Windows and
 `$XDG_DATA_HOME/devin` (normally `~/.local/share/devin`) on Linux. UI ACP files
 use `$XDG_CONFIG_HOME/Devin` (normally `~/.config/Devin`). Override with
-`--data-dir`/`DEVIN_DATA_DIR` and `--config-dir`/`DEVIN_CONFIG_DIR`. Protect
+`--data-dir`/`DEVIN_DATA_DIR` and `--config-dir`/`DEVIN_CONFIG_DIR`; the
+bridge labels sidecar follows `DEVIN_BRIDGE_STATE_DIR`. Protect
 sessions in `.devin/janitor-keep.json`
 (`{"ids": [...], "title_patterns": [...]}`); tune classification rules via
 `--config file.json`. `report` reads every store (`sessions.db`,

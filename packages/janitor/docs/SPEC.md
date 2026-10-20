@@ -20,7 +20,7 @@ All knowledge of Devin's internals comes from
 |---------|---------------------------------------------|
 | Windows | `%APPDATA%\devin`                           |
 | macOS   | `~/Library/Application Support/devin`       |
-| Linux   | `$XDG_CONFIG_HOME/devin` (or `~/.config`)   |
+| Linux   | `$XDG_DATA_HOME/devin` (see detection below) |
 
 Inside the root:
 
@@ -28,6 +28,42 @@ Inside the root:
   by `detect_schema_version`; unknown versions are refused)
 - `User/acp-messages/*.db` — one store per GUI session (`meta` + `messages`)
 - `cli/session_locks/*.lock` — live-session locks; presence ⇒ Devin active
+
+## Environment overrides
+
+Every root is env-overridable. Precedence per root is explicit CLI flag
+(`--data-dir`, `--config-dir`, `--labels-file`) > `DEVIN_*` env var >
+platform convention — with one coupling to know: when `--data-dir` is
+given but `--config-dir` is not, the ACP store resolves *under that
+data root* (`<data-dir>/User/acp-messages`) and `DEVIN_CONFIG_DIR` is
+not consulted. An explicit data dir is treated as a self-contained
+Devin home.
+
+| env var                  | overrides                                        | platform default |
+|--------------------------|--------------------------------------------------|------------------|
+| `DEVIN_DATA_DIR`         | data root (`cli/sessions.db`, `cli/session_locks/`) | `%APPDATA%\devin` · `~/Library/Application Support/devin` · `$XDG_DATA_HOME/devin` |
+| `DEVIN_CONFIG_DIR`       | UI-config root (`User/acp-messages/`)            | `%APPDATA%\Devin` · `~/Library/Application Support/Devin` · `$XDG_CONFIG_HOME/Devin` |
+| `DEVIN_BRIDGE_STATE_DIR` | bridge state dir (`session-labels.json`, JA-4)   | `%LOCALAPPDATA%\devin-bridge` · `~/Library/Application Support/devin-bridge` · `$XDG_STATE_HOME/devin-bridge` |
+
+`APPDATA`, `LOCALAPPDATA` and the `XDG_*` variables are honoured as
+platform conventions whenever the matching `DEVIN_*` override is unset.
+On Linux the data root is the first of `$XDG_DATA_HOME/devin`,
+`$XDG_CONFIG_HOME/devin`, `~/devin` that already holds a
+`cli/sessions.db` file (so migrated installs keep working).
+
+The archived legacy script (`legacy/session-janitor.py`) had its own
+env contract for the parts the port replaced; each knob maps to a
+package equivalent:
+
+| legacy var              | legacy purpose                         | package equivalent |
+|-------------------------|----------------------------------------|--------------------|
+| `JANITOR_EXPORTER`      | history-export script run before delete | `--export-cmd CMD` |
+| `JANITOR_JUDGE_PYTHON`  | interpreter for the judge subprocess   | `devin-judge:<bin>` — role equivalent only: the legacy var held a Python *interpreter*, the package flag takes the `poordjaevin` *binary*; values are not interchangeable |
+| `JANITOR_JUDGE_MODULE`  | private bridge module to shell         | `--judge command:<cmd>` (any backend spec) |
+| `JANITOR_JUDGE_BACKEND` | backend selector exported to the judge | chosen by the `--judge` spec |
+
+The legacy script also hardcoded `~/AppData/Roaming/devin` roots; the
+package replaces them with the detection + overrides table above.
 
 ## Inventory
 
