@@ -106,7 +106,12 @@ jobs:
           meta = tomllib.load(open("${{ needs.resolve.outputs.dir }}/pyproject.toml", "rb"))["project"]
           with zipfile.ZipFile(wheels[0]) as z:
               names = z.namelist()
-              ep = z.read(next(n for n in names if n.endswith("entry_points.txt"))).decode()
+              # Wheels without console scripts ship no entry_points.txt
+              # (install-scheduler is one): read empty rather than let
+              # next() raise — declared scripts then count as missing,
+              # an undeclaring wheel passes honestly.
+              ep_file = next((n for n in names if n.endswith("entry_points.txt")), None)
+              ep = z.read(ep_file).decode() if ep_file else ""
               md = z.read(next(n for n in names if n.endswith("METADATA"))).decode()
           missing_scripts = [s for s in (meta.get("scripts") or {}) if f"{s} =" not in ep]
           missing_extras = [x for x in (meta.get("optional-dependencies") or {}) if f"Provides-Extra: {x}" not in md]
