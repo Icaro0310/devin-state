@@ -13,7 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (dry-run and `--apply`, aborts included) the janitor pipes a compact
   JSON summary — `apply`, `total`, `planned`, `deleted`, `retained`,
   `pending`, `rc` — to the command's stdin, so a scheduled purge is
-  never silent. The hook is fail-open with a 10s timeout: a missing
+  never silent (`deleted`/`retained` count unique sessions: one session
+  in both stores counts once, and deletes skipped by `--tiers`/
+  `--max-delete` stay under `retained`). The hook is fail-open with a
+  10s timeout: a missing
   command, non-zero exit or timeout warns on stderr and never changes
   the exit code. Flag beats env; an explicit `--notify-cmd ""` disables
   it; the janitor ships no notifier and takes no dependency on any

@@ -150,8 +150,11 @@ fail-open**: unavailable/error/timeout/unclear verdict ⇒ keep.
    ```
 
    `planned` is the deletion plan (a dry-run reports it with
-   `apply: false`, `deleted: 0`); `retained` mirrors the plan's keep
-   count; `deleted` counts sessions actually removed. Notification is
+   `apply: false`, `deleted: 0`); `retained` counts sessions the run
+   leaves alone — keepers plus deletes outside `--tiers`/`--max-delete`;
+   `deleted` counts unique sessions actually removed (a session holding
+   both a `sessions.db` row and `acp-messages` files counts once).
+   Notification is
    **fail-open** — an unrunnable command, non-zero exit or the 10s
    timeout prints a stderr warning and never changes the exit code.
    Flag beats env; an explicit `--notify-cmd ""` disables it. The janitor

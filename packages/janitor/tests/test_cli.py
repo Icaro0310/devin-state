@@ -423,3 +423,52 @@ def test_notify_reports_failure_rc(tmp_path, capsys):
     payload = json.loads(out.read_text(encoding="utf-8"))
     assert payload["rc"] == 1
     assert payload["deleted"] == 0
+
+
+def test_notify_reports_raised_error_rc(noisy_dir, tmp_path, capsys):
+    """A pipeline exception (bad --tiers) still notifies, with rc=2."""
+    out = tmp_path / "notify-out.json"
+    rc = main(_run_args(
+        noisy_dir, tmp_path, "--tiers", "bogus",
+        "--notify-cmd", _notify_cmd(_notify_stub(tmp_path), out),
+    ))
+    assert rc == 2
+    assert "error:" in capsys.readouterr().err
+    payload = json.loads(out.read_text(encoding="utf-8"))
+    assert payload["rc"] == 2
+
+
+def test_notify_deleted_counts_sessions_not_stores(
+    devin_dir, tmp_path, monkeypatch
+):
+    """A session living in both stores counts once, not per store."""
+    monkeypatch.setattr(
+        "devin_janitor.cli.vacuum_if_safe", lambda paths: False
+    )
+    add_session(devin_dir.sessions_db, "dual", title="billing",
+                user_msgs=1)
+    add_gui_session(devin_dir.acp_messages_dir, "dual", title="billing")
+    out = tmp_path / "notify-out.json"
+    rc = main(_run_args(
+        devin_dir, tmp_path, "--apply",
+        "--notify-cmd", _notify_cmd(_notify_stub(tmp_path), out),
+    ))
+    assert rc == 0
+    payload = json.loads(out.read_text(encoding="utf-8"))
+    assert payload["planned"] == 1
+    assert payload["deleted"] == 1
+
+
+def test_notify_retained_includes_unselected(noisy_dir, tmp_path):
+    """--tiers 1 selects no session deletions: every session is retained,
+    including the auto-delete ones this run never planned to touch."""
+    out = tmp_path / "notify-out.json"
+    rc = main(_run_args(
+        noisy_dir, tmp_path, "--tiers", "1",
+        "--notify-cmd", _notify_cmd(_notify_stub(tmp_path), out),
+    ))
+    assert rc == 0
+    payload = json.loads(out.read_text(encoding="utf-8"))
+    assert payload["planned"] == 0
+    assert payload["retained"] == 3
+    assert payload["deleted"] == 0

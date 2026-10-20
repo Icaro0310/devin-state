@@ -213,7 +213,14 @@ def cmd_run(args: argparse.Namespace) -> int:
         "retained": 0,
         "pending": 0,
     }
-    rc = _run_pipeline(args, summary)
+    try:
+        rc = _run_pipeline(args, summary)
+    except (ValueError, RuntimeError, OSError,
+            subprocess.CalledProcessError) as exc:
+        # the same error conversion main() applies — done here so the
+        # notification below still ships the real rc
+        print(f"error: {exc}", file=sys.stderr)
+        rc = 2
     send_notification(
         resolve_notify_cmd(args.notify_cmd), {**summary, "rc": rc}
     )
@@ -257,9 +264,9 @@ def _run_pipeline(args: argparse.Namespace, summary: dict) -> int:
         else []
     )
     summary["planned"] = len(targets)
-    summary["retained"] = (
-        len(classification.kept) + len(judged_keep) + judge_down
-    )
+    # sessions this run leaves alone: keepers plus deletes outside the
+    # selected --tiers / --max-delete cap (they stay on disk either way)
+    summary["retained"] = len(rows) - len(targets)
     n_auto = min(len(classification.auto_delete), len(targets))
 
     print(
@@ -321,7 +328,7 @@ def _run_pipeline(args: argparse.Namespace, summary: dict) -> int:
     if targets:
         print("== delete ==")
         stats = apply_deletions(paths, targets, pending)
-        summary["deleted"] = stats["cli_rows"] + stats["gui_sessions"]
+        summary["deleted"] = stats["sessions"]
         summary["pending"] = len(pending)
 
     # 3. tier1: orphan rows + dead-session leftovers + orphan locks;

@@ -150,8 +150,11 @@ run — the mirror of `--export-cmd`, which runs before deletion instead:
 ```
 
 `planned` is what the plan selected for deletion (a dry-run reports it
-with `apply: false` and `deleted: 0`); `retained` mirrors the plan's
-keep count; `rc` is the run's exit code, so a failed purge notifies too.
+with `apply: false` and `deleted: 0`); `retained` counts sessions the
+run leaves alone (keepers plus deletes outside `--tiers`/`--max-delete`);
+`deleted` counts unique sessions actually removed — a session spanning
+both stores counts once; `rc` is the run's exit code, so a failed purge
+notifies too.
 Notification is **fail-open**: a missing command, non-zero exit or the
 10s timeout prints a stderr warning and never changes the exit code.
 The janitor ships no notifier — point the flag at any local command (a

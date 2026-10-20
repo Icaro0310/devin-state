@@ -20,9 +20,17 @@ Payload (one line of JSON)::
      "retained": 9, "pending": 0, "rc": 0}
 
 ``planned`` is what the plan selected for deletion (a dry-run reports it
-with ``apply: false`` and ``deleted: 0``); ``retained`` mirrors the
-plan's keep count; ``rc`` is the run's own exit code, so failed runs
-notify too.
+with ``apply: false`` and ``deleted: 0``); ``retained`` counts sessions
+the run leaves alone (keepers plus deletes outside ``--tiers`` /
+``--max-delete``); ``deleted`` counts unique sessions actually removed —
+a session spanning both stores counts once; ``rc`` is the run's own
+exit code, so failed runs notify too.
+
+Like ``--export-cmd``, the command runs through the platform shell, so
+pipes and compound commands work. Timeout kills the shell process; a
+grandchild it spawned can technically outlive it — keep notifier
+commands simple (a notifier that hangs its own children is a notifier
+bug, not a janitor one).
 """
 
 from __future__ import annotations
