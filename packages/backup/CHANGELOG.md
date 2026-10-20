@@ -20,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `devin-backup-mcp` exits with a one-line install hint when the `mcp`
   extra is missing instead of dumping a traceback; startup
   `ImportError`s from `.run()` keep their traceback.
+- `test_smoke_snapshot_expands_home` now stubs `USERPROFILE` alongside
+  `HOME`: `Path.expanduser()` ignores `HOME` on Windows, so the `~`
+  expansion check deterministically failed there since it landed.
 
 
 ### Added
