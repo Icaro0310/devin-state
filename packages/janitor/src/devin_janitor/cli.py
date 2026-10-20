@@ -49,6 +49,7 @@ from devin_janitor.inventory import (
     load_inventory,
 )
 from devin_janitor.judge import Verdict, make_judge
+from devin_janitor.notify import resolve_notify_cmd, send_notification
 from devin_janitor.paths import resolve
 from devin_janitor.report import (
     append_log,
@@ -198,6 +199,28 @@ def cmd_scan(args: argparse.Namespace) -> int:
 
 
 def cmd_run(args: argparse.Namespace) -> int:
+    """Run the pipeline, then notify (``--notify-cmd``/env, fail-open).
+
+    ``summary`` is populated by ``_run_pipeline`` as values become known
+    and shipped to the notify command with the run's ``rc`` — so a failed
+    run notifies too, with whatever was learned before the abort.
+    """
+    summary = {
+        "apply": bool(args.apply),
+        "total": 0,
+        "planned": 0,
+        "deleted": 0,
+        "retained": 0,
+        "pending": 0,
+    }
+    rc = _run_pipeline(args, summary)
+    send_notification(
+        resolve_notify_cmd(args.notify_cmd), {**summary, "rc": rc}
+    )
+    return rc
+
+
+def _run_pipeline(args: argparse.Namespace, summary: dict) -> int:
     paths = _resolve(args)
     cfg = JanitorConfig.load(args.config)
     if args.grace_hours is not None:
@@ -207,12 +230,14 @@ def cmd_run(args: argparse.Namespace) -> int:
     tiers = parse_tiers(args.tiers)  # ValueError → rc 2 via main()
     keep_ids, keep_patterns = load_keep_file(args.keep_file)
     pending = load_pending(args.pending_file)
+    summary["pending"] = len(pending)
 
     if not paths.sessions_db.is_file() and tiers & {TIER1, TIER2}:
         print(f"error: no sessions.db at {paths.sessions_db}", file=sys.stderr)
         return 1
 
     rows = load_inventory(paths)
+    summary["total"] = len(rows)
     classification = classify(
         rows, cfg, keep_ids=keep_ids, keep_patterns=keep_patterns
     )
@@ -230,6 +255,10 @@ def cmd_run(args: argparse.Namespace) -> int:
         (classification.auto_delete + judged_delete)[: cfg.max_delete]
         if TIER2 in tiers
         else []
+    )
+    summary["planned"] = len(targets)
+    summary["retained"] = (
+        len(classification.kept) + len(judged_keep) + judge_down
     )
     n_auto = min(len(classification.auto_delete), len(targets))
 
@@ -292,6 +321,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     if targets:
         print("== delete ==")
         stats = apply_deletions(paths, targets, pending)
+        summary["deleted"] = stats["cli_rows"] + stats["gui_sessions"]
+        summary["pending"] = len(pending)
 
     # 3. tier1: orphan rows + dead-session leftovers + orphan locks;
     #    vacuum reclaims the sidecars (only when Devin is closed)
@@ -507,6 +538,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--export-cmd", default=None,
                    help="shell command run BEFORE any deletion; "
                         "non-zero exit aborts the run")
+    p.add_argument("--notify-cmd", default=None,
+                   help="shell command run AFTER the run, receiving the "
+                        "run summary as JSON on stdin (env: "
+                        "JANITOR_NOTIFY_CMD when the flag is absent); "
+                        "fail-open — notify errors warn, never fail")
     p.add_argument("--keep-file", default=DEFAULT_KEEP_FILE)
     p.add_argument("--pending-file", default=DEFAULT_PENDING_FILE)
     p.add_argument("--log-file", default=DEFAULT_LOG_FILE)

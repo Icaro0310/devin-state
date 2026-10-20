@@ -39,6 +39,21 @@ def _db_ids(db_path):
     return ids
 
 
+def _notify_stub(tmp_path):
+    """A portable notify sink: copies stdin verbatim into ``argv[1]``."""
+    script = tmp_path / "notify_stub.py"
+    script.write_text(
+        "import sys, pathlib\n"
+        "pathlib.Path(sys.argv[1]).write_text(sys.stdin.read())\n",
+        encoding="utf-8",
+    )
+    return script
+
+
+def _notify_cmd(script, out):
+    return f'"{sys.executable}" "{script}" "{out}"'
+
+
 @pytest.fixture()
 def noisy_dir(devin_dir):
     """A data dir with one deletable noise session + one keeper."""
@@ -255,3 +270,156 @@ def test_run_missing_db(tmp_path, capsys):
 def test_bad_judge_spec(devin_dir, tmp_path, capsys):
     rc = main(_run_args(devin_dir, tmp_path, "--judge", "bogus"))
     assert rc == 2
+
+
+# -------------------------------------------------------------- notify --
+
+
+def test_notify_receives_payload_dry_run(noisy_dir, tmp_path):
+    out = tmp_path / "notify-out.json"
+    rc = main(_run_args(
+        noisy_dir, tmp_path,
+        "--notify-cmd", _notify_cmd(_notify_stub(tmp_path), out),
+    ))
+    assert rc == 0
+    payload = json.loads(out.read_text(encoding="utf-8"))
+    assert payload == {
+        "apply": False,
+        "total": 3,
+        "planned": 2,
+        "deleted": 0,
+        "retained": 1,
+        "pending": 0,
+        "rc": 0,
+    }
+
+
+def test_notify_receives_payload_after_apply(noisy_dir, tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "devin_janitor.cli.vacuum_if_safe", lambda paths: False
+    )
+    out = tmp_path / "notify-out.json"
+    rc = main(_run_args(
+        noisy_dir, tmp_path, "--apply",
+        "--notify-cmd", _notify_cmd(_notify_stub(tmp_path), out),
+    ))
+    assert rc == 0
+    payload = json.loads(out.read_text(encoding="utf-8"))
+    assert payload["apply"] is True
+    assert payload["planned"] == 2
+    assert payload["deleted"] == 2
+    assert payload["retained"] == 1
+    assert payload["rc"] == 0
+
+
+def test_notify_failure_warns_and_keeps_rc(
+    noisy_dir, tmp_path, capsys, monkeypatch
+):
+    """Fail-open: a failing notify command warns on stderr; the deletion
+    still happened and the run's rc is unchanged."""
+    monkeypatch.setattr(
+        "devin_janitor.cli.vacuum_if_safe", lambda paths: False
+    )
+    rc = main(_run_args(
+        noisy_dir, tmp_path, "--apply",
+        "--notify-cmd",
+        f'"{sys.executable}" -c "import sys; sys.exit(7)"',
+    ))
+    assert rc == 0
+    assert "warning: notify command exited 7" in capsys.readouterr().err
+    assert "noise-1" not in _db_ids(noisy_dir.sessions_db)
+    assert not (noisy_dir.acp_messages_dir / "gui-noise.db").exists()
+
+
+def test_notify_missing_command_warns(noisy_dir, tmp_path, capsys):
+    rc = main(_run_args(
+        noisy_dir, tmp_path,
+        "--notify-cmd", "definitely-not-a-janitor-notifier-xyz",
+    ))
+    assert rc == 0
+    assert "warning: notify command exited" in capsys.readouterr().err
+
+
+def test_notify_timeout_warns(noisy_dir, tmp_path, capsys, monkeypatch):
+    monkeypatch.setattr("devin_janitor.notify.NOTIFY_TIMEOUT_S", 0.5)
+    rc = main(_run_args(
+        noisy_dir, tmp_path,
+        "--notify-cmd",
+        f'"{sys.executable}" -c "import time; time.sleep(5)"',
+    ))
+    assert rc == 0
+    assert "timed out" in capsys.readouterr().err
+
+
+def test_notify_env_var_when_flag_absent(noisy_dir, tmp_path, monkeypatch):
+    out = tmp_path / "env-notify.json"
+    monkeypatch.setenv(
+        "JANITOR_NOTIFY_CMD",
+        _notify_cmd(_notify_stub(tmp_path), out),
+    )
+    rc = main(_run_args(noisy_dir, tmp_path))
+    assert rc == 0
+    assert json.loads(out.read_text(encoding="utf-8"))["apply"] is False
+
+
+def test_notify_flag_beats_env(noisy_dir, tmp_path, monkeypatch):
+    env_out = tmp_path / "env.json"
+    flag_out = tmp_path / "flag.json"
+    stub = _notify_stub(tmp_path)
+    monkeypatch.setenv("JANITOR_NOTIFY_CMD", _notify_cmd(stub, env_out))
+    rc = main(_run_args(
+        noisy_dir, tmp_path,
+        "--notify-cmd", _notify_cmd(stub, flag_out),
+    ))
+    assert rc == 0
+    assert flag_out.exists()
+    assert not env_out.exists()
+
+
+def test_notify_empty_flag_disables_env(noisy_dir, tmp_path, monkeypatch):
+    env_out = tmp_path / "env.json"
+    monkeypatch.setenv(
+        "JANITOR_NOTIFY_CMD",
+        _notify_cmd(_notify_stub(tmp_path), env_out),
+    )
+    rc = main(_run_args(noisy_dir, tmp_path, "--notify-cmd", ""))
+    assert rc == 0
+    assert not env_out.exists()
+
+
+def test_no_notify_spawns_nothing(noisy_dir, tmp_path, monkeypatch):
+    """No flag, no env → no subprocess at all (zero behavior change)."""
+    import subprocess
+    from types import SimpleNamespace
+
+    import devin_janitor.notify as notify_mod
+
+    monkeypatch.delenv("JANITOR_NOTIFY_CMD", raising=False)
+
+    def boom(*_a, **_k):
+        raise AssertionError("notify spawned with nothing configured")
+
+    monkeypatch.setattr(
+        notify_mod,
+        "subprocess",
+        SimpleNamespace(run=boom, TimeoutExpired=subprocess.TimeoutExpired),
+    )
+    rc = main(_run_args(noisy_dir, tmp_path))
+    assert rc == 0
+
+
+def test_notify_reports_failure_rc(tmp_path, capsys):
+    """A failed run notifies too — the payload's rc carries the outcome."""
+    out = tmp_path / "notify-out.json"
+    rc = main([
+        "run", "--data-dir", str(tmp_path / "nope"),
+        "--pending-file", str(tmp_path / "p.json"),
+        "--keep-file", str(tmp_path / "k.json"),
+        "--log-file", str(tmp_path / "l.jsonl"),
+        "--notify-cmd", _notify_cmd(_notify_stub(tmp_path), out),
+    ])
+    assert rc == 1
+    assert "no sessions.db" in capsys.readouterr().err
+    payload = json.loads(out.read_text(encoding="utf-8"))
+    assert payload["rc"] == 1
+    assert payload["deleted"] == 0

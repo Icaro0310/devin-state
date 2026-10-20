@@ -65,6 +65,11 @@ package equivalent:
 The legacy script also hardcoded `~/AppData/Roaming/devin` roots; the
 package replaces them with the detection + overrides table above.
 
+One behavior knob (not a path) is also env-configurable:
+`JANITOR_NOTIFY_CMD` supplies `run`'s post-run notification command when
+`--notify-cmd` is absent — flag > env, and an explicit empty flag
+disables it (see *Pipeline (`run`)* step 8).
+
 ## Inventory
 
 `inventory.load_inventory(paths)` merges both stores into `SessionRow`s:
@@ -135,6 +140,23 @@ fail-open**: unavailable/error/timeout/unclear verdict ⇒ keep.
    counts as running — fail-safe)
 7. append one JSON object to `janitor-log.jsonl` (id, origin, tier, reason,
    judge verdict, pending, orphans, vacuumed) and persist the pending queue
+8. `--notify-cmd`/`JANITOR_NOTIFY_CMD` (if set) receives a compact JSON
+   run summary on its stdin — after both the dry-run and `--apply` paths,
+   and after aborts too, so the payload's `rc` carries the outcome:
+
+   ```json
+   {"apply": true, "total": 12, "planned": 3, "deleted": 3,
+    "retained": 9, "pending": 0, "rc": 0}
+   ```
+
+   `planned` is the deletion plan (a dry-run reports it with
+   `apply: false`, `deleted: 0`); `retained` mirrors the plan's keep
+   count; `deleted` counts sessions actually removed. Notification is
+   **fail-open** — an unrunnable command, non-zero exit or the 10s
+   timeout prints a stderr warning and never changes the exit code.
+   Flag beats env; an explicit `--notify-cmd ""` disables it. The janitor
+   ships no notifier — the hook expects a local command (slack/mail
+   wrapper, devin-bridge helper).
 
 ## CLI
 
@@ -144,6 +166,7 @@ devin-janitor scan [--data-dir D] [--sessions-db F] [--acp-dir D]
                    [--grace-hours N] [--json] [-v]
 devin-janitor run  [path flags...] [--config F] [--grace-hours N]
                    [--max-delete N] [--judge SPEC] [--export-cmd CMD]
+                   [--notify-cmd CMD]
                    [--keep-file F] [--pending-file F] [--log-file F]
                    [--tiers 1,2|all] [--include-gui] [--snapshot PATH]
                    [--apply]
@@ -206,6 +229,7 @@ entry on Windows, or an elapsed job record in
 ## Safety invariants
 
 - export precedes deletion; export failure aborts
+- notify follows the run; notify failure only warns — never fails a run
 - judge abstention keeps; there is no fail-closed path
 - locked files are never force-deleted — they queue for retry
 - VACUUM never runs while Devin may have the db open
