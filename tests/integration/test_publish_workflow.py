@@ -75,7 +75,6 @@ import textwrap
 import zipfile
 
 
-
 def _gate_script() -> str:
     """Extract the 'Verify wheel covers declared scripts and extras'
     run-block so the test executes the workflow's own code, not a copy."""
