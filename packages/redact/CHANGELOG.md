@@ -5,26 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.2.2] - 2026-10-11
-
-### Fixed
-
-- `__version__` now matches the published artifact: the 0.2.1 wheel on
-  PyPI self-reports 0.2.0 (built from an unmerged branch before the
-  verify gate existed). This release exists so the index carries a
-  wheel whose metadata and self-report agree.
-
 ## [Unreleased]
 
+## [0.2.3] - 2026-10-20
+
 ### Fixed
 
+- Ship the `devin-redact-mcp` console script in the wheel: the entry
+  point has been declared in `[project.scripts]` since the MCP server
+  landed, but the published 0.2.2 wheel predates it (its
+  `entry_points.txt` ships only `devin-redact`, and the metadata has
+  no `mcp` extra). This release also publishes the `mcp` extra the
+  plugin manifest's `uvx --from 'devin-redact[mcp]'` launch needs.
 - `devin-redact-mcp` exits with a one-line install hint when the `mcp`
   extra is missing instead of dumping a traceback; startup
   `ImportError`s from `.run()` keep their traceback.
-
-
-### Fixed
-
 - `gate --staged` + published pre-commit hook: the hook now runs
   `devin-redact gate --staged`, which scans each path's blob in the git
   index (`:0:<path>`) via the new `devin_redact.staged` /
@@ -54,6 +49,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Docs: export da raiz Zscaler no guia corporate-windows agora pede PEM — "Base-64 encoded X.509" no wizard de export ou `certutil -encode` após `Export-Certificate` (que gera DER) — e distingue `certmgr.msc` (store do usuário) de `certlm.msc` (store da máquina); a receita offline instala `setuptools`+`wheel` antes do `--no-build-isolation`.
 
 - Install section now recommends pypi `uv tool install devin-redact` as the primary route, with `pipx`/source installs documented as alternatives.
+- `llms.txt` no longer states a hard-coded ecosystem size; the registry owns the count.
+- Platform guides and the README install command no longer pin a release; they install the latest published version.
 
 ### Added
 
@@ -121,10 +118,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `gate`/`session-end` exit codes and verdict contracts, `verify-publish`
   over md/json export layouts, path auto-detection. 100 tests green.
 
-### Changed
+## [0.2.2] - 2026-10-11
 
-- `llms.txt` no longer states a hard-coded ecosystem size; the registry owns the count.
-- Platform guides and the README install command no longer pin a release; they install the latest published version.
+### Fixed
+
+- `__version__` now matches the published artifact: the 0.2.1 wheel on
+  PyPI self-reports 0.2.0 (built from an unmerged branch before the
+  verify gate existed). This release exists so the index carries a
+  wheel whose metadata and self-report agree.
 
 ## [0.2.1] - 2026-10-10
 

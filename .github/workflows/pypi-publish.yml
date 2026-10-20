@@ -79,8 +79,9 @@ jobs:
           name: dist
           path: dist/
       # install-scheduler skipped verification, so it builds here.
+      # Checkout is unconditional: the wheel-content check below reads
+      # the package's pyproject.toml regardless of which verify leg ran.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: needs.verify.result == 'skipped'
       - name: Build sdist and wheel
         if: needs.verify.result == 'skipped'
         working-directory: ${{ needs.resolve.outputs.dir }}
@@ -90,6 +91,29 @@ jobs:
           python -m twine check dist/*
           mkdir -p "$GITHUB_WORKSPACE/dist"
           cp dist/* "$GITHUB_WORKSPACE/dist/"
+      # A version-matching wheel can still miss declared entry points or
+      # extras (the -mcp gap this release class fixes). Assert the built
+      # wheel carries every [project.scripts] entry and that every
+      # optional-dependencies group ships as Provides-Extra.
+      - name: Verify wheel covers declared scripts and extras
+        run: |
+          python - <<'PY'
+          import glob, sys, tomllib, zipfile
+          wheels = glob.glob("dist/*.whl")
+          assert len(wheels) == 1, f"expected exactly one wheel in dist/, got {wheels}"
+          meta = tomllib.load(open("${{ needs.resolve.outputs.dir }}/pyproject.toml", "rb"))["project"]
+          with zipfile.ZipFile(wheels[0]) as z:
+              names = z.namelist()
+              ep = z.read(next(n for n in names if n.endswith("entry_points.txt"))).decode()
+              md = z.read(next(n for n in names if n.endswith("METADATA"))).decode()
+          missing_scripts = [s for s in (meta.get("scripts") or {}) if f"{s} =" not in ep]
+          missing_extras = [x for x in (meta.get("optional-dependencies") or {}) if f"Provides-Extra: {x}" not in md]
+          if missing_scripts or missing_extras:
+              print(f"::error::{wheels[0]} missing scripts {missing_scripts} extras {missing_extras}")
+              sys.exit(1)
+          print(f"{wheels[0]}: {len(meta.get('scripts') or {})} scripts, "
+                f"{len(meta.get('optional-dependencies') or {})} extras verified")
+          PY
       # Supply-chain guard: redact 0.2.1 and evals 0.3.x once reached
       # PyPI via dispatch from unmerged branches, leaving the index ahead
       # of main. Refuse to upload when the publish origin is not merged.

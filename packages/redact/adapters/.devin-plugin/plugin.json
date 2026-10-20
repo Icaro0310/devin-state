@@ -1,6 +1,6 @@
 {
   "name": "devin-redact",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Scan files or a sessions.db for secrets and PII before sharing session content. Read-only scan — reports findings, never rewrites the store.",
   "author": { "name": "Icaro0310" },
   "repository": "https://github.com/Icaro0310/devin-state",

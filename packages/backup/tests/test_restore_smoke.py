@@ -200,6 +200,10 @@ def test_smoke_snapshot_expands_home(data_dir, backups_dir, tmp_path,
                                      monkeypatch):
     """'~/backups/x' works in dry-run smoke, like restore/verify."""
     monkeypatch.setenv("HOME", str(tmp_path))
+    # Path.expanduser() ignores HOME on Windows — it resolves through
+    # USERPROFILE (then HOMEDRIVE/HOMEPATH). Stub both so the test
+    # measures the same thing on every runner.
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     home_backups = tmp_path / "backups"
     home_backups.mkdir()
     snap = snapshot.create_snapshot(data_dir, home_backups)
