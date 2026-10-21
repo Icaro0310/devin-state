@@ -481,6 +481,30 @@ def test_malformed_crash_name_in_corpus_fails_loud(tmp_path):
     assert any("malformed" in e["error"] for e in report["errors"])
 
 
+def test_binary_split_secret_rejected(tmp_path):
+    """A credential interrupted by binary bytes must still block
+    promotion — the debinarized projection rejoins the fragments
+    (finding: binary crash bytes hiding credentials)."""
+    split = b"AKIA" + b"\x00\xff\x01" + b"I" * 16 + b"\n" + CRASH_A
+    crashes = _crashes(tmp_path, {"crash-s": split})
+    corpus = _corpus(tmp_path)
+    report = cflite.promote(crashes, corpus)
+    assert report["promoted"] == []
+    assert any("sensitive" in r["reason"] for r in report["rejected"])
+    assert not (corpus / f"crash-{_sha(split)}").exists()
+
+
+def test_crash_entry_directory_fails_loud(tmp_path):
+    """A ``crash-*`` path that is not a regular file is corrupt — the
+    integrity test only counts regular files, so discovery must report
+    it instead of skipping silently."""
+    corpus = _corpus(tmp_path)
+    (corpus / f"crash-{'0' * 64}").mkdir(parents=True)
+    crashes = _crashes(tmp_path, {"c": CRASH_A})
+    report = cflite.promote(crashes, corpus)
+    assert any("not a regular file" in e["error"] for e in report["errors"])
+
+
 def test_oversized_existing_crash_fails_loud_not_indexed(tmp_path):
     """A hash-valid but over-bound corpus file is corrupt — reconcile
     must not record it into the manifest silently."""

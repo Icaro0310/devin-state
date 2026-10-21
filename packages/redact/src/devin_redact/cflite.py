@@ -115,6 +115,13 @@ def _validate(path: Path, max_bytes: int) -> str | None:
 _ENTRY_RE = re.compile(rf"^{ENTRY_PREFIX}[0-9a-f]{{64}}$")
 
 
+def _debinarize(text: str) -> str:
+    """Drop every non-printable char — rejoins ASCII fragments that binary
+    bytes split apart, so a credential interrupted by junk still matches
+    contiguous patterns. Newlines/tabs survive for line-oriented rules."""
+    return "".join(c for c in text if c.isprintable() or c in "\n\r\t")
+
+
 def _corpus_hashes(corpus_dir: Path, errors: list[dict]) -> dict[str, str]:
     """sha256 → filename for every *validated crash entry* on disk.
 
@@ -127,8 +134,6 @@ def _corpus_hashes(corpus_dir: Path, errors: list[dict]) -> dict[str, str]:
     if not corpus_dir.is_dir():
         return hashes
     for p in sorted(corpus_dir.iterdir()):
-        if not p.is_file():
-            continue
         if not _ENTRY_RE.match(p.name):
             # a ``crash-`` name is the corpus contract — anything else
             # starting with the prefix is a malformed entry the
@@ -141,6 +146,14 @@ def _corpus_hashes(corpus_dir: Path, errors: list[dict]) -> dict[str, str]:
                         f"expected {ENTRY_PREFIX}<sha256>",
                     }
                 )
+            continue
+        if not p.is_file():
+            errors.append(
+                {
+                    "file": str(p),
+                    "error": "crash entry is not a regular file",
+                }
+            )
             continue
         # the same bounds as promoted candidates — an oversized or
         # empty entry is corrupt, whatever its name-hash agreement
@@ -288,9 +301,21 @@ def promote(
             continue
         if not allow_sensitive:
             text = data.decode("utf-8", errors="surrogateescape")
-            findings = engine.scan_text(
-                text, file=source, location="cflite-promote"
-            )
+            views = [text]
+            # surrogateescape keeps every byte, so ASCII runs survive —
+            # but a credential *split* by binary bytes stays broken in
+            # that view. The debinarized projection rejoins the
+            # fragments, which is the gap Devin flagged.
+            deb = _debinarize(text)
+            if deb != text:
+                views.append(deb)
+            findings = [
+                f
+                for view in views
+                for f in engine.scan_text(
+                    view, file=source, location="cflite-promote"
+                )
+            ]
             # only real secrets block promotion — emails/home paths are
             # non-secret findings that would force --allow-sensitive on
             # ordinary reproducers
