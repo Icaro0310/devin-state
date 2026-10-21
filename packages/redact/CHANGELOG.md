@@ -16,11 +16,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   value raw and unreported (it can never match separately: the pattern
   is `^`-anchored). Only the tag's own span is now treated as prior
   output: each tag-free fragment of the match is re-scanned with the
-  same pattern. Conservative bounds keep the old whole-match skip where
-  re-scanning could hurt: a `<REDACTED:` prefix with no closing `>`, an
-  env match whose first tag doesn't lead the value (`KEY='abc<tag>def'`,
-  `KEY=["<tag> TAIL=v"]`), and code-shaped RHS suppressed by
-  `_looks_like_code_assignment`.
+  same pattern. Rescan stays safe inside code: `env_assignment`
+  candidates keep the `_looks_like_code_assignment` suppression per
+  fragment and are dropped when an unclosed bracket or dangling quote
+  shows they sit inside a literal/container — so
+  `KEY=["<tag> TAIL=v"]` and `KEY='abc<tag>def'` are left untouched
+  rather than having their delimiters eaten. A `<REDACTED:` prefix with
+  no closing `>` is malformed, not a real tag, and keeps the old
+  whole-match skip.
 
 ### Added
 

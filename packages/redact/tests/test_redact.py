@@ -119,14 +119,28 @@ def test_redact_text_nested_tags_inside_match_tail_redacts():
     assert len(edits) == 1
 
 
-def test_redact_text_mid_value_tag_left_untouched():
-    """A tag embedded mid-value (``KEY=abc<REDACTED:x>``) is foreign,
-    hand-mangled input — not the ``KEY=<REDACTED:…>`` shape this engine
-    emits. Conservative: the whole match stays skipped."""
+def test_redact_text_mid_value_tag_redacts_both_flanks():
+    """A tag embedded mid-value must not shield the raw secrets on
+    either side: both flanking assignments redact and the tag survives
+    byte-identically (Devin Review on #66)."""
     src = "FIRST" + "_KEY=firstval1<REDACTED:mid99> SECOND" + "_KEY=secondval2"
-    new, edits = redact_text(src)
-    assert new == src
-    assert edits == []
+    new, _edits = redact_text(src)
+    assert "<REDACTED:mid99>" in new
+    assert "firstval1" not in new
+    assert "secondval2" not in new
+    assert new.count("<REDACTED:") == 3
+
+
+def test_redact_text_code_value_tail_after_tag_redacts():
+    """A code-shaped head (suppressed by the code guard) must not hide
+    a raw assignment after the tag: the ``frozenset`` call stays, the
+    tail redacts."""
+    src = "FIRST" + "_KEY = frozenset({'x'}) <REDACTED:t0> REAL" + "_TOKEN=tv9x"
+    new, _edits = redact_text(src)
+    assert "frozenset({'x'})" in new
+    assert "<REDACTED:t0>" in new
+    assert "tv9x" not in new
+    assert "REAL_TOKEN=<REDACTED:" in new
 
 
 def test_redact_text_tag_between_assignments_redacts_each_tail():
@@ -187,8 +201,8 @@ def test_redact_text_tag_embedded_in_quoted_value_not_corrupted():
 
 def test_redact_text_code_rhs_after_tag_stays_suppressed():
     """The code-assignment guard applies to fragment tails too: a
-    container RHS after a real leading tag is config, not a secret."""
-    src = "K=<REDACTED:a> SECRET_MAP = frozenset({'x'})\n"
+    container RHS after a tag is config, not a secret."""
+    src = "FIRST" + "_KEY=<REDACTED:a> SECOND" + "_SECRET = frozenset({'x'})\n"
     new, edits = redact_text(src)
     assert new == src
     assert edits == []
