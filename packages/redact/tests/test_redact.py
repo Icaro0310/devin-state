@@ -215,7 +215,10 @@ def test_redact_text_escaped_quote_tag_not_corrupted():
 def test_redact_text_tag_in_comment_not_exposed():
     """A tag inside a trailing ``#`` comment is comment content: the
     fragment is trimmed at ``#`` so the secret before it still redacts
-    while the comment — marker and tag — survives untouched."""
+    while the comment — marker and tag — survives untouched. (The
+    output can't parse as Python — no redacted file can, every
+    ``<REDACTED:…>`` tag is non-Python; what the enclosure check
+    protects is the source's *delimiters*, never eaten.)"""
     src = 'TOKEN_KEY = ("abc") # <REDACTED:x1>\n'
     new, _edits = redact_text(src)
     assert "abc" not in new
