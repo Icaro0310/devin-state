@@ -18,6 +18,8 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
   pull_request_review:
     types: [submitted]
+  pull_request_review_comment:
+    types: [created]
   status: {}
 
 permissions:
@@ -35,4 +37,4 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
-    uses: Icaro0310/devin-powerups/.github/workflows/pr-approve.yml@v1.3
+    uses: Icaro0310/devin-powerups/.github/workflows/pr-approve.yml@v1.5
