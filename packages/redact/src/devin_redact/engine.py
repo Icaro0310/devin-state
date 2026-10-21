@@ -162,32 +162,43 @@ class _ShiftedMatch:
 
 
 def _enclosures_closed(s: str) -> bool:
-    """True when ``s`` leaves no open enclosure: brackets balanced and
-    no dangling quote.
+    """True when ``s`` leaves no open enclosure: brackets balanced, no
+    dangling quote, no comment.
 
-    Used to tell whether a fragment boundary sits *inside* a literal or
-    container — where a redaction replacement could eat the enclosure's
-    delimiters and corrupt valid source. A tiny state machine, not a
-    parser: quotes inside the other quote kind are handled, escapes are
-    not (an over-cautious answer only keeps the old skip, which is safe).
+    Used to tell whether a fragment boundary sits *inside* a literal,
+    container or comment — where a redaction replacement could eat the
+    enclosure's delimiters and corrupt valid source. A tiny state
+    machine, not a parser: quotes inside the other quote kind and
+    backslash escapes are handled; a ``#`` outside quotes makes the rest
+    of the line a comment, so the candidate is dropped (an over-cautious
+    answer only keeps the old skip, which is safe).
     """
     depth = 0
     single = double = False
-    for ch in s:
+    i = 0
+    while i < len(s):
+        ch = s[i]
         if single:
-            if ch == "'":
+            if ch == "\\":
+                i += 1  # escaped char — can't close the quote
+            elif ch == "'":
                 single = False
         elif double:
-            if ch == '"':
+            if ch == "\\":
+                i += 1
+            elif ch == '"':
                 double = False
         elif ch == "'":
             single = True
         elif ch == '"':
             double = True
+        elif ch == "#":
+            return False
         elif ch in "([{":
             depth += 1
         elif ch in ")]}":
             depth -= 1
+        i += 1
     return depth == 0 and not single and not double
 
 

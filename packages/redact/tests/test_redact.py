@@ -199,6 +199,32 @@ def test_redact_text_tag_embedded_in_quoted_value_not_corrupted():
     ast.parse(new)
 
 
+def test_redact_text_escaped_quote_tag_not_corrupted():
+    """A backslash-escaped quote does not close the string: the tag sits
+    inside a still-open literal and the whole match stays skipped
+    (Devin Review round 3 on #66)."""
+    src = 'TOKEN_KEY = "abc\\"<REDACTED:x1>tail"\n'
+    new, edits = redact_text(src)
+    assert new == src
+    assert edits == []
+    import ast
+
+    ast.parse(new)
+
+
+def test_redact_text_tag_in_comment_not_exposed():
+    """A tag inside a trailing ``#`` comment is comment content: eating
+    the ``#`` would expose it as live code, so the match stays
+    skipped."""
+    src = 'TOKEN_KEY = ("abc") # <REDACTED:x1>\n'
+    new, edits = redact_text(src)
+    assert new == src
+    assert edits == []
+    import ast
+
+    ast.parse(new)
+
+
 def test_redact_text_code_rhs_after_tag_stays_suppressed():
     """The code-assignment guard applies to fragment tails too: a
     container RHS after a tag is config, not a secret."""
