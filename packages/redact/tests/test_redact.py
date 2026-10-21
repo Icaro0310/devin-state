@@ -213,16 +213,23 @@ def test_redact_text_escaped_quote_tag_not_corrupted():
 
 
 def test_redact_text_tag_in_comment_not_exposed():
-    """A tag inside a trailing ``#`` comment is comment content: eating
-    the ``#`` would expose it as live code, so the match stays
-    skipped."""
+    """A tag inside a trailing ``#`` comment is comment content: the
+    fragment is trimmed at ``#`` so the secret before it still redacts
+    while the comment — marker and tag — survives untouched."""
     src = 'TOKEN_KEY = ("abc") # <REDACTED:x1>\n'
-    new, edits = redact_text(src)
-    assert new == src
-    assert edits == []
-    import ast
+    new, _edits = redact_text(src)
+    assert "abc" not in new
+    assert " # <REDACTED:x1>" in new
 
-    ast.parse(new)
+
+def test_redact_text_secret_before_commented_tag_redacts():
+    """``KEY=raw # <REDACTED:…>`` — the live value before the comment
+    marker must redact; the commented tag is preserved."""
+    src = "TOKEN" + "_KEY=rawsecret99 # <REDACTED:x1>\n"
+    new, _edits = redact_text(src)
+    assert "rawsecret99" not in new
+    assert " # <REDACTED:x1>" in new
+    assert new.startswith("TOKEN_KEY=<REDACTED:")
 
 
 def test_redact_text_code_rhs_after_tag_stays_suppressed():

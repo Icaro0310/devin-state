@@ -161,6 +161,33 @@ class _ShiftedMatch:
         return start + self._delta, end + self._delta
 
 
+def _comment_start(s: str) -> int:
+    """Index of the first ``#`` outside quotes — where comment text
+    begins — or ``len(s)`` when the line has no comment."""
+    single = double = False
+    i = 0
+    while i < len(s):
+        ch = s[i]
+        if single:
+            if ch == "\\":
+                i += 1
+            elif ch == "'":
+                single = False
+        elif double:
+            if ch == "\\":
+                i += 1
+            elif ch == '"':
+                double = False
+        elif ch == "'":
+            single = True
+        elif ch == '"':
+            double = True
+        elif ch == "#":
+            return i
+        i += 1
+    return len(s)
+
+
 def _enclosures_closed(s: str) -> bool:
     """True when ``s`` leaves no open enclosure: brackets balanced, no
     dangling quote, no comment.
@@ -218,6 +245,14 @@ def _iter_fragment_matches(
     candidate inside ``'…'``, ``"…"`` or ``[…``/``(…``/``{…`` is dropped
     rather than let its replacement eat delimiters.
     """
+    if env:
+        # An unquoted ``#`` starts a comment: the tail is comment text,
+        # not rescan candidates — but the secret *before* it must still
+        # redact, so the fragment is trimmed there (plus the whitespace
+        # between value and marker, which belongs to the comment).
+        hi = lo + _comment_start(text[lo:hi])
+        while hi > lo and text[hi - 1] in " \t":
+            hi -= 1
     if lo >= hi:
         return
     for m in rx.finditer(text[lo:hi]):
