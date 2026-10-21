@@ -14,6 +14,7 @@ import stat
 from pathlib import Path
 
 import pytest
+
 from devin_redact import cflite, cli
 
 # Arbitrary binary-safe bytes — what a libFuzzer-class testcase looks like.
@@ -335,3 +336,99 @@ def test_corpus_env_override(tmp_path, monkeypatch):
     report = cflite.promote(crashes)
     assert report["corpus_dir"] == str(corpus)
     assert (corpus / f"crash-{_sha(CRASH_A)}").is_file()
+
+
+def test_unindexed_crash_reconciled_into_manifest(tmp_path):
+    """A crash-<sha> file on disk without a manifest entry must not dedup
+    silently — promote reconciles it into the manifest so corpus
+    integrity holds (finding: unindexed existing crashes)."""
+    corpus = _corpus(tmp_path)
+    corpus.mkdir(parents=True)
+    stray = corpus / f"crash-{_sha(CRASH_A)}"
+    stray.write_bytes(CRASH_A)  # on disk, never indexed
+    crashes = _crashes(tmp_path, {"crash-b": CRASH_B})
+    report = cflite.promote(crashes, corpus)
+    manifest = json.loads((corpus / "manifest.json").read_text())
+    assert set(manifest["entries"]) == {stray.name, f"crash-{_sha(CRASH_B)}"}
+    assert manifest["entries"][stray.name]["source"].startswith("pre-existing")
+    assert report["duplicates"] == []  # crash-A was never a candidate here
+
+    # Re-promoting the same bytes now reports a real duplicate.
+    (tmp_path / "second").mkdir()
+    crashes_a = _crashes(tmp_path / "second", {"sub/crash-a": CRASH_A})
+    report3 = cflite.promote(crashes_a, corpus)
+    assert report3["promoted"] == []
+    assert any(d["file"] == stray.name for d in report3["duplicates"])
+
+
+def test_seed_file_does_not_swallow_crash(tmp_path):
+    """A non-crash file in the corpus sharing a crash's bytes must not
+    satisfy dedup — only crash-<sha256> entries count (finding: seed
+    files silently swallow crashes)."""
+    corpus = _corpus(tmp_path)
+    corpus.mkdir(parents=True)
+    (corpus / "seed.txt").write_bytes(CRASH_A)  # same bytes, not an entry
+    crashes = _crashes(tmp_path, {"crash-1": CRASH_A})
+    report = cflite.promote(crashes, corpus)
+    assert report["duplicates"] == []
+    assert (corpus / f"crash-{_sha(CRASH_A)}").is_file()
+
+
+def test_misnamed_crash_file_fails_loud(tmp_path):
+    """A crash-* file whose name doesn't match its contents is corrupt —
+    error, not a dedup hit."""
+    corpus = _corpus(tmp_path)
+    corpus.mkdir(parents=True)
+    (corpus / f"crash-{'0' * 64}").write_bytes(CRASH_A)  # wrong name
+    crashes = _crashes(tmp_path, {"c": CRASH_B})
+    report = cflite.promote(crashes, corpus)
+    assert any("corrupt" in e["error"] for e in report["errors"])
+
+
+def test_source_records_artifact_relative_path(tmp_path):
+    """For `gh run download` layouts the manifest's source carries the
+    artifact dir name, not a dead temp path (finding: provenance)."""
+    crashes = _crashes(
+        tmp_path, {"fuzz-crashes-linux/crash-123": CRASH_A}
+    )
+    corpus = _corpus(tmp_path)
+    cflite.promote(crashes, corpus)
+    manifest = json.loads((corpus / "manifest.json").read_text())
+    meta = manifest["entries"][f"crash-{_sha(CRASH_A)}"]
+    assert meta["source"] == "fuzz-crashes-linux/crash-123"
+    assert "source_path" not in meta
+
+
+def test_sensitive_crash_rejected_by_default(tmp_path):
+    """A crash carrying credential-shaped content is rejected unless the
+    operator passes --allow-sensitive (finding: secrets into corpus)."""
+    secret_crash = b'aws_key = "AKIA' + b'I' * 16 + b'"\n' + CRASH_A
+    crashes = _crashes(tmp_path, {"crash-s": secret_crash})
+    corpus = _corpus(tmp_path)
+    report = cflite.promote(crashes, corpus)
+    assert report["promoted"] == []
+    assert any("sensitive" in r["reason"] for r in report["rejected"])
+    assert not (corpus / f"crash-{_sha(secret_crash)}").exists()
+
+    report2 = cflite.promote(crashes, corpus, allow_sensitive=True)
+    assert len(report2["promoted"]) == 1
+
+
+def test_cli_rejects_max_bytes_above_corpus_bound(tmp_path, capsys):
+    """--max-bytes above MAX_CRASH_BYTES would create a corpus the
+    regression test rejects — the CLI refuses (finding: override)."""
+    crashes = _crashes(tmp_path, {"c": CRASH_A})
+    corpus = _corpus(tmp_path)
+    rc = cli.main(
+        [
+            "cflite-promote",
+            "--crashes-dir",
+            str(crashes),
+            "--corpus-dir",
+            str(corpus),
+            "--max-bytes",
+            str(cflite.MAX_CRASH_BYTES + 1),
+        ]
+    )
+    assert rc == 2
+    assert "corpus bound" in capsys.readouterr().err

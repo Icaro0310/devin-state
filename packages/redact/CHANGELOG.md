@@ -23,6 +23,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--dry-run` reports without writing. `tests/test_fuzz_corpus.py`
   replays every corpus entry through the atheris consumption the fuzz
   target uses and enforces manifest/disk integrity.
+- `cflite-promote` review hardening (devin-state#78): the corpus
+  manifest records the artifact-relative `source` (e.g.
+  `fuzz-crashes-linux/crash-123`) instead of a dead temp path;
+  dedup counts only validated `crash-<sha256>` entries so seed/notes
+  files can't swallow a crash; on-disk crash entries missing from the
+  manifest are reconciled into it; candidates are scanned with
+  `engine.scan_text` and credential-shaped crashes are rejected unless
+  `--allow-sensitive`; `--max-bytes` above the corpus bound exits 2
+  instead of creating a corpus its own integrity check rejects. The
+  `atheris` dev extra (linux marker) lets standard CI replay the
+  corpus instead of import-skipping it.
 
 ## [0.2.3] - 2026-10-20
 

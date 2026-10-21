@@ -17,8 +17,13 @@ Corpus contract:
   a real reproducer is a regular file, non-empty, and within
   ``MAX_CRASH_BYTES`` — anything failing the bounds is *rejected* and
   reported in the ``rejected`` list, never silently skipped;
+- before promotion, every candidate is scanned with the package's own
+  ``engine.scan_text``: a crash carrying credential-shaped content is
+  *rejected* by default (the corpus is committed to the repo) unless
+  ``allow_sensitive=True`` makes the risk explicit;
 - other files already in the corpus dir (notes, a future seed corpus)
-  are left untouched but are never treated as crash entries.
+  are left untouched and never treated as crash entries — only files
+  named ``crash-<sha256>`` whose contents verify count for dedup.
 
 Artifact acquisition is deliberately two-path: ``--crashes-dir`` reads an
 already-unpacked dir (the offline/testable path), while ``--run-id``
@@ -31,11 +36,12 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import __version__
+from . import __version__, engine
 
 #: Environment override for the corpus location; ``--corpus-dir`` wins.
 CORPUS_ENV = "DEVIN_REDACT_CFLITE_CORPUS"
@@ -106,22 +112,37 @@ def _validate(path: Path, max_bytes: int) -> str | None:
     return None
 
 
-def _corpus_hashes(corpus_dir: Path, errors: list[dict]) -> dict[str, str]:
-    """sha256 → filename for every entry already on disk.
+_ENTRY_RE = re.compile(rf"^{ENTRY_PREFIX}[0-9a-f]{{64}}$")
 
-    Content-level dedup works even when ``manifest.json`` is absent or
-    incomplete (entries promoted by an older version, or the manifest
-    lost in a merge).
+
+def _corpus_hashes(corpus_dir: Path, errors: list[dict]) -> dict[str, str]:
+    """sha256 → filename for every *validated crash entry* on disk.
+
+    Only ``crash-<sha256>`` files whose name matches their contents
+    count — a stray seed/note file with identical bytes must not
+    satisfy dedup, or the crash never lands as a replayable entry.
+    A misnamed ``crash-*`` file is corrupt and fails loud.
     """
     hashes: dict[str, str] = {}
     if not corpus_dir.is_dir():
         return hashes
     for p in sorted(corpus_dir.iterdir()):
-        if p.is_file() and p.name != MANIFEST_NAME:
-            try:
-                hashes.setdefault(_sha256(p.read_bytes()), p.name)
-            except OSError as exc:
-                errors.append({"file": str(p), "error": f"unreadable: {exc}"})
+        if not p.is_file() or not _ENTRY_RE.match(p.name):
+            continue
+        try:
+            sha = _sha256(p.read_bytes())
+        except OSError as exc:
+            errors.append({"file": str(p), "error": f"unreadable: {exc}"})
+            continue
+        if p.name != _entry_name(sha):
+            errors.append(
+                {
+                    "file": str(p),
+                    "error": "name does not match contents — corrupt entry",
+                }
+            )
+            continue
+        hashes.setdefault(sha, p.name)
     return hashes
 
 
@@ -181,6 +202,7 @@ def promote(
     run_id: str | int | None = None,
     max_bytes: int = MAX_CRASH_BYTES,
     dry_run: bool = False,
+    allow_sensitive: bool = False,
 ) -> dict:
     """Copy validated crash inputs into the corpus, deduped by sha256.
 
@@ -203,16 +225,37 @@ def promote(
         )
 
     known = _corpus_hashes(corpus_dir, errors)
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+    # Reconcile on-disk entries missing from the manifest — otherwise a
+    # manifestless crash dedups silently and later manifests index only
+    # newer entries, breaking corpus integrity checks.
+    manifest_dirty = False
+    if not manifest_error:
+        for sha, fname in sorted(known.items()):
+            if fname not in manifest["entries"]:
+                size = (corpus_dir / fname).stat().st_size
+                manifest["entries"][fname] = {
+                    "sha256": sha,
+                    "size": size,
+                    "source": "pre-existing (unindexed)",
+                    "run_id": None,
+                    "promoted_at": now,
+                }
+                manifest_dirty = True
+
     batch: set[str] = set()
     manifest_path = (corpus_dir / MANIFEST_NAME).resolve()
     candidates = _iter_candidates(crashes_dir)
-    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
     writes: list[tuple[Path, bytes]] = []
     for path in candidates:
-        source = str(path)
         if path.resolve() == manifest_path:
             continue  # never ingest our own manifest
+        try:
+            source = path.relative_to(crashes_dir).as_posix()
+        except ValueError:
+            source = str(path)
         reason = _validate(path, max_bytes)
         if reason:
             rejected.append({"source": source, "reason": reason})
@@ -222,6 +265,23 @@ def promote(
         except OSError as exc:
             errors.append({"file": source, "error": f"unreadable: {exc}"})
             continue
+        if not allow_sensitive:
+            text = data.decode("utf-8", errors="surrogateescape")
+            findings = engine.scan_text(
+                text, file=source, location="cflite-promote"
+            )
+            if findings:
+                cats = sorted({str(f["category"]) for f in findings})
+                rejected.append(
+                    {
+                        "source": source,
+                        "reason": (
+                            f"sensitive content ({', '.join(cats)}) — "
+                            "re-run with --allow-sensitive to commit anyway"
+                        ),
+                    }
+                )
+                continue
         sha = _sha256(data)
         name = _entry_name(sha)
         if sha in known:
@@ -258,15 +318,14 @@ def promote(
             manifest["entries"][name] = {
                 "sha256": sha,
                 "size": len(data),
-                "source": path.name,
-                "source_path": source,
+                "source": source,
                 "run_id": str(run_id) if run_id is not None else None,
                 "promoted_at": now,
             }
         writes.append((corpus_dir / name, data))
 
     manifest_written: str | None = None
-    if not dry_run and promoted:
+    if not dry_run and (promoted or manifest_dirty):
         corpus_dir.mkdir(parents=True, exist_ok=True)
         for dest, data in writes:
             dest.write_bytes(data)

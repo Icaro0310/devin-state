@@ -13,6 +13,7 @@ import json
 from pathlib import Path
 
 import pytest
+
 from devin_redact import cflite
 
 CORPUS_DIR = Path(__file__).resolve().parents[1] / "fuzz" / "corpus"

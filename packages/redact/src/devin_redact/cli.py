@@ -175,6 +175,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="size cap for a minimized reproducer (default: %(default)s)",
     )
     cf_p.add_argument(
+        "--allow-sensitive",
+        action="store_true",
+        help="promote crashes even when scan_text finds credential-shaped "
+        "content (default: reject — the corpus is committed to the repo)",
+    )
+    cf_p.add_argument(
         "--dry-run",
         action="store_true",
         help="report what would be promoted; write nothing",
@@ -366,6 +372,14 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
             return 2
+        if args.max_bytes > cflite.MAX_CRASH_BYTES:
+            print(
+                f"devin-redact: --max-bytes above the corpus bound "
+                f"({cflite.MAX_CRASH_BYTES}) would promote entries the "
+                "regression test rejects",
+                file=sys.stderr,
+            )
+            return 2
         corpus_dir = (
             args.corpus_dir
             if args.corpus_dir is not None
@@ -397,6 +411,7 @@ def main(argv: list[str] | None = None) -> int:
                 run_id=args.run_id,
                 max_bytes=args.max_bytes,
                 dry_run=args.dry_run,
+                allow_sensitive=args.allow_sensitive,
             )
         except OSError as exc:
             print(f"devin-redact: {exc}", file=sys.stderr)
