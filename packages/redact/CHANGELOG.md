@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `devin-redact cflite-promote`: promotes ClusterFuzzLite minimized crash
+  artifacts into the checked-in regression corpus at `fuzz/corpus/`
+  (`new devin_redact.cflite` module). Sources: `--crashes-dir` for an
+  already-unpacked artifact dir (recursive discovery), or `--run-id` to
+  fetch a workflow run's artifacts via `gh run download` (`--artifact`
+  narrows to named artifacts). Each crash is stored as
+  `crash-<sha256>` — the name is the dedup key — and provenance (source
+  artifact, run id, size, timestamp) is recorded in `manifest.json`.
+  Validation is bounds-only but fail-loud: non-regular, empty or
+  oversized (>1 MiB, `--max-bytes`) artifacts land in `rejected` and
+  exit 1 rather than being silently skipped; usage/hard errors exit 2.
+  `--dry-run` reports without writing. `tests/test_fuzz_corpus.py`
+  replays every corpus entry through the atheris consumption the fuzz
+  target uses and enforces manifest/disk integrity.
+
 ## [0.2.3] - 2026-10-20
 
 ### Fixed

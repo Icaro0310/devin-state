@@ -146,6 +146,14 @@ devin-redact session-end --session-id abc --out verdict.json
 # cross-referenced with session-end side files; exit 0 only when CLEAN
 devin-redact verify-publish exports/
 devin-redact verify-publish exports/ --json
+
+# Promote ClusterFuzzLite minimized crashes into the checked-in fuzz
+# regression corpus (fuzz/corpus/, replayed by tests/test_fuzz_corpus.py).
+# Dedups by sha256; rejects non-reproducers loudly (exit 1); --dry-run
+# writes nothing.
+devin-redact cflite-promote --crashes-dir ./cflite-artifacts
+devin-redact cflite-promote --run-id 1234567890        # via `gh run download`
+devin-redact cflite-promote --crashes-dir ./cflite-artifacts --dry-run --json
 ```
 
 No Devin installed? Try it on a synthetic fixture:

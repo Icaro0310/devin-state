@@ -5,9 +5,10 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import tempfile
 from pathlib import Path
 
-from . import __version__, engine, paths, publish, session_end, staged
+from . import __version__, cflite, engine, paths, publish, session_end, staged
 from .sarif import report_to_sarif
 
 
@@ -131,6 +132,54 @@ def _build_parser() -> argparse.ArgumentParser:
         "(default: <data-dir>/redact)",
     )
     vp_p.add_argument("--json", action="store_true", help="print the full JSON report")
+
+    cf_p = sub.add_parser(
+        "cflite-promote",
+        help="promote ClusterFuzzLite minimized crashes into the fuzz "
+        "regression corpus — dedups by sha256 and records provenance "
+        "in the corpus manifest",
+    )
+    cf_src = cf_p.add_mutually_exclusive_group(required=True)
+    cf_src.add_argument(
+        "--crashes-dir",
+        type=Path,
+        default=None,
+        help="directory of (already unpacked) crash artifacts — the "
+        "offline path; files are discovered recursively",
+    )
+    cf_src.add_argument(
+        "--run-id",
+        default=None,
+        help="GitHub Actions run id — crash artifacts are fetched with "
+        "`gh run download` first",
+    )
+    cf_p.add_argument(
+        "--artifact",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="restrict a --run-id download to this artifact name; "
+        "repeatable (requires --run-id)",
+    )
+    cf_p.add_argument(
+        "--corpus-dir",
+        type=Path,
+        default=None,
+        help="regression corpus dir (default: <package>/fuzz/corpus, or "
+        "DEVIN_REDACT_CFLITE_CORPUS)",
+    )
+    cf_p.add_argument(
+        "--max-bytes",
+        type=int,
+        default=cflite.MAX_CRASH_BYTES,
+        help="size cap for a minimized reproducer (default: %(default)s)",
+    )
+    cf_p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="report what would be promoted; write nothing",
+    )
+    cf_p.add_argument("--json", action="store_true", help="print the full JSON report")
     return parser
 
 
@@ -303,6 +352,80 @@ def main(argv: list[str] | None = None) -> int:
             for w in report["warnings"]:
                 print(f"  warning: {w}")
         return 0 if report["publication_status"] == "CLEAN" else 1
+
+    if args.command == "cflite-promote":
+        if args.artifact and args.run_id is None:
+            print(
+                "devin-redact: --artifact requires --run-id",
+                file=sys.stderr,
+            )
+            return 2
+        if args.max_bytes < 1:
+            print(
+                "devin-redact: --max-bytes must be a positive integer",
+                file=sys.stderr,
+            )
+            return 2
+        corpus_dir = (
+            args.corpus_dir
+            if args.corpus_dir is not None
+            else cflite.default_corpus_dir()
+        )
+        tmp = None
+        crashes_dir = args.crashes_dir
+        if args.run_id is not None:
+            tmp = tempfile.TemporaryDirectory(prefix="devin-redact-cflite-")
+            crashes_dir = Path(tmp.name)
+            try:
+                cflite.download_run_artifacts(
+                    args.run_id, crashes_dir, names=args.artifact
+                )
+            except cflite.CfliteError as exc:
+                print(f"devin-redact: {exc}", file=sys.stderr)
+                tmp.cleanup()
+                return 2
+        try:
+            if not crashes_dir.is_dir():
+                print(
+                    f"devin-redact: not a directory: {crashes_dir}",
+                    file=sys.stderr,
+                )
+                return 2
+            report = cflite.promote(
+                crashes_dir,
+                corpus_dir,
+                run_id=args.run_id,
+                max_bytes=args.max_bytes,
+                dry_run=args.dry_run,
+            )
+        except OSError as exc:
+            print(f"devin-redact: {exc}", file=sys.stderr)
+            return 2
+        finally:
+            if tmp is not None:
+                tmp.cleanup()
+        if args.json:
+            _emit(report, None)
+        else:
+            print(
+                f"devin-redact: candidates={report['candidates']} "
+                f"promoted={len(report['promoted'])} "
+                f"duplicates={len(report['duplicates'])} "
+                f"rejected={len(report['rejected'])} "
+                f"corpus={report['corpus_dir']}"
+                + (" (dry-run)" if report["dry_run"] else "")
+            )
+            for p in report["promoted"]:
+                print(f"  promoted: {p['file']} <- {p['source']} ({p['size']} bytes)")
+            for d in report["duplicates"]:
+                print(f"  duplicate: {d['source']} ({d['detail']})")
+            for r in report["rejected"]:
+                print(f"  rejected: {r['source']} ({r['reason']})")
+            for w in report["warnings"]:
+                print(f"devin-redact: warning: {w}", file=sys.stderr)
+        for e in report["errors"]:
+            print(f"devin-redact: {e['file']}: {e['error']}", file=sys.stderr)
+        return 1 if (report["rejected"] or report["errors"]) else 0
 
     return 2
 
