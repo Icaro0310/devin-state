@@ -105,17 +105,28 @@ def test_redact_text_tag_tail_assignment_redacts():
     assert any(e["category"] == "env_assignment" for e in edits)
 
 
-def test_redact_text_tag_nested_inside_match_redacts_both_sides():
-    """A tag nested *inside* one env_assignment match must not shield
-    the secrets on either side of it — both flanking values redact and
-    the tag survives byte-identically."""
-    new, _ = redact_text(
-        "FIRST" + "_KEY=firstval1<REDACTED:mid99> SECOND" + "_KEY=secondval2"
+def test_redact_text_nested_tags_inside_match_tail_redacts():
+    """Nested already-redacted assignments inside one greedy match:
+    every nested tag survives byte-identically while the still-raw
+    tail assignment redacts."""
+    src = (
+        "OUTER" + "_KEY=<REDACTED:x1> INNER" + "_KEY=<REDACTED:y2> DEEP" + "_SECRET=z9"
     )
-    assert "<REDACTED:mid99>" in new
-    assert "firstval1" not in new
-    assert "secondval2" not in new
+    new, edits = redact_text(src)
+    assert "<REDACTED:x1>" in new and "<REDACTED:y2>" in new
+    assert "z9" not in new
     assert new.count("<REDACTED:") == 3
+    assert len(edits) == 1
+
+
+def test_redact_text_mid_value_tag_left_untouched():
+    """A tag embedded mid-value (``KEY=abc<REDACTED:x>``) is foreign,
+    hand-mangled input — not the ``KEY=<REDACTED:…>`` shape this engine
+    emits. Conservative: the whole match stays skipped."""
+    src = "FIRST" + "_KEY=firstval1<REDACTED:mid99> SECOND" + "_KEY=secondval2"
+    new, edits = redact_text(src)
+    assert new == src
+    assert edits == []
 
 
 def test_redact_text_tag_between_assignments_redacts_each_tail():
@@ -142,6 +153,42 @@ def test_redact_text_standalone_tag_not_reprocessed():
     """A lone ``<REDACTED:…>`` tag is prior output: no re-redact, no
     corruption, no edits."""
     src = "already done: <REDACTED:0123456789abcdef> ok"
+    new, edits = redact_text(src)
+    assert new == src
+    assert edits == []
+
+
+def test_redact_text_tag_inside_container_literal_not_corrupted():
+    """A tag sitting inside a container/call literal is *inside* code —
+    re-matching its tail as a fresh assignment would eat the closing
+    delimiters and corrupt valid source. The whole match stays skipped
+    (Devin Review on #66)."""
+    src = 'TOKEN_KEY = ["<REDACTED:abc> API_KEY=innocent"]\n'
+    new, edits = redact_text(src)
+    assert new == src
+    assert edits == []
+    import ast
+
+    ast.parse(new)  # still valid Python
+
+
+def test_redact_text_tag_embedded_in_quoted_value_not_corrupted():
+    """A tag mid-value inside a quoted string is likewise enclosure
+    context — the fragment rescan only runs when the first tag leads
+    the value."""
+    src = "MY_API_KEY = 'abc<REDACTED:x9>def'\n"
+    new, edits = redact_text(src)
+    assert new == src
+    assert edits == []
+    import ast
+
+    ast.parse(new)
+
+
+def test_redact_text_code_rhs_after_tag_stays_suppressed():
+    """The code-assignment guard applies to fragment tails too: a
+    container RHS after a real leading tag is config, not a secret."""
+    src = "K=<REDACTED:a> SECRET_MAP = frozenset({'x'})\n"
     new, edits = redact_text(src)
     assert new == src
     assert edits == []

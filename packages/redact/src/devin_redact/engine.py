@@ -161,54 +161,80 @@ class _ShiftedMatch:
         return start + self._delta, end + self._delta
 
 
-def _iter_fragment_matches(rx: re.Pattern[str], text: str, lo: int, hi: int):
+def _iter_fragment_matches(
+    rx: re.Pattern[str], text: str, lo: int, hi: int, env: bool
+):
     """Yield ``rx`` matches inside ``text[lo:hi]`` shifted by ``lo``."""
     if lo >= hi:
         return
     for m in rx.finditer(text[lo:hi]):
-        if _REDACTED_TAG in m.group(0):
+        whole = m.group(0)
+        if _REDACTED_TAG in whole:
             # A malformed (unclosed) tag inside the fragment — still
             # never re-processed, same as the whole-match rule.
+            continue
+        if env and _looks_like_code_assignment(whole):
             continue
         yield _ShiftedMatch(m, lo)
 
 
-def _iter_rx(rx: re.Pattern[str], text: str):
-    """Yield ``rx`` matches in ``text``, skipping only tag *spans*.
+def _iter_tag_gap(rx: re.Pattern[str], text: str, m: re.Match[str], env: bool):
+    """Yield ``rx`` matches inside the tag-free fragments of ``m``.
 
     A match containing ``<REDACTED:…>`` is prior redaction output — but
-    greedy patterns reach past the tag: ``env_assignment`` swallows the
-    rest of the line, so ``KEY=<REDACTED:x> OTHER=raw`` would hide
-    ``OTHER``'s value if the whole match were dropped, and a mid-line
-    ``OTHER=`` can never match separately (the pattern is ``^``-
-    anchored). Instead of dropping the match, each tag-free fragment of
-    it is re-scanned with the same pattern (issue #66). A ``<REDACTED:``
-    prefix with no closing ``>`` is malformed, not a real tag — the old
-    whole-match skip still applies there.
+    only the tag's own span is off-limits. Greedy patterns reach past
+    the tag: ``env_assignment`` swallows the rest of the line, so a
+    second secret inside the same match — the ``OTHER=`` in
+    ``KEY=<REDACTED:x> OTHER=raw`` — would stay raw if the whole match
+    were dropped, and it can never match separately (the pattern is
+    ``^``-anchored). Each tag-free fragment is therefore re-scanned with
+    the same pattern (issue #66).
+
+    Two conservative bounds keep prior behavior where re-scanning could
+    hurt instead of help:
+
+    * A ``<REDACTED:`` prefix with no closing ``>`` is malformed, not a
+      real tag — the old whole-match skip still applies.
+    * For ``env_assignment``, the first tag must lead the value —
+      everything between ``=`` and it must be whitespace — i.e. the line
+      has the ``KEY=<REDACTED:x> …`` shape this engine emits. A tag
+      embedded inside a quoted or container literal
+      (``KEY='abc<REDACTED:x>def'``, ``KEY=["<REDACTED:x> TAIL=v"]``)
+      means the fragment is *inside* a larger expression: re-matching
+      there would lose the enclosing context and its replacement could
+      eat the closing delimiters, corrupting valid source. Such matches
+      keep the old whole-match skip.
     """
-    for m in rx.finditer(text):
-        if _REDACTED_TAG not in m.group(0):
-            yield m
-            continue
-        tags = list(_TAG_RUN.finditer(text, m.start(), m.end()))
-        if not tags:
-            continue
-        pos = m.start()
-        for tag in tags:
-            yield from _iter_fragment_matches(rx, text, pos, tag.start())
-            pos = tag.end()
-        yield from _iter_fragment_matches(rx, text, pos, m.end())
+    tags = list(_TAG_RUN.finditer(text, m.start(), m.end()))
+    if not tags:
+        return
+    if env:
+        whole = m.group(0)
+        between = text[m.start() + whole.index("=") + 1 : tags[0].start()]
+        if between.strip():
+            return
+    pos = m.start()
+    for tag in tags:
+        yield from _iter_fragment_matches(rx, text, pos, tag.start(), env)
+        pos = tag.end()
+    yield from _iter_fragment_matches(rx, text, pos, m.end(), env)
 
 
 def _iter_matches(text: str):
     """Yield ``(category, pattern_name, match)`` for every pattern hit."""
     for category, regexes in PATTERNS.items():
+        env = category == "env_assignment"
         for index, rx in enumerate(regexes):
-            for m in _iter_rx(rx, text):
-                if (
-                    category == "env_assignment"
-                    and _looks_like_code_assignment(m.group(0))
-                ):
+            for m in rx.finditer(text):
+                if env and _looks_like_code_assignment(m.group(0)):
+                    # Code-shaped — the guard sees the whole match, tags
+                    # included, so a tag sitting inside a container or
+                    # call literal can't smuggle its tail past the
+                    # suppression.
+                    continue
+                if _REDACTED_TAG in m.group(0):
+                    for fm in _iter_tag_gap(rx, text, m, env):
+                        yield category, pattern_name(category, index), fm
                     continue
                 yield category, pattern_name(category, index), m
 

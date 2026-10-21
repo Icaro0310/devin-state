@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `redact_text`/`scan_text` no longer drop a whole match when it
+  contains a `<REDACTED:…>` tag (devin-state#66). Greedy patterns reach
+  past the tag — `env_assignment` swallows the rest of the line — so
+  `API_KEY=<REDACTED:x> OTHER_TOKEN=raw` previously left `OTHER_TOKEN`'s
+  value raw and unreported (it can never match separately: the pattern
+  is `^`-anchored). Only the tag's own span is now treated as prior
+  output: each tag-free fragment of the match is re-scanned with the
+  same pattern. Conservative bounds keep the old whole-match skip where
+  re-scanning could hurt: a `<REDACTED:` prefix with no closing `>`, an
+  env match whose first tag doesn't lead the value (`KEY='abc<tag>def'`,
+  `KEY=["<tag> TAIL=v"]`), and code-shaped RHS suppressed by
+  `_looks_like_code_assignment`.
+
 ### Added
 
 - `devin-redact cflite-promote`: promotes ClusterFuzzLite minimized crash
