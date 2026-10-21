@@ -14,7 +14,6 @@ import stat
 from pathlib import Path
 
 import pytest
-
 from devin_redact import cflite, cli
 
 # Arbitrary binary-safe bytes — what a libFuzzer-class testcase looks like.
