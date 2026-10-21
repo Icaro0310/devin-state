@@ -460,13 +460,22 @@ def test_cli_rejects_max_bytes_above_corpus_bound(tmp_path, capsys):
 
 def test_email_in_crash_does_not_block_promotion(tmp_path):
     """Non-secret findings (emails, home paths) are reported by
-    scan_text but must not gate promotion — only real secrets do."""
+    scan_text but must not gate promotion — only real secrets do. The
+    corpus is committed, so the PII spans are redacted before write
+    (finding: personal data published in the corpus)."""
     crash = b"report: bob@example.com hit the edge\n" + CRASH_A
     crashes = _crashes(tmp_path, {"crash-e": crash})
     corpus = _corpus(tmp_path)
     report = cflite.promote(crashes, corpus)
     assert len(report["promoted"]) == 1
-    assert (corpus / f"crash-{_sha(crash)}").exists()
+    entry = report["promoted"][0]
+    assert entry["pii_redacted"] >= 1
+    stored = (corpus / entry["file"]).read_bytes()
+    assert b"bob@example.com" not in stored
+    assert b"<REDACTED:" in stored
+    # the stored sha covers the *redacted* bytes — dedup and the name
+    # contract stay consistent with what was committed
+    assert entry["file"] == f"crash-{_sha(stored)}"
 
 
 def test_malformed_crash_name_in_corpus_fails_loud(tmp_path):
