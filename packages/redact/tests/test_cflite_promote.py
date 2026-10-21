@@ -361,6 +361,31 @@ def test_unindexed_crash_reconciled_into_manifest(tmp_path):
     assert any(d["file"] == stray.name for d in report3["duplicates"])
 
 
+def test_incomplete_manifest_reconciled(tmp_path):
+    """A manifest that exists but predates a hand-added crash entry is
+    backfilled too — reconciliation is keyed on manifest['entries'],
+    not on the manifest file being absent."""
+    corpus = _corpus(tmp_path)
+    corpus.mkdir(parents=True)
+    stray = corpus / f"crash-{_sha(CRASH_A)}"
+    stray.write_bytes(CRASH_A)  # on disk after the manifest was written
+    (corpus / "manifest.json").write_text(
+        json.dumps(
+            {
+                "tool": "devin-redact",
+                "version": "0.0.0",
+                "schema": 1,
+                "entries": {},
+            }
+        )
+    )
+    report = cflite.promote(_crashes(tmp_path, {}), corpus)
+    manifest = json.loads((corpus / "manifest.json").read_text())
+    assert set(manifest["entries"]) == {stray.name}
+    assert manifest["entries"][stray.name]["sha256"] == _sha(CRASH_A)
+    assert report["manifest"] is not None
+
+
 def test_seed_file_does_not_swallow_crash(tmp_path):
     """A non-crash file in the corpus sharing a crash's bytes must not
     satisfy dedup — only crash-<sha256> entries count (finding: seed
