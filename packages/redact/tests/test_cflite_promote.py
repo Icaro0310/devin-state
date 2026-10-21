@@ -458,24 +458,35 @@ def test_cli_rejects_max_bytes_above_corpus_bound(tmp_path, capsys):
     assert "corpus bound" in capsys.readouterr().err
 
 
-def test_email_in_crash_does_not_block_promotion(tmp_path):
-    """Non-secret findings (emails, home paths) are reported by
-    scan_text but must not gate promotion — only real secrets do. The
-    corpus is committed, so the PII spans are redacted before write
-    (finding: personal data published in the corpus)."""
+def test_email_in_crash_blocks_promotion(tmp_path):
+    """The corpus is commit-bound *and* byte-exact: PII can't publish
+    as-is and can't be redacted without changing the reproducer, so it
+    blocks like a secret. --allow-sensitive is the explicit opt-in for
+    synthetic fuzz (findings: emails shouldn't block / PII published /
+    redaction loses the reproducer)."""
     crash = b"report: bob@example.com hit the edge\n" + CRASH_A
     crashes = _crashes(tmp_path, {"crash-e": crash})
     corpus = _corpus(tmp_path)
     report = cflite.promote(crashes, corpus)
-    assert len(report["promoted"]) == 1
-    entry = report["promoted"][0]
-    assert entry["pii_redacted"] >= 1
-    stored = (corpus / entry["file"]).read_bytes()
-    assert b"bob@example.com" not in stored
-    assert b"<REDACTED:" in stored
-    # the stored sha covers the *redacted* bytes — dedup and the name
-    # contract stay consistent with what was committed
-    assert entry["file"] == f"crash-{_sha(stored)}"
+    assert report["promoted"] == []
+    assert any("sensitive" in r["reason"] for r in report["rejected"])
+    assert not (corpus / f"crash-{_sha(crash)}").exists()
+
+    report2 = cflite.promote(crashes, corpus, allow_sensitive=True)
+    assert len(report2["promoted"]) == 1
+    # bytes stored verbatim — the reproducer is never rewritten
+    assert (corpus / report2["promoted"][0]["file"]).read_bytes() == crash
+
+
+def test_binary_split_pii_blocks_promotion(tmp_path):
+    """An email split by binary bytes is detected via the debinarized
+    view and blocks like contiguous PII."""
+    split = b"bob@ex" + b"\x00\xff" + b"ample.com\n" + CRASH_A
+    crashes = _crashes(tmp_path, {"crash-e": split})
+    corpus = _corpus(tmp_path)
+    report = cflite.promote(crashes, corpus)
+    assert report["promoted"] == []
+    assert any("sensitive" in r["reason"] for r in report["rejected"])
 
 
 def test_malformed_crash_name_in_corpus_fails_loud(tmp_path):

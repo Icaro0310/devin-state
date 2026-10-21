@@ -42,7 +42,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import __version__, engine
-from .patterns import PII_CATEGORIES
 
 #: Environment override for the corpus location; ``--corpus-dir`` wins.
 CORPUS_ENV = "DEVIN_REDACT_CFLITE_CORPUS"
@@ -300,7 +299,6 @@ def promote(
         except OSError as exc:
             errors.append({"file": source, "error": f"unreadable: {exc}"})
             continue
-        pii_edits = 0
         if not allow_sensitive:
             text = data.decode("utf-8", errors="surrogateescape")
             views = [text]
@@ -318,16 +316,15 @@ def promote(
                     view, file=source, location="cflite-promote"
                 )
             ]
-            # only real secrets block promotion — emails/home paths are
-            # non-secret findings that would force --allow-sensitive on
-            # ordinary reproducers
-            secrets = [
-                f
-                for f in findings
-                if str(f["category"]) in engine.SECRET_CATEGORIES
-            ]
-            if secrets:
-                cats = sorted({str(f["category"]) for f in secrets})
+            # anything the scanner recognises blocks by default. The
+            # corpus is byte-exact *and* commit-bound, so PII can't be
+            # published as-is and can't be redacted either — rewriting a
+            # span would change the reproducer's bytes, expand it past
+            # the corpus bound, and binary-split spans can't be mapped
+            # back to the original offsets anyway. The operator's
+            # explicit opt-in for synthetic fuzz is --allow-sensitive.
+            if findings:
+                cats = sorted({str(f["category"]) for f in findings})
                 rejected.append(
                     {
                         "source": source,
@@ -338,13 +335,6 @@ def promote(
                     }
                 )
                 continue
-            # non-secret PII (emails, home paths) does not block — but the
-            # corpus is committed, so the spans are redacted in place
-            # before hashing/writing instead of published as-is
-            if any(str(f["category"]) in PII_CATEGORIES for f in findings):
-                text, edits = engine.redact_text(text)
-                data = text.encode("utf-8", errors="surrogateescape")
-                pii_edits = len(edits)
         sha = _sha256(data)
         name = _entry_name(sha)
         if sha in known:
@@ -375,7 +365,6 @@ def promote(
                 "size": len(data),
                 "sha256": sha,
                 "run_id": str(run_id) if run_id is not None else None,
-                "pii_redacted": pii_edits,
             }
         )
         if not manifest_error:
@@ -385,7 +374,6 @@ def promote(
                 "source": source,
                 "run_id": str(run_id) if run_id is not None else None,
                 "promoted_at": now,
-                "pii_redacted": pii_edits,
             }
         writes.append((corpus_dir / name, data))
 
