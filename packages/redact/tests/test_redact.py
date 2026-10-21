@@ -8,7 +8,7 @@ from pathlib import Path
 import devin_redact
 import pytest
 from devin_redact import cli, engine
-from devin_redact.engine import redact_text
+from devin_redact.engine import redact_text, scan_text
 from devin_redact.semantic import analyze_tool_call_json
 from test_scan import (
     CORPUS,
@@ -90,6 +90,170 @@ def test_redact_text_idempotent():
     twice, edits2 = redact_text(once)
     assert once == twice
     assert edits2 == []
+
+
+def test_redact_text_tag_tail_assignment_redacts():
+    """Issue #66: a match containing ``<REDACTED:…>`` was skipped
+    wholesale, and ``env_assignment`` swallows the rest of the line — so
+    a second ``KEY=`` inside the skipped match stayed raw (and, being
+    mid-line, could never match on its own). Only the tag's own span is
+    prior output; the tail assignment must still redact."""
+    new, edits = redact_text("API_KEY=<REDACTED:abc123> OTHER" + "_TOKEN=rawsecret99")
+    assert "<REDACTED:abc123>" in new  # prior tag is never re-processed
+    assert "rawsecret99" not in new
+    assert "OTHER_TOKEN=<REDACTED:" in new
+    assert any(e["category"] == "env_assignment" for e in edits)
+
+
+def test_redact_text_nested_tags_inside_match_tail_redacts():
+    """Nested already-redacted assignments inside one greedy match:
+    every nested tag survives byte-identically while the still-raw
+    tail assignment redacts."""
+    src = (
+        "OUTER" + "_KEY=<REDACTED:x1> INNER" + "_KEY=<REDACTED:y2> DEEP" + "_SECRET=z9"
+    )
+    new, edits = redact_text(src)
+    assert "<REDACTED:x1>" in new and "<REDACTED:y2>" in new
+    assert "z9" not in new
+    assert new.count("<REDACTED:") == 3
+    assert len(edits) == 1
+
+
+def test_redact_text_mid_value_tag_redacts_both_flanks():
+    """A tag embedded mid-value must not shield the raw secrets on
+    either side: both flanking assignments redact and the tag survives
+    byte-identically (Devin Review on #66)."""
+    src = "FIRST" + "_KEY=firstval1<REDACTED:mid99> SECOND" + "_KEY=secondval2"
+    new, _edits = redact_text(src)
+    assert "<REDACTED:mid99>" in new
+    assert "firstval1" not in new
+    assert "secondval2" not in new
+    assert new.count("<REDACTED:") == 3
+
+
+def test_redact_text_code_value_tail_after_tag_redacts():
+    """A code-shaped head (suppressed by the code guard) must not hide
+    a raw assignment after the tag: the ``frozenset`` call stays, the
+    tail redacts."""
+    src = "FIRST" + "_KEY = frozenset({'x'}) <REDACTED:t0> REAL" + "_TOKEN=tv9x"
+    new, _edits = redact_text(src)
+    assert "frozenset({'x'})" in new
+    assert "<REDACTED:t0>" in new
+    assert "tv9x" not in new
+    assert "REAL_TOKEN=<REDACTED:" in new
+
+
+def test_redact_text_tag_between_assignments_redacts_each_tail():
+    """Multiple tags on one line: every still-raw assignment between or
+    after them redacts, tags are left alone, output stays idempotent."""
+    src = "A_KEY=<REDACTED:one> B_KEY=<REDACTED:two> C" + "_TOKEN=tailsecret9"
+    new, _ = redact_text(src)
+    assert "tailsecret9" not in new
+    assert "<REDACTED:one>" in new and "<REDACTED:two>" in new
+    assert new.count("<REDACTED:") == 3
+    again, edits2 = redact_text(new)
+    assert again == new and edits2 == []
+
+
+def test_redact_text_plain_assignment_still_redacts():
+    """Regression: a plain secret with no tag nearby is unaffected."""
+    new, edits = redact_text("MY_SECRET" + "=plainvalue123\n")
+    assert "plainvalue123" not in new
+    assert new.startswith("MY_SECRET=<REDACTED:")
+    assert any(e["category"] == "env_assignment" for e in edits)
+
+
+def test_redact_text_standalone_tag_not_reprocessed():
+    """A lone ``<REDACTED:…>`` tag is prior output: no re-redact, no
+    corruption, no edits."""
+    src = "already done: <REDACTED:0123456789abcdef> ok"
+    new, edits = redact_text(src)
+    assert new == src
+    assert edits == []
+
+
+def test_redact_text_tag_inside_container_literal_not_corrupted():
+    """A tag sitting inside a container/call literal is *inside* code —
+    re-matching its tail as a fresh assignment would eat the closing
+    delimiters and corrupt valid source. The whole match stays skipped
+    (Devin Review on #66)."""
+    src = 'TOKEN_KEY = ["<REDACTED:abc> API_KEY=innocent"]\n'
+    new, edits = redact_text(src)
+    assert new == src
+    assert edits == []
+    import ast
+
+    ast.parse(new)  # still valid Python
+
+
+def test_redact_text_tag_embedded_in_quoted_value_not_corrupted():
+    """A tag mid-value inside a quoted string is likewise enclosure
+    context — the fragment rescan only runs when the first tag leads
+    the value."""
+    src = "MY_API_KEY = 'abc<REDACTED:x9>def'\n"
+    new, edits = redact_text(src)
+    assert new == src
+    assert edits == []
+    import ast
+
+    ast.parse(new)
+
+
+def test_redact_text_escaped_quote_tag_not_corrupted():
+    """A backslash-escaped quote does not close the string: the tag sits
+    inside a still-open literal and the whole match stays skipped
+    (Devin Review round 3 on #66)."""
+    src = 'TOKEN_KEY = "abc\\"<REDACTED:x1>tail"\n'
+    new, edits = redact_text(src)
+    assert new == src
+    assert edits == []
+    import ast
+
+    ast.parse(new)
+
+
+def test_redact_text_tag_in_comment_not_exposed():
+    """A tag inside a trailing ``#`` comment is comment content: the
+    fragment is trimmed at ``#`` so the secret before it still redacts
+    while the comment — marker and tag — survives untouched. (The
+    output can't parse as Python — no redacted file can, every
+    ``<REDACTED:…>`` tag is non-Python; what the enclosure check
+    protects is the source's *delimiters*, never eaten.)"""
+    src = 'TOKEN_KEY = ("abc") # <REDACTED:x1>\n'
+    new, _edits = redact_text(src)
+    assert "abc" not in new
+    assert " # <REDACTED:x1>" in new
+
+
+def test_redact_text_secret_before_commented_tag_redacts():
+    """``KEY=raw # <REDACTED:…>`` — the live value before the comment
+    marker must redact; the commented tag is preserved."""
+    src = "TOKEN" + "_KEY=rawsecret99 # <REDACTED:x1>\n"
+    new, _edits = redact_text(src)
+    assert "rawsecret99" not in new
+    assert " # <REDACTED:x1>" in new
+    assert new.startswith("TOKEN_KEY=<REDACTED:")
+
+
+def test_redact_text_code_rhs_after_tag_stays_suppressed():
+    """The code-assignment guard applies to fragment tails too: a
+    container RHS after a tag is config, not a secret."""
+    src = "FIRST" + "_KEY=<REDACTED:a> SECOND" + "_SECRET = frozenset({'x'})\n"
+    new, edits = redact_text(src)
+    assert new == src
+    assert edits == []
+
+
+def test_scan_text_tag_tail_assignment_reported():
+    """scan side of #66: the tail secret is a finding, not just an edit."""
+    findings = scan_text(
+        "API_KEY=<REDACTED:abc123> OTHER" + "_TOKEN=rawsecret99",
+        file="x",
+        location="text",
+    )
+    env = [f for f in findings if f["category"] == "env_assignment"]
+    assert len(env) == 1
+    assert env[0]["fingerprint"] == _fp(" OTHER_TOKEN=rawsecret99")
 
 
 def test_redact_on_copy(tmp_path):

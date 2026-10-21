@@ -121,18 +121,199 @@ def _looks_like_code_assignment(whole: str) -> bool:
     return not _literal_string_value(rhs)
 
 
+# A closed ``<REDACTED:…>`` tag — prior redaction output. Only this span
+# is off-limits to re-processing; text around it is not.
+_TAG_RUN = re.compile(r"<REDACTED:[^>\n]*>")
+
+
+class _ShiftedMatch:
+    """``re.Match`` facade whose positions are shifted by ``delta`` into
+    the parent text's coordinates.
+
+    Used for matches found while re-scanning a tag-free *fragment* of a
+    skipped match — the fragment match reports offsets relative to the
+    fragment, but consumers need offsets in the original text. Only the
+    ``re.Match`` members the engine uses are proxied (``group``,
+    ``start``, ``end``, ``span``, ``lastindex``).
+    """
+
+    __slots__ = ("_delta", "_m")
+
+    def __init__(self, m: re.Match[str], delta: int) -> None:
+        self._m = m
+        self._delta = delta
+
+    @property
+    def lastindex(self) -> int | None:
+        return self._m.lastindex
+
+    def group(self, index: int = 0) -> str:
+        return self._m.group(index)
+
+    def start(self, index: int = 0) -> int:
+        return self._m.start(index) + self._delta
+
+    def end(self, index: int = 0) -> int:
+        return self._m.end(index) + self._delta
+
+    def span(self, index: int = 0) -> tuple[int, int]:
+        start, end = self._m.span(index)
+        return start + self._delta, end + self._delta
+
+
+def _comment_start(s: str) -> int:
+    """Index of the first ``#`` outside quotes — where comment text
+    begins — or ``len(s)`` when the line has no comment."""
+    single = double = False
+    i = 0
+    while i < len(s):
+        ch = s[i]
+        if single:
+            if ch == "\\":
+                i += 1
+            elif ch == "'":
+                single = False
+        elif double:
+            if ch == "\\":
+                i += 1
+            elif ch == '"':
+                double = False
+        elif ch == "'":
+            single = True
+        elif ch == '"':
+            double = True
+        elif ch == "#":
+            return i
+        i += 1
+    return len(s)
+
+
+def _enclosures_closed(s: str) -> bool:
+    """True when ``s`` leaves no open enclosure: brackets balanced, no
+    dangling quote, no comment.
+
+    Used to tell whether a fragment boundary sits *inside* a literal,
+    container or comment — where a redaction replacement could eat the
+    enclosure's delimiters and corrupt valid source. A tiny state
+    machine, not a parser: quotes inside the other quote kind and
+    backslash escapes are handled; a ``#`` outside quotes makes the rest
+    of the line a comment, so the candidate is dropped (an over-cautious
+    answer only keeps the old skip, which is safe).
+    """
+    depth = 0
+    single = double = False
+    i = 0
+    while i < len(s):
+        ch = s[i]
+        if single:
+            if ch == "\\":
+                i += 1  # escaped char — can't close the quote
+            elif ch == "'":
+                single = False
+        elif double:
+            if ch == "\\":
+                i += 1
+            elif ch == '"':
+                double = False
+        elif ch == "'":
+            single = True
+        elif ch == '"':
+            double = True
+        elif ch == "#":
+            return False
+        elif ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+        i += 1
+    return depth == 0 and not single and not double
+
+
+def _iter_fragment_matches(
+    rx: re.Pattern[str],
+    text: str,
+    lo: int,
+    hi: int,
+    env: bool,
+    value_start: int,
+):
+    """Yield ``rx`` matches inside ``text[lo:hi]`` shifted by ``lo``.
+
+    ``env`` candidates get the code-assignment guard plus the enclosure
+    check: the value text from ``value_start`` must reach each side of
+    the candidate with every bracket closed and quote paired — a
+    candidate inside ``'…'``, ``"…"`` or ``[…``/``(…``/``{…`` is dropped
+    rather than let its replacement eat delimiters.
+    """
+    if env:
+        # An unquoted ``#`` starts a comment: the tail is comment text,
+        # not rescan candidates — but the secret *before* it must still
+        # redact, so the fragment is trimmed there (plus the whitespace
+        # between value and marker, which belongs to the comment).
+        hi = lo + _comment_start(text[lo:hi])
+        while hi > lo and text[hi - 1] in " \t":
+            hi -= 1
+    if lo >= hi:
+        return
+    for m in rx.finditer(text[lo:hi]):
+        whole = m.group(0)
+        if _REDACTED_TAG in whole:
+            # A malformed (unclosed) tag inside the fragment — still
+            # never re-processed, same as the whole-match rule.
+            continue
+        if env:
+            if _looks_like_code_assignment(whole):
+                continue
+            start, end = lo + m.start(), lo + m.end()
+            if not (
+                _enclosures_closed(text[value_start:start])
+                and _enclosures_closed(text[value_start:end])
+            ):
+                continue
+        yield _ShiftedMatch(m, lo)
+
+
+def _iter_tag_gap(rx: re.Pattern[str], text: str, m: re.Match[str], env: bool):
+    """Yield ``rx`` matches inside the tag-free fragments of ``m``.
+
+    A match containing ``<REDACTED:…>`` is prior redaction output — but
+    only the tag's own span is off-limits. Greedy patterns reach past
+    the tag: ``env_assignment`` swallows the rest of the line, so a
+    second secret inside the same match — the ``OTHER=`` in
+    ``KEY=<REDACTED:x> OTHER=raw`` — would stay raw if the whole match
+    were dropped, and it can never match separately (the pattern is
+    ``^``-anchored). Each tag-free fragment is therefore re-scanned with
+    the same pattern (issue #66). A ``<REDACTED:`` prefix with no
+    closing ``>`` is malformed, not a real tag — the old whole-match
+    skip still applies there.
+    """
+    tags = list(_TAG_RUN.finditer(text, m.start(), m.end()))
+    if not tags:
+        return
+    # For env_assignment the enclosure state is measured from the
+    # value's first char — the position after ``=``.
+    value_start = m.start() + m.group(0).index("=") + 1 if env else m.start()
+    pos = m.start()
+    for tag in tags:
+        yield from _iter_fragment_matches(rx, text, pos, tag.start(), env, value_start)
+        pos = tag.end()
+    yield from _iter_fragment_matches(rx, text, pos, m.end(), env, value_start)
+
+
 def _iter_matches(text: str):
     """Yield ``(category, pattern_name, match)`` for every pattern hit."""
     for category, regexes in PATTERNS.items():
+        env = category == "env_assignment"
         for index, rx in enumerate(regexes):
             for m in rx.finditer(text):
                 if _REDACTED_TAG in m.group(0):
-                    # Already redacted — don't double-report/re-redact.
+                    # Prior redaction output — re-scan only the tag-free
+                    # fragments; the env code guard and the enclosure
+                    # check apply per fragment there.
+                    for fm in _iter_tag_gap(rx, text, m, env):
+                        yield category, pattern_name(category, index), fm
                     continue
-                if (
-                    category == "env_assignment"
-                    and _looks_like_code_assignment(m.group(0))
-                ):
+                if env and _looks_like_code_assignment(m.group(0)):
                     continue
                 yield category, pattern_name(category, index), m
 
