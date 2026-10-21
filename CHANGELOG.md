@@ -16,9 +16,11 @@
   script.
 - **CI** — `actions/checkout` bumped to 7.0.1 across `ci.yml`,
   `docker-publish.yml`, `pypi-publish.yml` and `redact-action.yml` (dependabot).
-- **CI** — `pr-approve` caller bumped from v1.1 to v1.3 in
-  `auto-approve.yml` (devin-powerups reusable; the referenced workflow
-  file is identical at both tags, so no caller-visible change).
+- **CI** — `pr-approve` caller bumped from v1.1 to v1.6 in
+  `auto-approve.yml` (the v1.6 gate adds cross-repo fix anchors and
+  gate-eligible concurrency) and gains the `pull_request_review_comment`
+  trigger so fix-commit replies re-run the gate on the same head;
+  `tests/integration/test_auto_approve_gate.py` pins the caller contract.
 - **Docker** — `docker-publish.yml` builds and pushes
   `ghcr.io/icaro0310/devin-redact` after `redact-v*` releases; PRs
   smoke-build against the latest published PyPI wheel.
