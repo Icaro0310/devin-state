@@ -121,14 +121,90 @@ def _looks_like_code_assignment(whole: str) -> bool:
     return not _literal_string_value(rhs)
 
 
+# A closed ``<REDACTED:…>`` tag — prior redaction output. Only this span
+# is off-limits to re-processing; text around it is not.
+_TAG_RUN = re.compile(r"<REDACTED:[^>\n]*>")
+
+
+class _ShiftedMatch:
+    """``re.Match`` facade whose positions are shifted by ``delta`` into
+    the parent text's coordinates.
+
+    Used for matches found while re-scanning a tag-free *fragment* of a
+    skipped match — the fragment match reports offsets relative to the
+    fragment, but consumers need offsets in the original text. Only the
+    ``re.Match`` members the engine uses are proxied (``group``,
+    ``start``, ``end``, ``span``, ``lastindex``).
+    """
+
+    __slots__ = ("_delta", "_m")
+
+    def __init__(self, m: re.Match[str], delta: int) -> None:
+        self._m = m
+        self._delta = delta
+
+    @property
+    def lastindex(self) -> int | None:
+        return self._m.lastindex
+
+    def group(self, index: int = 0) -> str:
+        return self._m.group(index)
+
+    def start(self, index: int = 0) -> int:
+        return self._m.start(index) + self._delta
+
+    def end(self, index: int = 0) -> int:
+        return self._m.end(index) + self._delta
+
+    def span(self, index: int = 0) -> tuple[int, int]:
+        start, end = self._m.span(index)
+        return start + self._delta, end + self._delta
+
+
+def _iter_fragment_matches(rx: re.Pattern[str], text: str, lo: int, hi: int):
+    """Yield ``rx`` matches inside ``text[lo:hi]`` shifted by ``lo``."""
+    if lo >= hi:
+        return
+    for m in rx.finditer(text[lo:hi]):
+        if _REDACTED_TAG in m.group(0):
+            # A malformed (unclosed) tag inside the fragment — still
+            # never re-processed, same as the whole-match rule.
+            continue
+        yield _ShiftedMatch(m, lo)
+
+
+def _iter_rx(rx: re.Pattern[str], text: str):
+    """Yield ``rx`` matches in ``text``, skipping only tag *spans*.
+
+    A match containing ``<REDACTED:…>`` is prior redaction output — but
+    greedy patterns reach past the tag: ``env_assignment`` swallows the
+    rest of the line, so ``KEY=<REDACTED:x> OTHER=raw`` would hide
+    ``OTHER``'s value if the whole match were dropped, and a mid-line
+    ``OTHER=`` can never match separately (the pattern is ``^``-
+    anchored). Instead of dropping the match, each tag-free fragment of
+    it is re-scanned with the same pattern (issue #66). A ``<REDACTED:``
+    prefix with no closing ``>`` is malformed, not a real tag — the old
+    whole-match skip still applies there.
+    """
+    for m in rx.finditer(text):
+        if _REDACTED_TAG not in m.group(0):
+            yield m
+            continue
+        tags = list(_TAG_RUN.finditer(text, m.start(), m.end()))
+        if not tags:
+            continue
+        pos = m.start()
+        for tag in tags:
+            yield from _iter_fragment_matches(rx, text, pos, tag.start())
+            pos = tag.end()
+        yield from _iter_fragment_matches(rx, text, pos, m.end())
+
+
 def _iter_matches(text: str):
     """Yield ``(category, pattern_name, match)`` for every pattern hit."""
     for category, regexes in PATTERNS.items():
         for index, rx in enumerate(regexes):
-            for m in rx.finditer(text):
-                if _REDACTED_TAG in m.group(0):
-                    # Already redacted — don't double-report/re-redact.
-                    continue
+            for m in _iter_rx(rx, text):
                 if (
                     category == "env_assignment"
                     and _looks_like_code_assignment(m.group(0))

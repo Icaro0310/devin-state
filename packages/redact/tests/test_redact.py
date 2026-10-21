@@ -8,7 +8,7 @@ from pathlib import Path
 import devin_redact
 import pytest
 from devin_redact import cli, engine
-from devin_redact.engine import redact_text
+from devin_redact.engine import redact_text, scan_text
 from devin_redact.semantic import analyze_tool_call_json
 from test_scan import (
     CORPUS,
@@ -90,6 +90,73 @@ def test_redact_text_idempotent():
     twice, edits2 = redact_text(once)
     assert once == twice
     assert edits2 == []
+
+
+def test_redact_text_tag_tail_assignment_redacts():
+    """Issue #66: a match containing ``<REDACTED:…>`` was skipped
+    wholesale, and ``env_assignment`` swallows the rest of the line — so
+    a second ``KEY=`` inside the skipped match stayed raw (and, being
+    mid-line, could never match on its own). Only the tag's own span is
+    prior output; the tail assignment must still redact."""
+    new, edits = redact_text("API_KEY=<REDACTED:abc123> OTHER" + "_TOKEN=rawsecret99")
+    assert "<REDACTED:abc123>" in new  # prior tag is never re-processed
+    assert "rawsecret99" not in new
+    assert "OTHER_TOKEN=<REDACTED:" in new
+    assert any(e["category"] == "env_assignment" for e in edits)
+
+
+def test_redact_text_tag_nested_inside_match_redacts_both_sides():
+    """A tag nested *inside* one env_assignment match must not shield
+    the secrets on either side of it — both flanking values redact and
+    the tag survives byte-identically."""
+    new, _ = redact_text(
+        "FIRST" + "_KEY=firstval1<REDACTED:mid99> SECOND" + "_KEY=secondval2"
+    )
+    assert "<REDACTED:mid99>" in new
+    assert "firstval1" not in new
+    assert "secondval2" not in new
+    assert new.count("<REDACTED:") == 3
+
+
+def test_redact_text_tag_between_assignments_redacts_each_tail():
+    """Multiple tags on one line: every still-raw assignment between or
+    after them redacts, tags are left alone, output stays idempotent."""
+    src = "A_KEY=<REDACTED:one> B_KEY=<REDACTED:two> C" + "_TOKEN=tailsecret9"
+    new, _ = redact_text(src)
+    assert "tailsecret9" not in new
+    assert "<REDACTED:one>" in new and "<REDACTED:two>" in new
+    assert new.count("<REDACTED:") == 3
+    again, edits2 = redact_text(new)
+    assert again == new and edits2 == []
+
+
+def test_redact_text_plain_assignment_still_redacts():
+    """Regression: a plain secret with no tag nearby is unaffected."""
+    new, edits = redact_text("MY_SECRET" + "=plainvalue123\n")
+    assert "plainvalue123" not in new
+    assert new.startswith("MY_SECRET=<REDACTED:")
+    assert any(e["category"] == "env_assignment" for e in edits)
+
+
+def test_redact_text_standalone_tag_not_reprocessed():
+    """A lone ``<REDACTED:…>`` tag is prior output: no re-redact, no
+    corruption, no edits."""
+    src = "already done: <REDACTED:0123456789abcdef> ok"
+    new, edits = redact_text(src)
+    assert new == src
+    assert edits == []
+
+
+def test_scan_text_tag_tail_assignment_reported():
+    """scan side of #66: the tail secret is a finding, not just an edit."""
+    findings = scan_text(
+        "API_KEY=<REDACTED:abc123> OTHER" + "_TOKEN=rawsecret99",
+        file="x",
+        location="text",
+    )
+    env = [f for f in findings if f["category"] == "env_assignment"]
+    assert len(env) == 1
+    assert env[0]["fingerprint"] == _fp(" OTHER_TOKEN=rawsecret99")
 
 
 def test_redact_on_copy(tmp_path):
