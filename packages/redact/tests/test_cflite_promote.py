@@ -456,3 +456,41 @@ def test_cli_rejects_max_bytes_above_corpus_bound(tmp_path, capsys):
     )
     assert rc == 2
     assert "corpus bound" in capsys.readouterr().err
+
+
+def test_email_in_crash_does_not_block_promotion(tmp_path):
+    """Non-secret findings (emails, home paths) are reported by
+    scan_text but must not gate promotion — only real secrets do."""
+    crash = b"report: bob@example.com hit the edge\n" + CRASH_A
+    crashes = _crashes(tmp_path, {"crash-e": crash})
+    corpus = _corpus(tmp_path)
+    report = cflite.promote(crashes, corpus)
+    assert len(report["promoted"]) == 1
+    assert (corpus / f"crash-{_sha(crash)}").exists()
+
+
+def test_malformed_crash_name_in_corpus_fails_loud(tmp_path):
+    """A ``crash-*`` file with a non-sha256 suffix breaks the corpus
+    contract — promotion reports the corruption instead of leaving an
+    unindexed file the integrity test would reject."""
+    corpus = _corpus(tmp_path)
+    corpus.mkdir(parents=True)
+    (corpus / "crash-notasha").write_bytes(CRASH_B)
+    crashes = _crashes(tmp_path, {"c": CRASH_A})
+    report = cflite.promote(crashes, corpus)
+    assert any("malformed" in e["error"] for e in report["errors"])
+
+
+def test_oversized_existing_crash_fails_loud_not_indexed(tmp_path):
+    """A hash-valid but over-bound corpus file is corrupt — reconcile
+    must not record it into the manifest silently."""
+    corpus = _corpus(tmp_path)
+    corpus.mkdir(parents=True)
+    big = b"B" * (cflite.MAX_CRASH_BYTES + 1)
+    (corpus / f"crash-{_sha(big)}").write_bytes(big)
+    crashes = _crashes(tmp_path, {"c": CRASH_A})
+    report = cflite.promote(crashes, corpus)
+    assert any("corrupt" in e["error"] for e in report["errors"])
+    if (corpus / "manifest.json").exists():
+        manifest = json.loads((corpus / "manifest.json").read_text())
+        assert f"crash-{_sha(big)}" not in manifest["entries"]

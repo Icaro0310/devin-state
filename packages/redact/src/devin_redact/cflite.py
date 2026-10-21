@@ -127,7 +127,28 @@ def _corpus_hashes(corpus_dir: Path, errors: list[dict]) -> dict[str, str]:
     if not corpus_dir.is_dir():
         return hashes
     for p in sorted(corpus_dir.iterdir()):
-        if not p.is_file() or not _ENTRY_RE.match(p.name):
+        if not p.is_file():
+            continue
+        if not _ENTRY_RE.match(p.name):
+            # a ``crash-`` name is the corpus contract — anything else
+            # starting with the prefix is a malformed entry the
+            # integrity test would reject, not a stray file to ignore
+            if p.name.startswith(ENTRY_PREFIX):
+                errors.append(
+                    {
+                        "file": str(p),
+                        "error": "malformed crash entry name — "
+                        f"expected {ENTRY_PREFIX}<sha256>",
+                    }
+                )
+            continue
+        # the same bounds as promoted candidates — an oversized or
+        # empty entry is corrupt, whatever its name-hash agreement
+        reason = _validate(p, MAX_CRASH_BYTES)
+        if reason:
+            errors.append(
+                {"file": str(p), "error": f"corrupt entry: {reason}"}
+            )
             continue
         try:
             sha = _sha256(p.read_bytes())
@@ -270,8 +291,16 @@ def promote(
             findings = engine.scan_text(
                 text, file=source, location="cflite-promote"
             )
-            if findings:
-                cats = sorted({str(f["category"]) for f in findings})
+            # only real secrets block promotion — emails/home paths are
+            # non-secret findings that would force --allow-sensitive on
+            # ordinary reproducers
+            secrets = [
+                f
+                for f in findings
+                if str(f["category"]) in engine.SECRET_CATEGORIES
+            ]
+            if secrets:
+                cats = sorted({str(f["category"]) for f in secrets})
                 rejected.append(
                     {
                         "source": source,
