@@ -177,8 +177,9 @@ def _build_parser() -> argparse.ArgumentParser:
     cf_p.add_argument(
         "--allow-sensitive",
         action="store_true",
-        help="promote crashes even when scan_text finds credential-shaped "
-        "content (default: reject — the corpus is committed to the repo)",
+        help="promote crashes even when scan_text finds sensitive content "
+        "(credentials or personal data like emails/home paths — the "
+        "corpus is committed to the repo)",
     )
     cf_p.add_argument(
         "--dry-run",
