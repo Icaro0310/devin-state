@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-10-23
+
+### Fixed
+
+- The tag-gap fragment rescan no longer inherits the `env_assignment`
+  `^` anchor (devin-state#82). After a closed `<REDACTED:…>` tag split a
+  greedy match, a fragment beginning with non-key text —
+  `API_KEY=<tag>suffix OTHER_TOKEN=raw` — left the tail assignment raw.
+  The rescan now uses a de-anchored variant (`\s*` + `(?<!\w)`
+  lookbehind) scoped to fragment rescanning only; the anchored pattern
+  is unchanged for ordinary matching. Reunifies behavior with the
+  TypeScript port, which shipped the equivalent fix in
+  devin-powerups#223 — the port-only divergence case can now join the
+  parity corpus.
+
 ## [0.2.4] - 2026-10-21
 
 ### Fixed
