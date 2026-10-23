@@ -125,6 +125,20 @@ def _looks_like_code_assignment(whole: str) -> bool:
 # is off-limits to re-processing; text around it is not.
 _TAG_RUN = re.compile(r"<REDACTED:[^>\n]*>")
 
+# env_assignment without the ``(?m)^`` anchor — used ONLY by the tag-gap
+# fragment rescan. The anchored pattern misses a ``KEY=`` candidate that
+# does not lead the fragment: after a closed tag, non-key text may come
+# first ('API_KEY=<tag>suffix OTHER_TOKEN=raw' left the tail raw — the
+# TS port caught this in devin-powerups#223). ``\s*`` plus a
+# word-boundary lookbehind on the name reproduces the anchored match
+# exactly at a key-led fragment start — leading whitespace stays inside
+# the match — and still finds each ``KEY=`` later in the fragment.
+_ENV_FRAGMENT_RE = re.compile(
+    r"\s*(?<!\w)(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*"
+    r"(?:KEY|SECRET|TOKEN|PASSWORD|PASSWD|CREDENTIAL)[A-Za-z0-9_]*"
+    r"\s*=\s*\S[^\n]*"
+)
+
 
 class _ShiftedMatch:
     """``re.Match`` facade whose positions are shifted by ``delta`` into
@@ -290,14 +304,18 @@ def _iter_tag_gap(rx: re.Pattern[str], text: str, m: re.Match[str], env: bool):
     tags = list(_TAG_RUN.finditer(text, m.start(), m.end()))
     if not tags:
         return
+    # env fragments re-scan with the de-anchored variant — ``rx`` is
+    # ``^``-anchored and would miss a ``KEY=`` that does not lead the
+    # fragment (devin-powerups#223 parity note).
+    scan_rx = _ENV_FRAGMENT_RE if env else rx
     # For env_assignment the enclosure state is measured from the
     # value's first char — the position after ``=``.
     value_start = m.start() + m.group(0).index("=") + 1 if env else m.start()
     pos = m.start()
     for tag in tags:
-        yield from _iter_fragment_matches(rx, text, pos, tag.start(), env, value_start)
+        yield from _iter_fragment_matches(scan_rx, text, pos, tag.start(), env, value_start)
         pos = tag.end()
-    yield from _iter_fragment_matches(rx, text, pos, m.end(), env, value_start)
+    yield from _iter_fragment_matches(scan_rx, text, pos, m.end(), env, value_start)
 
 
 def _iter_matches(text: str):
