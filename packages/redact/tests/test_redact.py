@@ -92,6 +92,19 @@ def test_redact_text_idempotent():
     assert edits2 == []
 
 
+def test_redact_text_tag_fragment_nonkey_head_redacts_tail():
+    """devin-powerups#223 parity: the fragment rescan inherited the
+    ``env_assignment`` ``^`` anchor, so ``API_KEY=<tag>suffix
+    OTHER_TOKEN=raw`` left the tail raw — the fragment starts with a
+    non-key word. The rescan now uses the de-anchored variant."""
+    src = "API_KEY=<REDACTED:abc123>suffix OTHER_TOKEN=rawsecret99"
+    new, edits = redact_text(src)
+    assert "<REDACTED:abc123>" in new
+    assert "rawsecret99" not in new
+    assert "OTHER_TOKEN=<REDACTED:" in new
+    assert any(e["category"] == "env_assignment" for e in edits)
+
+
 def test_redact_text_tag_tail_assignment_redacts():
     """Issue #66: a match containing ``<REDACTED:…>`` was skipped
     wholesale, and ``env_assignment`` swallows the rest of the line — so
