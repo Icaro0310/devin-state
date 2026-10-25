@@ -607,6 +607,27 @@ def test_dotted_type_annotations_still_suppressed():
     assert "<REDACTED:" not in new
 
 
+def test_lowercase_dotted_type_annotations_suppressed():
+    """``numpy.ndarray``, ``collections.deque``, ``socket.socket`` —
+    real type names whose terminal segment is lowercase by convention.
+    Flagging (and worse, redacting) them corrupts valid Python source,
+    so they suppress like any other annotation."""
+    src = (
+        "weights: numpy.ndarray\n"
+        "pending: collections.deque\n"
+        "conn: socket.socket\n"
+        "delta: datetime.timedelta\n"
+        "proxy: weakref.proxy\n"
+        "grid: list[numpy.ndarray]\n"
+    )
+    findings = scan_text(src, file="model.py", location="text")
+    assert not [
+        f for f in findings if f["category"] == "env_assignment"
+    ], findings
+    new, _ = redact_text(src)
+    assert "<REDACTED:" not in new
+
+
 def test_complete_pem_reported_once_not_twice():
     """A complete PEM block matched both ``pem_private_key`` and
     ``pem_private_key_unterminated`` (a strict prefix) — one key, two

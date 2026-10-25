@@ -101,6 +101,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Type annotations (`api_key: str`, `token: Optional[str]`) are no
   longer flagged or redacted as secret assignments — quoted/YAML
   scalars with the same shape still are (devin-state#92).
+- Dotted annotations whose terminal segment is lowercase by
+  convention (`numpy.ndarray`, `collections.deque`, `socket.socket`)
+  are suppressed like any other type — while credential-shaped
+  scalars (`api_key: abc.def`) still flag (devin-state#92).
 - A complete PEM block is reported once, not once per matching
   pattern — `scan_text` dedupes overlapping findings so one key no
   longer inflates the count (devin-state#92).

@@ -139,13 +139,31 @@ _TYPE_NAMES = frozenset(
 # annotation.
 _DOTTED_PATH_RE = re.compile(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+")
 
+# Lowercase terminal segments that still name real types — numpy
+# classes and stdlib container/factory names are lowercase by
+# convention: ``numpy.ndarray``, ``array.array``,
+# ``collections.deque``, ``datetime.timedelta``, ``socket.socket``,
+# ``weakref.proxy``.
+_LOWER_TYPE_NAMES = frozenset(
+    {
+        "ndarray", "dtype", "array", "deque", "defaultdict",
+        "namedtuple", "datetime", "timedelta", "date", "time",
+        "timezone", "tzinfo", "socket", "mmap", "ref", "proxy",
+    }
+)
+
 
 def _dotted_terminal_is_type(path: str) -> bool:
     """Is the last segment of a dotted path a plausible type name —
-    builtin/typing (``datetime.datetime``) or CapWords class
-    (``pathlib.Path``, ``models.User``)?"""
+    builtin/typing (``datetime.datetime``), CapWords class
+    (``pathlib.Path``, ``models.User``) or a known lowercase type name
+    (``numpy.ndarray``, ``collections.deque``)?"""
     last = path.rsplit(".", 1)[1]
-    return last in _TYPE_NAMES or last[:1].isupper()
+    return (
+        last in _TYPE_NAMES
+        or last[:1].isupper()
+        or last in _LOWER_TYPE_NAMES
+    )
 
 
 def _looks_like_type_annotation(rhs: str) -> bool:
@@ -159,7 +177,8 @@ def _looks_like_type_annotation(rhs: str) -> bool:
     type name, a builtin/typing name, or an annotation with a
     ``= default`` tail. A bare lowercase scalar (``api_key: hunter2``),
     a lowercase dotted scalar (``api_key: abc.def`` — credential-shaped,
-    not a type) or any quoted value still flags — a quoted ``"str"`` is
+    not a type; a lowercase *type* name like ``numpy.ndarray`` still
+    suppresses) or any quoted value still flags — a quoted ``"str"`` is
     a real string value in YAML/JSON, never an annotation.
     """
     v = rhs.strip()
