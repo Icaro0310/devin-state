@@ -186,7 +186,10 @@ _FROM_IMPORT_PAREN_RE = re.compile(
 )
 _COMMENT_RE = re.compile(r"#[^\n]*")
 _ASSIGN_NAME_RE = re.compile(
-    r"(?m)^\s*([A-Za-z_]\w*)\s*[-+*/%&|^@<>]{0,2}=(?!=)"
+    r"(?m)^\s*(?:([A-Za-z_]\w*)\s*[-+*/%&|^@<>]{0,2}=(?!=)"
+    r"|for\s+([A-Za-z_]\w*)\s+in\b"
+    r"|(?:def|class)\s+([A-Za-z_]\w*)\s*[(:]"
+    r"|del\s+([A-Za-z_]\w*)\b)"
 )
 _TRIPLE_QUOTE_RE = re.compile(r"('''|\"\"\")")
 
@@ -348,9 +351,11 @@ def _import_aliases(
     # fail-closed direction: a stray assignment costs one suppressed
     # annotation, a kept one can hide a credential (devin-state#92).
     rebound = {
-        m.group(1)
+        name
         for m in _ASSIGN_NAME_RE.finditer(text)
         if not strings or not _inside_spans(strings, m.start())
+        for name in m.groups()
+        if name
     }
     for name in rebound:
         aliases.pop(name, None)
