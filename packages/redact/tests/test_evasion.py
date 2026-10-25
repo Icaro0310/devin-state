@@ -698,6 +698,22 @@ def test_parenthesized_import_binds_names():
     ], findings
     new, _ = redact_text(src)
     assert "<REDACTED:" not in new
+    # an inline comment inside the parens cannot hide the binding —
+    # even one containing ``)``
+    src = (
+        "from collections import (\n"
+        "    # primary container)\n"
+        "    deque,\n"
+        ")\n"
+        "pending: deque\n"
+    )
+    assert not [
+        f
+        for f in scan_text(src, file="m.py", location="text")
+        if f["category"] == "env_assignment"
+    ]
+    new, _ = redact_text(src)
+    assert "<REDACTED:" not in new
 
 
 def test_import_like_text_in_env_file_does_not_bind():

@@ -113,8 +113,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unbound alias (`api_key: n.ndarray` with no import) still flags
   (devin-state#92).
 - Parenthesized from-imports (`from collections import (deque)`),
-  including the multi-line form, bind names like the plain form
-  (devin-state#92).
+  including the multi-line form and inline comments inside the parens,
+  bind names like the plain form (devin-state#92).
 - Alias resolution only applies where `x: T` can be an annotation —
   Python-typed files. An `import` line inside a `.env`/`.yaml` blob is
   inert text, so `api_key: n.ndarray` there still blocks the gate

@@ -171,10 +171,13 @@ _IMPORT_RE = re.compile(r"(?m)^\s*import\s+([^#\n]+)")
 _FROM_IMPORT_RE = re.compile(
     r"(?m)^\s*from\s+([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s+import\s+([^#\n(]+)"
 )
-# The parenthesized form may span lines — ``[^)]`` matches newlines.
+# The parenthesized form may span lines and hold inline comments —
+# each character is either not ``)``/``#`` or a ``#``-to-EOL run, so a
+# ``)`` inside a comment cannot terminate the block early.
 _FROM_IMPORT_PAREN_RE = re.compile(
-    r"(?m)^\s*from\s+([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s+import\s*\(([^)]*)\)"
+    r"(?m)^\s*from\s+([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s+import\s*\(((?:[^)#]+|#[^\n]*)*)\)"
 )
+_COMMENT_RE = re.compile(r"#[^\n]*")
 _NAME_RE = re.compile(r"[A-Za-z_]\w*")
 
 # Aliases only exist where ``x: T`` can be an annotation — Python
@@ -219,7 +222,8 @@ def _import_aliases(text: str) -> dict[str, str]:
                 aliases[bound] = f"{mod}.{name}"
     for m in _FROM_IMPORT_PAREN_RE.finditer(text):
         mod = m.group(1)
-        for part in m.group(2).split(","):
+        names = _COMMENT_RE.sub("", m.group(2))
+        for part in names.split(","):
             name, sep, alias = part.partition(" as ")
             name = name.strip()
             bound = alias.strip() if sep else name
