@@ -23,10 +23,15 @@ from devin_janitor.execute import load_pending
 from devin_janitor.inventory import load_inventory
 from devin_janitor.paths import resolve
 from devin_janitor.report import space_report
-from devin_janitor.tiers import classify, load_keep_file
+from devin_janitor.tiers import (
+    classify,
+    devin_artifacts_payload,
+    load_keep_file,
+)
 
 DEFAULT_KEEP_FILE = ".devin/janitor-keep.json"
 DEFAULT_PENDING_FILE = ".devin/janitor-pending.json"
+DEFAULT_DEVIN_DIR = ".devin"
 
 
 def _resolve_paths(
@@ -72,6 +77,7 @@ def do_dry_run(
     pending_file: str = "",
     labels_file: str = "",
     exclude_labeled: bool = False,
+    devin_dir: str = "",
 ) -> dict:
     """The ``report --json`` payload: advisory recoverable-space scan.
 
@@ -99,6 +105,7 @@ def do_dry_run(
             labels_path=Path(labels_file).expanduser()
             if labels_file else None,
             exclude_labeled=exclude_labeled,
+            devin_dir=devin_dir or None,
         )
     except Exception as exc:  # noqa: BLE001 — advisory, same as the CLI
         return {
@@ -117,15 +124,18 @@ def do_classify(
     locks_dir: str = "",
     config: str = "",
     keep_file: str = "",
+    devin_dir: str = "",
 ) -> dict:
     """The ``scan --json`` payload: per-session tier assignment.
 
     Returns ``{"total", "tiers": {"keep", "auto_delete", "judge":
-    {"delete", "keep", "unresolved"}}}`` — every session lands in
-    exactly one tier, with the reason it was kept or flagged. Like the
-    CLI's ``scan`` (which never runs a judge either), the judge tiers
-    stay empty and every ambiguous session lands in ``unresolved`` —
-    judging is a pluggable advisory step, out of scope here.
+    {"delete", "keep", "unresolved"}}, "devin_artifacts"}`` — every
+    session lands in exactly one tier, with the reason it was kept or
+    flagged, and every file under the ``.devin/`` runtime-state dir is
+    tiered too. Like the CLI's ``scan`` (which never runs a judge
+    either), the judge tiers stay empty and every ambiguous session
+    lands in ``unresolved`` — judging is a pluggable advisory step,
+    out of scope here.
     """
     paths = _resolve_paths(data_dir, config_dir, sessions_db, acp_dir, locks_dir)
     cfg, keep_ids, keep_patterns = _cfg(config, keep_file)
@@ -135,6 +145,9 @@ def do_classify(
     )
     kept_ids = set(classification.kept)
     return {
+        "devin_artifacts": devin_artifacts_payload(
+            Path(devin_dir).expanduser() if devin_dir else DEFAULT_DEVIN_DIR
+        ),
         "total": len(rows),
         "tiers": {
             "keep": [
@@ -199,6 +212,7 @@ def build_server():
         pending_file: str = "",
         labels_file: str = "",
         exclude_labeled: bool = False,
+        devin_dir: str = "",
     ) -> dict:
         """Recoverable-space report across every store the janitor
         manages. Read-only advisory — returns {classification, stores[],
@@ -218,6 +232,7 @@ def build_server():
                 pending_file=pending_file,
                 labels_file=labels_file,
                 exclude_labeled=exclude_labeled,
+                devin_dir=devin_dir,
             )
         except Exception as error:  # noqa: BLE001 — tool boundary must not raise
             return _err(error)
@@ -231,11 +246,14 @@ def build_server():
         locks_dir: str = "",
         config: str = "",
         keep_file: str = "",
+        devin_dir: str = "",
     ) -> dict:
-        """Tier every known session: keep / auto_delete / judge.
-        Read-only — returns {total, tiers} with each session's id,
-        origin, title, tier and reason. Ambiguous sessions come back as
-        judge/unresolved; nothing is removed or queued.
+        """Tier every known session and every .devin/ artifact:
+        keep / auto_delete / judge. Read-only — returns {total, tiers,
+        devin_artifacts} with each session's id, origin, title, tier and
+        reason plus each artifact's rel_path, tier and reason. Ambiguous
+        sessions come back as judge/unresolved; nothing is removed or
+        queued.
         """
         try:
             return do_classify(
@@ -246,6 +264,7 @@ def build_server():
                 locks_dir=locks_dir,
                 config=config,
                 keep_file=keep_file,
+                devin_dir=devin_dir,
             )
         except Exception as error:  # noqa: BLE001 — tool boundary must not raise
             return _err(error)

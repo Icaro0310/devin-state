@@ -6,6 +6,10 @@
 
 Timestamps in ``sessions.db`` are epoch *milliseconds*; ``SessionRow`` exposes
 epoch *seconds* so comparisons against ``time.time()`` are obvious.
+
+Also inventories ``.devin/`` runtime artifacts — the PAS learning loop's
+accumulators (``hook-fires.jsonl``, ``search.db``, ``graph.db``,
+``learning-state.json``) plus the janitor's own keep/pending/log files.
 """
 
 from __future__ import annotations
@@ -226,3 +230,88 @@ def live_session_ids(paths: DevinPaths) -> set[str]:
         return set()
     with SessionsStore(paths.sessions_db) as store:
         return {s.id for s in store.sessions()}
+
+
+# ---------------------------------------------------- .devin/ artifacts ----
+
+
+class DevinArtifactError(OSError):
+    """A ``.devin/`` path exists but is unreadable or malformed.
+
+    Absence is fine — an empty inventory is returned for a missing dir.
+    A path that exists but cannot be read is *data*, and unreadable data
+    is an error, never a silent skip.
+    """
+
+
+@dataclass(frozen=True)
+class DevinArtifact:
+    """One file under a ``.devin/`` runtime-state dir."""
+
+    rel_path: str  # posix-style path relative to the .devin dir
+    bytes: int
+    mtime: float
+
+
+def _validate_state_file(p: Path) -> None:
+    """``.json`` files under ``.devin/`` are state — verify they parse."""
+    try:
+        json.loads(p.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise DevinArtifactError(
+            f"malformed .devin state file: {p} ({exc})"
+        ) from exc
+    except OSError as exc:
+        raise DevinArtifactError(
+            f"unreadable .devin artifact: {p} ({exc})"
+        ) from exc
+
+
+def load_devin_artifacts(devin_dir: str | Path) -> list[DevinArtifact]:
+    """Every file under a ``.devin/`` dir, sorted by relative path.
+
+    A missing dir yields ``[]``. A ``.devin`` that exists but is not a
+    directory, a non-regular file (fifo, dead symlink), an unstat-able
+    file and a malformed ``*.json`` state file all raise
+    :class:`DevinArtifactError` — loudly, never silently skipped.
+    """
+    d = Path(devin_dir).expanduser()
+    if not d.exists():
+        return []
+    if not d.is_dir():
+        raise DevinArtifactError(f".devin path is not a directory: {d}")
+    try:
+        children = sorted(d.rglob("*"))
+    except OSError as exc:
+        raise DevinArtifactError(
+            f"cannot list .devin dir: {d} ({exc})"
+        ) from exc
+    artifacts: list[DevinArtifact] = []
+    for p in children:
+        # pathlib's is_dir/is_file swallow ENOENT-class errors but
+        # re-raise EACCES — probe once under a single wrap so every
+        # unreadable case surfaces as DevinArtifactError
+        try:
+            if p.is_dir():
+                continue
+            if not p.is_file():
+                raise DevinArtifactError(
+                    f"unreadable .devin artifact: {p}"
+                )
+            st = p.stat()
+        except DevinArtifactError:
+            raise
+        except OSError as exc:
+            raise DevinArtifactError(
+                f"unreadable .devin artifact: {p} ({exc})"
+            ) from exc
+        if p.name.lower().endswith(".json"):
+            _validate_state_file(p)
+        artifacts.append(
+            DevinArtifact(
+                rel_path=p.relative_to(d).as_posix(),
+                bytes=st.st_size,
+                mtime=st.st_mtime,
+            )
+        )
+    return artifacts

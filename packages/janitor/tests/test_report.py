@@ -79,16 +79,17 @@ def test_fmt_bytes():
     assert fmt_bytes(3 * 1024**2) == "3.0 MB"
 
 
-def test_space_report_totals_and_recoverable(devin_dir):
+def test_space_report_totals_and_recoverable(devin_dir, tmp_path):
     add_session(devin_dir.sessions_db, "noise-1", title="billing",
                 user_msgs=1, tool_calls=1)
     add_session(devin_dir.sessions_db, "work-1", title="real feature work",
                 user_msgs=50, tool_calls=40)
     add_gui_session(devin_dir.acp_messages_dir, "gui-noise", title="inbox")
-    rep = space_report(devin_dir)
+    rep = space_report(devin_dir, devin_dir=tmp_path / "no-devin")
     stores = _by_name(rep)
     assert set(stores) == {
         "sessions.db", "acp-messages", "state.vscdb", "session_locks",
+        ".devin",
     }
     sdb = stores["sessions.db"]
     assert sdb["exists"] and sdb["sessions"] == 2
@@ -149,7 +150,10 @@ def test_space_report_state_vscdb(devin_dir):
 
 
 def test_space_report_missing_everything(tmp_path):
-    rep = space_report(DevinPaths.from_root(tmp_path / "nope"))
+    rep = space_report(
+        DevinPaths.from_root(tmp_path / "nope"),
+        devin_dir=tmp_path / "nope-devin",
+    )
     assert rep["totals"] == {"bytes": 0, "recoverable_bytes": 0}
     assert all(not s["exists"] for s in rep["stores"])
     assert rep["classification"] == {
