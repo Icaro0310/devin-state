@@ -609,9 +609,9 @@ def test_dotted_type_annotations_still_suppressed():
 
 def test_lowercase_dotted_type_annotations_suppressed():
     """``numpy.ndarray``, ``collections.deque``, ``socket.socket`` —
-    real type names whose terminal segment is lowercase by convention.
-    Flagging (and worse, redacting) them corrupts valid Python source,
-    so they suppress like any other annotation."""
+    real type names whose terminal segment is lowercase by convention,
+    suppressed only under the module namespace that owns them.
+    Flagging (and worse, redacting) them corrupts valid Python source."""
     src = (
         "weights: numpy.ndarray\n"
         "pending: collections.deque\n"
@@ -626,6 +626,27 @@ def test_lowercase_dotted_type_annotations_suppressed():
     ], findings
     new, _ = redact_text(src)
     assert "<REDACTED:" not in new
+
+
+def test_lowercase_type_terminal_needs_owning_namespace():
+    """``proxy``/``ref``/``socket``/``array`` are type terminals only in
+    their owning module — ``weakref.proxy`` is an annotation but
+    ``customer.proxy`` is a credential-shaped scalar and must not pass
+    the publication gate."""
+    for text in (
+        "password: customer.proxy\n",
+        "api_key: auth.ref\n",
+        "secret: my.socket\n",
+        "token: conf.array\n",
+    ):
+        findings = scan_text(text, file="x", location="text")
+        assert any(
+            f["category"] == "env_assignment" for f in findings
+        ), text
+        new, edits = redact_text(text)
+        assert "<REDACTED:" in new and edits, text
+    report = engine.scan_blobs([("s.env", b"password: customer.proxy\n")])
+    assert report["publication_status"] == "BLOCKED"
 
 
 def test_complete_pem_reported_once_not_twice():

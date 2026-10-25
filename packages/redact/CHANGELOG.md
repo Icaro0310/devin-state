@@ -103,8 +103,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   scalars with the same shape still are (devin-state#92).
 - Dotted annotations whose terminal segment is lowercase by
   convention (`numpy.ndarray`, `collections.deque`, `socket.socket`)
-  are suppressed like any other type — while credential-shaped
-  scalars (`api_key: abc.def`) still flag (devin-state#92).
+  are suppressed like any other type, but only under the module
+  namespace that owns them — `weakref.proxy` is an annotation while
+  `password: customer.proxy` still flags and blocks the gate
+  (devin-state#92).
 - A complete PEM block is reported once, not once per matching
   pattern — `scan_text` dedupes overlapping findings so one key no
   longer inflates the count (devin-state#92).

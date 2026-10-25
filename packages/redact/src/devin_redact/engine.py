@@ -139,31 +139,37 @@ _TYPE_NAMES = frozenset(
 # annotation.
 _DOTTED_PATH_RE = re.compile(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+")
 
-# Lowercase terminal segments that still name real types — numpy
-# classes and stdlib container/factory names are lowercase by
-# convention: ``numpy.ndarray``, ``array.array``,
-# ``collections.deque``, ``datetime.timedelta``, ``socket.socket``,
-# ``weakref.proxy``.
-_LOWER_TYPE_NAMES = frozenset(
-    {
-        "ndarray", "dtype", "array", "deque", "defaultdict",
-        "namedtuple", "datetime", "timedelta", "date", "time",
-        "timezone", "tzinfo", "socket", "mmap", "ref", "proxy",
-    }
-)
+# Lowercase terminal segments that still name real types, keyed by the
+# module namespace that must prefix them — numpy classes and stdlib
+# container/factory names are lowercase by convention:
+# ``numpy.ndarray``, ``collections.deque``, ``datetime.timedelta``,
+# ``socket.socket``, ``weakref.proxy``. The prefix is what makes the
+# terminal a type: a bare ``customer.proxy`` or ``api.ref`` under a
+# credential keyword is a secret-shaped scalar, not an annotation, so
+# the terminal only counts when the first segment is its owning
+# namespace.
+_LOWER_DOTTED_TYPES = {
+    "numpy": {"ndarray", "dtype", "generic", "bool_"},
+    "np": {"ndarray", "dtype", "generic", "bool_"},
+    "collections": {"deque", "defaultdict", "namedtuple"},
+    "datetime": {"datetime", "timedelta", "date", "time", "timezone", "tzinfo"},
+    "socket": {"socket"},
+    "mmap": {"mmap"},
+    "array": {"array"},
+    "weakref": {"ref", "proxy"},
+}
 
 
 def _dotted_terminal_is_type(path: str) -> bool:
     """Is the last segment of a dotted path a plausible type name —
     builtin/typing (``datetime.datetime``), CapWords class
-    (``pathlib.Path``, ``models.User``) or a known lowercase type name
-    (``numpy.ndarray``, ``collections.deque``)?"""
-    last = path.rsplit(".", 1)[1]
-    return (
-        last in _TYPE_NAMES
-        or last[:1].isupper()
-        or last in _LOWER_TYPE_NAMES
-    )
+    (``pathlib.Path``, ``models.User``) or a lowercase type name in its
+    owning namespace (``numpy.ndarray``, ``weakref.proxy``)?"""
+    head, _, last = path.rpartition(".")
+    if last in _TYPE_NAMES or last[:1].isupper():
+        return True
+    first = head.split(".", 1)[0]
+    return last in _LOWER_DOTTED_TYPES.get(first, ())
 
 
 def _looks_like_type_annotation(rhs: str) -> bool:
@@ -176,10 +182,12 @@ def _looks_like_type_annotation(rhs: str) -> bool:
     generic, a ``|`` union, a dotted path whose terminal segment is a
     type name, a builtin/typing name, or an annotation with a
     ``= default`` tail. A bare lowercase scalar (``api_key: hunter2``),
-    a lowercase dotted scalar (``api_key: abc.def`` — credential-shaped,
-    not a type; a lowercase *type* name like ``numpy.ndarray`` still
-    suppresses) or any quoted value still flags — a quoted ``"str"`` is
-    a real string value in YAML/JSON, never an annotation.
+    a lowercase dotted scalar (``api_key: abc.def`` or
+    ``password: customer.proxy`` — credential-shaped, not a type; a
+    lowercase *type* terminal still suppresses only under its owning
+    namespace like ``numpy.ndarray``/``weakref.proxy``) or any quoted
+    value still flags — a quoted ``"str"`` is a real string value in
+    YAML/JSON, never an annotation.
     """
     v = rhs.strip()
     if not v:
