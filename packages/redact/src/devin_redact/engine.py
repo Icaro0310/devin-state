@@ -931,12 +931,17 @@ def redact_text(
                 # `"api_key":"<tag>"` is not). ``qm`` captures the
                 # optional whitespace plus the (possibly
                 # ``\``-escaped) opening quote so the replacement
-                # re-emits the same quote token on both sides.
-                qm = re.match(r"\s*(\\?[\"'`])", rhs)
+                # re-emits the same quote token on both sides. A
+                # Python literal prefix (``b``, ``rb``, ``f``, ``u``)
+                # rides along — ``x = b"v"`` keeps its type instead
+                # of degrading to a bare tag that cannot parse.
+                qm = re.match(
+                    r"\s*([rRbBuUfF]{0,2})(\\?[\"'`])", rhs
+                )
                 if qm:
                     replacement = (
                         whole[: eq + 1] + qm.group(0)
-                        + _tag(value) + qm.group(1)
+                        + _tag(value) + qm.group(2)
                     )
                 elif python_source is True or (
                     python_source is None and whole[eq] == ":"

@@ -205,6 +205,10 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
             r"|'(?:\\.|[^'\\\r\n])*?'"
             r"|`(?:\\.|[^`\\\r\n])*?`))*"
             r"(?=[ \t]*[,}\]]|[ \t]*$)"
+            # YAML block scalar — ``key: |`` / ``key: >`` puts the
+            # value on the following indented lines; masking only
+            # the indicator leaves the secret behind.
+            r"|[|>][-+]?[ \t]*(?:\r?\n[ \t]+\S[^\n]*)+"
             # Bare value runs to end of logical line — a ``\``
             # continuation keeps the tail inside the mask.
             r"|\S(?:[^\n\\]|\\\r?\n)*"

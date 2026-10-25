@@ -173,6 +173,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   trailing comment on an annotated assignment is dropped:
   it can carry a credential the single consumed finding
   hides from later scans (devin-state#92).
+- Python literal prefixes survive on plain assignments too —
+  `api_key = b"v"` (and `rb`/`f`/`u`) re-emits `b"<tag>"`
+  instead of an unquoted tag that cannot parse — and YAML
+  block scalars (`key: |`, `key: >`) mask the indented
+  body lines that used to ship the secret (devin-state#92).
 - `np` is no longer a hardcoded `numpy` owner — `api_key: np.ndarray`
   only suppresses when `import numpy as np` actually appears in the
   text; every other alias keeps resolving from real imports

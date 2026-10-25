@@ -736,6 +736,41 @@ def test_annotated_default_keeps_literal_shape():
         ast.parse(new)
 
 
+def test_prefixed_literal_assignment_keeps_prefix():
+    """``api_key = b"hunter2"`` lands on the bare arm (the quote is
+    not at value start), so the rewrite must still re-emit the
+    literal prefix — a bare ``<tag>`` would not parse and a plain
+    quoted tag would silently change bytes to str."""
+    for prefix in ("b", "rb", "f", "u"):
+        src = f'api_key = {prefix}"hunter2"\n'
+        new, _ = redact_text(src, file="m.py")
+        assert f'{prefix}"<REDACTED:' in new, (src, new)
+        assert "hunter2" not in new
+        ast.parse(new)
+        # Untyped text gets the same quoting care — a pasted snippet
+        # has no filename but the output should still parse.
+        new2, _ = redact_text(src)
+        assert f'{prefix}"<REDACTED:' in new2
+        ast.parse(new2)
+
+
+def test_yaml_block_scalar_value_masked():
+    """``api_key: |`` / ``key: >`` put the secret on the following
+    indented lines — masking only the indicator ships the value."""
+    src = "api_key: |\n  hunter2secret\n  moresecret\nnext: v\n"
+    findings = scan_text(src, file="c.yaml", location="text")
+    env = [f for f in findings if f["category"] == "env_assignment"]
+    assert len(env) == 1, findings
+    new, _ = redact_text(src, file="c.yaml")
+    assert "hunter2secret" not in new and "moresecret" not in new
+    assert "next: v" in new
+    # A ``|`` with no indented body falls back to the bare arm —
+    # the next mapping key must survive untouched.
+    src2 = "api_key: |\nother: v\n"
+    new2, _ = redact_text(src2, file="c.yaml")
+    assert "other: v" in new2
+
+
 def test_bindings_do_not_apply_inside_strings():
     """A ``name: value`` inside a triple-quoted string is string
     content, not annotation position — import bindings cannot excuse
