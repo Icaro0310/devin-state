@@ -151,7 +151,12 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
         # second property intact. A bare value still runs to end of
         # line, keeping `# comments` and shell tails redacted-in-line.
         _rx(
-            r"(?m)^[\s\ufeff]*(?:export\s+)?"
+            r"(?m)^[\s\ufeff]*"
+            # Shell declaration prefixes — ``export``/``local``/
+            # ``readonly``/``typeset``/``env`` and flag-taking
+            # ``declare -x`` — bind the same secret.
+            r"(?:(?:export|local|readonly|typeset|env|declare)\s+"
+            r"(?:-\w+\s+)*)?"
             # The name can hide behind a receiver — ``cfg.api_key``,
             # ``self.api_key``, ``config["api_key"]``: a hardcoded
             # secret is the same wherever it is bound.

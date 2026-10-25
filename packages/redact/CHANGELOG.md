@@ -157,6 +157,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `setdefault("api_key", "x")` bind literals the same way; the
   rewrite keeps the call parseable and comparisons
   (`api_key=="x"`) stay out (devin-state#92).
+- Shell declaration prefixes beyond `export` now flag —
+  `declare -x`, `local`, `readonly`, `typeset`, and `env`
+  prefix assignments bind the same secret (devin-state#92).
 - `np` is no longer a hardcoded `numpy` owner — `api_key: np.ndarray`
   only suppresses when `import numpy as np` actually appears in the
   text; every other alias keeps resolving from real imports

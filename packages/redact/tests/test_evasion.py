@@ -782,6 +782,24 @@ def test_unclosed_parenthesized_import_still_scans():
     assert any(f["category"] == "env_assignment" for f in findings)
 
 
+def test_shell_builtin_declarations_flag():
+    """``declare -x``/``readonly``/``local``/``typeset``/``env``
+    prefix assignments bind the same secret ``export`` did."""
+    for src in (
+        'declare -x API_KEY=hunter2secret\n',
+        'declare -r -x API_KEY="hunter2"\n',
+        'readonly API_KEY=hunter2secret\n',
+        'local api_key=hunter2secret\n',
+        'typeset API_KEY=hunter2secret\n',
+        'env API_KEY=hunter2secret\n',
+    ):
+        findings = scan_text(src, file="x.sh", location="text")
+        env = [f for f in findings if f["category"] == "env_assignment"]
+        assert len(env) == 1, (src, findings)
+        new, _ = redact_text(src, file="x.sh")
+        assert "hunter2" not in new, (src, new)
+
+
 def test_call_bound_secrets_flag():
     """``f(api_key="x")`` / ``cfg.setdefault("api_key", "x")``:
     a credential name bound to a literal inside a call is the
