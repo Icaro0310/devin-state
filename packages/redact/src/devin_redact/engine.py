@@ -189,6 +189,7 @@ _ASSIGN_NAME_RE = re.compile(
     r"(?m)^\s*(?:([A-Za-z_]\w*)\s*[-+*/%&|^@<>]{0,2}=(?!=)"
     r"|for\s+([A-Za-z_]\w*)\s+in\b"
     r"|(?:def|class)\s+([A-Za-z_]\w*)\s*[(:]"
+    r"|(?:with|except)\b[^\n]*?\bas\s+([A-Za-z_]\w*)"
     r"|del\s+([A-Za-z_]\w*)\b)"
 )
 _TRIPLE_QUOTE_RE = re.compile(r"('''|\"\"\")")

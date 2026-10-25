@@ -763,7 +763,9 @@ def test_alias_rebound_by_for_def_del_binds_nothing():
     """``for n in``, ``def n``, ``class n`` and ``del n`` all rebind
     the name — a credential under the alias still flags."""
     for rebind in ("for n in xs:\n    pass", "def n():\n    pass",
-                   "class n:\n    pass", "del n"):
+                   "class n:\n    pass", "del n",
+                   "with open(f) as n:\n    pass",
+                   "except ValueError as n:\n    pass"):
         src = f"import numpy as n\n{rebind}\napi_key: n.ndarray\n"
         findings = scan_text(src, file="m.py", location="text")
         assert any(
