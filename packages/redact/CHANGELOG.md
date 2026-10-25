@@ -131,6 +131,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   flags, and an `import` line inside one binds nothing, so a
   docstring cannot launder a credential through a wildcard or
   relative import (devin-state#92).
+- A rebound import alias binds nothing — `import numpy as n`
+  followed by `n = "x"` leaves `n.ndarray` a plain attribute read
+  under a credential keyword, so it flags (devin-state#92).
 - The parenthesized-import matcher is per-character now — an
   unclosed `from x import (` scans linearly instead of
   exponentially partitioning the file (ReDoS; devin-state#92).

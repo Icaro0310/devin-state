@@ -181,6 +181,9 @@ _FROM_IMPORT_PAREN_RE = re.compile(
     r"(?m)^\s*from\s+(\.*[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s+import\s*\(((?:[^)#]|#[^\n]*)*)\)"
 )
 _COMMENT_RE = re.compile(r"#[^\n]*")
+_ASSIGN_NAME_RE = re.compile(
+    r"(?m)^\s*([A-Za-z_]\w*)\s*[-+*/%&|^@<>]{0,2}=(?!=)"
+)
 _TRIPLE_QUOTE_RE = re.compile(r"('''|\"\"\")")
 
 
@@ -290,6 +293,18 @@ def _import_aliases(
         if strings and _inside_spans(strings, m.start()):
             continue
         _bind(m.group(1).lstrip("."), _COMMENT_RE.sub("", m.group(2)))
+    # A name rebound by assignment is no longer the import —
+    # ``import numpy as n`` followed by ``n = "x"`` makes ``n.ndarray``
+    # a plain attribute read again. Dropping the binding is the
+    # fail-closed direction: a stray assignment costs one suppressed
+    # annotation, a kept one can hide a credential (devin-state#92).
+    rebound = {
+        m.group(1)
+        for m in _ASSIGN_NAME_RE.finditer(text)
+        if not strings or not _inside_spans(strings, m.start())
+    }
+    for name in rebound:
+        aliases.pop(name, None)
     return aliases, stars
 
 
