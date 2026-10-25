@@ -649,6 +649,38 @@ def test_lowercase_type_terminal_needs_owning_namespace():
     assert report["publication_status"] == "BLOCKED"
 
 
+def test_import_aliased_type_annotations_suppressed():
+    """``import numpy as n`` binds ``n`` in this file — ``n.ndarray``
+    is the same annotation as ``numpy.ndarray``. Aliases are resolved
+    from the text itself, not a static list, and ``from X import Y``
+    binds bare names the same way."""
+    src = (
+        "import numpy as n\n"
+        "from collections import deque\n"
+        "from weakref import proxy\n"
+        "weights: n.ndarray\n"
+        "pending: deque\n"
+        "handle: proxy\n"
+    )
+    findings = scan_text(src, file="model.py", location="text")
+    assert not [
+        f for f in findings if f["category"] == "env_assignment"
+    ], findings
+    new, _ = redact_text(src)
+    assert "<REDACTED:" not in new
+
+
+def test_unbound_alias_still_flags():
+    """Without the import line there is no binding — ``n.ndarray`` is
+    just a dotted scalar under a credential keyword and must flag."""
+    findings = scan_text("api_key: n.ndarray\n", file="x", location="text")
+    assert any(f["category"] == "env_assignment" for f in findings)
+    findings = scan_text(
+        "password: n.proxy\n", file="creds.env", location="text"
+    )
+    assert any(f["category"] == "env_assignment" for f in findings)
+
+
 def test_complete_pem_reported_once_not_twice():
     """A complete PEM block matched both ``pem_private_key`` and
     ``pem_private_key_unterminated`` (a strict prefix) — one key, two

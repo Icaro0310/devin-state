@@ -160,19 +160,68 @@ _LOWER_DOTTED_TYPES = {
 }
 
 
-def _dotted_terminal_is_type(path: str) -> bool:
+# ``import numpy as n`` binds ``n`` to the module; ``from collections
+# import deque`` binds ``deque`` to ``collections.deque``. Both shapes
+# appear in annotations, so alias binding is resolved from the text
+# itself rather than a static alias list — an arbitrary alias can
+# never be enumerated, and guessing one re-opens the credential
+# bypass (``password: n.proxy`` in a file with no imports still
+# flags).
+_IMPORT_RE = re.compile(r"(?m)^\s*import\s+([^#\n]+)")
+_FROM_IMPORT_RE = re.compile(
+    r"(?m)^\s*from\s+([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s+import\s+([^#\n]+)"
+)
+_NAME_RE = re.compile(r"[A-Za-z_]\w*")
+
+
+def _import_aliases(text: str) -> dict[str, str]:
+    """Map bound names to their module path for this text.
+
+    ``import numpy.linalg as la`` -> ``la: numpy.linalg``;
+    ``from collections import deque as dq`` -> ``dq:
+    collections.deque``. Only top-level ``import``/``from ... import``
+    statements bind names — a file with no imports maps nothing, so
+    credential-shaped dotted scalars still flag there.
+    """
+    aliases: dict[str, str] = {}
+    for m in _IMPORT_RE.finditer(text):
+        for part in m.group(1).split(","):
+            name, sep, alias = part.partition(" as ")
+            if sep and _NAME_RE.fullmatch(alias.strip()):
+                if _NAME_RE.fullmatch(name.strip().split(".", 1)[0]):
+                    aliases[alias.strip()] = name.strip()
+    for m in _FROM_IMPORT_RE.finditer(text):
+        mod = m.group(1)
+        for part in m.group(2).split(","):
+            part = part.strip().strip("()")
+            name, sep, alias = part.partition(" as ")
+            name = name.strip()
+            bound = alias.strip() if sep else name
+            if _NAME_RE.fullmatch(name) and _NAME_RE.fullmatch(bound):
+                aliases[bound] = f"{mod}.{name}"
+    return aliases
+
+
+def _dotted_terminal_is_type(
+    path: str, aliases: dict[str, str] | None = None
+) -> bool:
     """Is the last segment of a dotted path a plausible type name —
     builtin/typing (``datetime.datetime``), CapWords class
     (``pathlib.Path``, ``models.User``) or a lowercase type name in its
-    owning namespace (``numpy.ndarray``, ``weakref.proxy``)?"""
+    owning namespace (``numpy.ndarray``, ``weakref.proxy``, or an
+    import alias of one like ``n.ndarray``)?"""
     head, _, last = path.rpartition(".")
     if last in _TYPE_NAMES or last[:1].isupper():
         return True
     first = head.split(".", 1)[0]
+    if aliases:
+        first = aliases.get(first, first).split(".", 1)[0]
     return last in _LOWER_DOTTED_TYPES.get(first, ())
 
 
-def _looks_like_type_annotation(rhs: str) -> bool:
+def _looks_like_type_annotation(
+    rhs: str, aliases: dict[str, str] | None = None
+) -> bool:
     """True when ``rhs`` is a bare type expression, not a secret value.
 
     ``api_key: str`` and ``token: Optional[str]`` are source-language
@@ -201,7 +250,7 @@ def _looks_like_type_annotation(rhs: str) -> bool:
         # subscript (``list[abc.def]``), so every dotted path in the
         # expression must still terminate in a type-like name.
         return all(
-            _dotted_terminal_is_type(m.group(0))
+            _dotted_terminal_is_type(m.group(0), aliases)
             for m in _DOTTED_PATH_RE.finditer(v)
         )
     if "." in v:
@@ -210,8 +259,12 @@ def _looks_like_type_annotation(rhs: str) -> bool:
         # whose terminal segment reads like a type name.
         return (
             _DOTTED_PATH_RE.fullmatch(v) is not None
-            and _dotted_terminal_is_type(v)
+            and _dotted_terminal_is_type(v, aliases)
         )
+    if aliases and v in aliases:
+        # ``from collections import deque`` binds a bare name — it is
+        # an annotation only if the bound path is a type.
+        return _dotted_terminal_is_type(aliases[v], aliases)
     return v in _TYPE_NAMES
 
 
@@ -243,7 +296,9 @@ def _literal_string_value(rhs: str) -> bool:
     )
 
 
-def _looks_like_code_assignment(whole: str) -> bool:
+def _looks_like_code_assignment(
+    whole: str, aliases: dict[str, str] | None = None
+) -> bool:
     """False-positive guard for ``env_assignment`` matches.
 
     The pattern anchors on names containing KEY/SECRET/TOKEN/etc., which
@@ -270,7 +325,7 @@ def _looks_like_code_assignment(whole: str) -> bool:
     if sep is None:
         return False
     rhs = whole[sep.end() :]
-    if _looks_like_type_annotation(rhs):
+    if _looks_like_type_annotation(rhs, aliases):
         return True
     if not _CODE_VALUE_RE.match(rhs):
         return False
@@ -416,6 +471,7 @@ def _iter_fragment_matches(
     hi: int,
     env: bool,
     value_start: int,
+    aliases: dict[str, str] | None = None,
 ):
     """Yield ``rx`` matches inside ``text[lo:hi]`` shifted by ``lo``.
 
@@ -442,7 +498,7 @@ def _iter_fragment_matches(
             # never re-processed, same as the whole-match rule.
             continue
         if env:
-            if _looks_like_code_assignment(whole):
+            if _looks_like_code_assignment(whole, aliases):
                 continue
             start, end = lo + m.start(), lo + m.end()
             if not (
@@ -459,6 +515,7 @@ def _iter_tag_gap(
     m: re.Match[str],
     env: bool,
     index: int = 0,
+    aliases: dict[str, str] | None = None,
 ):
     """Yield ``rx`` matches inside the tag-free fragments of ``m``.
 
@@ -490,13 +547,18 @@ def _iter_tag_gap(
         value_start = m.start()
     pos = m.start()
     for tag in tags:
-        yield from _iter_fragment_matches(scan_rx, text, pos, tag.start(), env, value_start)
+        yield from _iter_fragment_matches(
+            scan_rx, text, pos, tag.start(), env, value_start, aliases
+        )
         pos = tag.end()
-    yield from _iter_fragment_matches(scan_rx, text, pos, m.end(), env, value_start)
+    yield from _iter_fragment_matches(
+        scan_rx, text, pos, m.end(), env, value_start, aliases
+    )
 
 
 def _iter_matches(text: str):
     """Yield ``(category, pattern_name, match)`` for every pattern hit."""
+    aliases = _import_aliases(text)
     for category, regexes in PATTERNS.items():
         env = category == "env_assignment"
         for index, rx in enumerate(regexes):
@@ -505,10 +567,12 @@ def _iter_matches(text: str):
                     # Prior redaction output — re-scan only the tag-free
                     # fragments; the env code guard and the enclosure
                     # check apply per fragment there.
-                    for fm in _iter_tag_gap(rx, text, m, env, index):
+                    for fm in _iter_tag_gap(rx, text, m, env, index, aliases):
                         yield category, pattern_name(category, index), fm
                     continue
-                if env and _looks_like_code_assignment(m.group(0)):
+                if env and _looks_like_code_assignment(
+                    m.group(0), aliases
+                ):
                     continue
                 yield category, pattern_name(category, index), m
 

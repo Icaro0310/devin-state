@@ -107,6 +107,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   namespace that owns them — `weakref.proxy` is an annotation while
   `password: customer.proxy` still flags and blocks the gate
   (devin-state#92).
+- Import aliases are resolved from the scanned text itself —
+  `import numpy as n` makes `n.ndarray` an annotation and
+  `from collections import deque` binds the bare name, while an
+  unbound alias (`api_key: n.ndarray` with no import) still flags
+  (devin-state#92).
 - A complete PEM block is reported once, not once per matching
   pattern — `scan_text` dedupes overlapping findings so one key no
   longer inflates the count (devin-state#92).
