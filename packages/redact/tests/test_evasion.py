@@ -782,6 +782,23 @@ def test_unclosed_parenthesized_import_still_scans():
     assert any(f["category"] == "env_assignment" for f in findings)
 
 
+def test_parenthesized_literal_across_lines_flags():
+    """``key = (\\n "x"\\n)`` wraps a hardcoded secret — the value
+    must flag and the rewrite must stay parseable, with or without
+    an annotation head."""
+    for src in (
+        'api_key = (\n    "hunter2"\n)\n',
+        'api_key: str = (\n    "hunter2"\n)\n',
+    ):
+        findings = scan_text(src, file="m.py", location="text")
+        assert any(
+            f["category"] == "env_assignment" for f in findings
+        ), src
+        new, _ = redact_text(src, file="m.py")
+        assert "hunter2" not in new
+        ast.parse(new)
+
+
 def test_env_redaction_preserves_separator_whitespace():
     """``key: v`` must stay a mapping — dropping the space turns the
     line into a YAML scalar. ``KEY=v`` has no space to keep."""

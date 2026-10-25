@@ -153,7 +153,20 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
         _rx(
             r"(?m)^[\s\ufeff]*(?:export\s+)?[\"']?" + ENV_NAME_PATTERN +
             r"[\"']?\s*[:=]\s*(?:"
+            # An annotation head first — ``name: T = value``: the
+            # ``T`` and its ``=`` belong to the match so a literal
+            # default on a later line stays inside the span.
+            r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*\s*=\s*)?"
+            # A parenthesized literal — ``key = ("x")``, possibly
+            # wrapped across lines — needs its closer in the match:
+            # ``("x", "y")`` must fall through to the bare arm so a
+            # second secret in the tuple is never left behind.
+            r"(?:\(\s*"
             r"(?:\"(?:\\.|[^\"\\\r\n])*?\""
+            r"|'(?:\\.|[^'\\\r\n])*?'"
+            r"|`(?:\\.|[^`\\\r\n])*?`)"
+            r"\s*\)(?=[ \t]*[,}\]]|[ \t]*$)"
+            r"|(?:\"(?:\\.|[^\"\\\r\n])*?\""
             r"|'(?:\\.|[^'\\\r\n])*?'"
             r"|`(?:\\.|[^`\\\r\n])*?`)"
             r"(?=[ \t]*[,}\]]|[ \t]*$)"
