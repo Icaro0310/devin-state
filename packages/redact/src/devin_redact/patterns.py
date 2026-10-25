@@ -142,19 +142,41 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
     "env_assignment": [
         # KEY=value / KEY: value assignments for sensitive-looking
         # variable names — `.env` lines, shell exports, YAML/dict
-        # entries, quoted or bare names. See ENV_NAME_PATTERN.
+        # entries, quoted or bare names. See ENV_NAME_PATTERN. A leading
+        # BOM char (\ufeff, kept in decoded UTF-16 text) is allowed at
+        # line start so BOM-marked exports still match on line 1.
+        # A *quoted* value is bounded at its closing quote when a JSON
+        # continuation (`,`/`}`/`]`) or the line end follows —
+        # `"api_key":"v","enabled":true` masks only `v` and leaves the
+        # second property intact. A bare value still runs to end of
+        # line, keeping `# comments` and shell tails redacted-in-line.
         _rx(
-            r"(?m)^\s*(?:export\s+)?[\"']?" + ENV_NAME_PATTERN +
-            r"[\"']?\s*[:=]\s*\S[^\n]*"
+            r"(?m)^[\s\ufeff]*(?:export\s+)?[\"']?" + ENV_NAME_PATTERN +
+            r"[\"']?\s*[:=]\s*(?:"
+            r"(?:\"(?:\\.|[^\"\\\r\n])*?\""
+            r"|'(?:\\.|[^'\\\r\n])*?'"
+            r"|`(?:\\.|[^`\\\r\n])*?`)"
+            r"(?=[ \t]*[,}\]]|[ \t]*$)"
+            r"|\S[^\n]*"
+            r")"
         ),
         # JSON/dict entries anywhere on a line — `"token": "..."`,
         # `'api_key': '...'`, `{apiKey: `...`}` — including
-        # JSON-escaped `\"token\":\"...\"` (optional backslash before
-        # each quote). The value must be a quoted string: an unquoted
-        # value mid-line is prose, not an assignment.
+        # JSON-escaped `\"token\":\"...\"`. The value must be a quoted
+        # string: an unquoted value mid-line is prose, not an
+        # assignment. Each quote kind gets its own alternative with an
+        # escape-aware body (`\\.` is a value char, never a closer):
+        # `\'` inside a `"`-quoted value and `\"` escapes can no longer
+        # end the match early and leak the value's tail.
         _rx(
             r"(?<![\w'\"])\\?[\"']?" + ENV_NAME_PATTERN +
-            r"\\?[\"']?\s*:\s*\\?[\"'`][^\"'`\r\n]*?\\?[\"'`]"
+            r"\\?[\"']?\s*:\s*(?:"
+            r"\"(?:\\.|[^\"\\\r\n])*?\""
+            r"|'(?:\\.|[^'\\\r\n])*?'"
+            r"|`(?:\\.|[^`\\\r\n])*?`"
+            r"|\\\"(?:\\.|[^\"\\\r\n\\])*?\\\""
+            r"|\\'(?:\\.|[^'\\\r\n\\])*?\\'"
+            r")"
         ),
     ],
     "connection_uri": [
@@ -260,7 +282,13 @@ def pattern_name(category: str, index: int) -> str:
 
 
 def sensitive_match(match: re.Match[str]) -> str:
-    """Return the sensitive value of a regex match (group 1 if present)."""
+    """Return the sensitive value of a regex match (group 1 if present).
+
+    A leading ``\\ufeff`` is stripped: BOM-marked decodes keep the mark
+    in the text (so re-encoding stays byte-identical), but it is not
+    secret material — the same ``KEY=value`` must fingerprint alike in
+    UTF-8 and BOM'd UTF-16 files.
+    """
     if match.lastindex:
-        return match.group(1)
-    return match.group(0)
+        return match.group(1).lstrip("\ufeff")
+    return match.group(0).lstrip("\ufeff")

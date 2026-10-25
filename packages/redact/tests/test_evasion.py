@@ -190,7 +190,10 @@ def test_env_assignment_evasion_shapes(text):
 
 def test_env_colon_redact_keeps_name_prefix():
     new, _ = redact_text('"api_key": "hunter2fake"\n')
-    assert new.startswith('"api_key":<REDACTED:')
+    # The value was quoted, so the tag stays quoted — the redacted pair
+    # is still valid JSON/YAML (`"api_key": "<REDACTED:…>"`).
+    assert new.startswith('"api_key": "<REDACTED:')
+    assert new.rstrip().endswith('>"')
 
 
 def test_env_code_names_stay_unflagged():
@@ -462,3 +465,223 @@ def test_index_entry_outside_export_dir_warns(tmp_path):
     )
     report = publish.verify_publish(out, verdicts_dir=tmp_path / "none")
     assert any("outside the export dir" in w for w in report["warnings"])
+
+
+# ---------------------------------------------------------------------
+# Devin Review round 2/3 — redaction fidelity + fail-closed gaps
+# ---------------------------------------------------------------------
+
+def test_redacted_json_pair_stays_valid_json():
+    """``{"api_key":"hunter2","enabled":true}`` used to redact to an
+    *unquoted* ``<REDACTED:…>`` — unparseable JSON. A quoted value keeps
+    its enclosing quotes now."""
+    import json
+
+    new, _ = redact_text('{"api_key":"hunter2","enabled":true}')
+    obj = json.loads(new)
+    assert str(obj["api_key"]).startswith("<REDACTED:")
+    assert obj["enabled"] is True
+
+
+def test_line_start_json_pair_does_not_eat_later_properties():
+    """At line start the anchored pattern swallowed the rest of the
+    line — `,"enabled":true` was deleted wholesale. A quoted value is
+    bounded at its closing quote at JSON continuations."""
+    new, _ = redact_text('"api_key":"hunter2","enabled":true\n')
+    assert '"enabled":true' in new
+    assert '"api_key":"<REDACTED:' in new
+    assert "hunter2" not in new
+
+
+def test_single_quoted_dict_pair_keeps_quotes():
+    new, _ = redact_text("cfg = {'secret_key': 'hunter2fake'}\n")
+    assert "hunter2fake" not in new
+    assert "'secret_key': '<REDACTED:" in new
+
+
+def test_escaped_quote_inside_value_fully_redacted():
+    """``"token": "abc\\"def"`` — the value matcher stopped at the
+    escaped quote and left the suffix raw. ``\\`` escapes now count as
+    value chars, so the whole value is masked and the doc stays JSON."""
+    import json
+
+    new, _ = redact_text('{"token": "abc\\"defsecret"}')
+    assert "defsecret" not in new
+    assert str(json.loads(new)["token"]).startswith("<REDACTED:")
+
+
+def test_quote_inside_other_quote_value_fully_redacted():
+    """A ``'`` inside a ``"``-quoted value (legal JSON) must not close
+    the match early — ``"it's …"`` is one string, not ``'`` ending it."""
+    new, _ = redact_text('{"token": "it\'s a secret"}')
+    assert "a secret" not in new
+
+
+def test_equals_inside_quoted_value_still_detected():
+    """``"api_key": "hello=fetch()"`` — the code-assignment guard found
+    the ``=`` *inside* the quoted value and suppressed the finding as a
+    call expression. The separator is the first ``:``/``=`` — quoted
+    value text is never separator context."""
+    findings = scan_text(
+        '"api_key": "hello=fetch()"\n', file="x", location="text"
+    )
+    assert any(f["category"] == "env_assignment" for f in findings)
+    new, _ = redact_text('"api_key": "hello=fetch()"\n')
+    assert "hello=fetch()" not in new
+
+
+def test_type_annotations_not_flagged_or_redacted():
+    """``api_key: str`` / ``token: Optional[str]`` are Python type
+    annotations, not secret assignments — flagging them corrupts source
+    on redact. Bare type expressions stay unflagged; real scalars flag."""
+    src = (
+        "class Settings:\n"
+        "    api_key: str\n"
+        "    token: Optional[str]\n"
+        "    secret: list[str]\n"
+    )
+    findings = scan_text(src, file="settings.py", location="text")
+    assert not [
+        f for f in findings if f["category"] == "env_assignment"
+    ], findings
+    new, _ = redact_text(src)
+    assert "api_key: str" in new
+    assert "Optional[str]" in new
+    assert "<REDACTED:" not in new
+
+
+def test_yaml_scalar_and_quoted_type_names_still_flagged():
+    """The annotation guard must not open a hole: a bare scalar value
+    (``hunter2``) and a *quoted* type name (``"str"`` is a real string
+    value in YAML/JSON) still flag."""
+    for text in ("api_key: hunter2fake\n", 'api_key: "str"\n'):
+        findings = scan_text(text, file="x", location="text")
+        assert any(
+            f["category"] == "env_assignment" for f in findings
+        ), text
+
+
+def test_complete_pem_reported_once_not_twice():
+    """A complete PEM block matched both ``pem_private_key`` and
+    ``pem_private_key_unterminated`` (a strict prefix) — one key, two
+    findings. Span-overlap dedupe keeps the complete match only."""
+    pem = (
+        "-----BEGIN RSA PRIVATE " + "KEY-----\n"
+        "MIIBOgIBAAJBAKj34GkxFhD90vcNLYLInFEX6Ppy1tPf9Cnzj4p4WGeKLs1Pt8Qu\n"
+        "b3BlbnNzaC1rZXktdjEAAAAABG5vbmUFBws=\n"
+        "-----END RSA PRIVATE " + "KEY-----"
+    )
+    hits = [
+        f
+        for f in scan_text(pem, file="x", location="text")
+        if f["category"] == "private_key"
+    ]
+    assert len(hits) == 1
+    assert hits[0]["pattern"] == "pem_private_key"
+
+
+def test_malformed_staged_text_scanned_not_skipped():
+    """A staged ``.env`` blob holding a credential + one invalid UTF-8
+    byte decoded to ``None`` → ``skipped: binary`` → gate CLEAN. The
+    surrogateescape fallback decodes the good bytes so the printable
+    projection still scans them."""
+    blob = b"API_KEY=" + AWS.encode() + b"\nnote\xffhere\n"
+    report = engine.scan_blobs([("s.env", blob)])
+    assert report["publication_status"] == "BLOCKED"
+
+
+def test_undecodable_text_named_blob_still_scanned():
+    """Bytes no decoder accepts (dense non-printables) but a
+    text-marked name (``.env``): the gate cannot vouch for them —
+    surrogateescape + projection scans the ASCII region anyway."""
+    blob = (
+        b"\x00\x01\x02\x03API_KEY=" + AWS.encode()
+        + bytes(range(200, 256)) * 30
+    )
+    report = engine.scan_blobs([("s.env", blob)])
+    assert report["publication_status"] == "BLOCKED"
+    # and a clean but undecodable text-marked blob is scanned, not
+    # silently skipped
+    clean = engine.scan_blobs(
+        [("s.env", b"\x00\x01\x02" + bytes(range(200, 256)) * 30)]
+    )
+    assert clean["publication_status"] == "CLEAN"
+
+
+def test_utf16_sniff_boundary_surrogate_pair_scanned():
+    """A BOM-less UTF-16 file whose surrogate pair crosses byte 8192
+    made the head sniff undecodable → ``_blob_kind`` said binary → a
+    later ``API_KEY=`` reached the gate as CLEAN. A truncated trailing
+    code point is tolerated for the sniff."""
+    text = "x" * 4095 + "\U0001F600" + " tail API_KEY=" + AWS + "\n"
+    blob = text.encode("utf-16-le")
+    assert engine._blob_kind("f.txt", blob) == "text"
+    report = engine.scan_blobs([("f.txt", blob)])
+    assert report["publication_status"] == "BLOCKED"
+
+
+def test_utf16be_apply_preserves_byte_order(tmp_path):
+    """A ``FE FF`` BOM used to decode as generic ``utf-16`` and rewrite
+    in native (little-endian) order. The endian-specific codec keeps
+    both the BOM and the source byte order."""
+    p = tmp_path / "env16.env"
+    p.write_bytes(
+        b"\xfe\xff" + ("API_KEY=" + AWS + "\n").encode("utf-16-be")
+    )
+    result = devin_redact.redact(
+        [p], apply=True, confirm_irreversible=True
+    )
+    assert result["applied_ok"] is True
+    data = p.read_bytes()
+    assert data[:2] == b"\xfe\xff"
+    text = data.decode("utf-16-be")
+    assert AWS not in text
+    assert "<REDACTED:" in text
+
+
+def test_utf16le_apply_still_preserves_byte_order(tmp_path):
+    p = tmp_path / "env16.env"
+    p.write_bytes(("API_KEY=" + AWS + "\n").encode("utf-16"))
+    result = devin_redact.redact(
+        [p], apply=True, confirm_irreversible=True
+    )
+    assert result["applied_ok"] is True
+    data = p.read_bytes()
+    assert data[:2] == b"\xff\xfe"
+    text = data.decode("utf-16")
+    assert AWS not in text
+
+
+def test_json_key_secret_redacted_on_apply(tmp_path):
+    """A credential used as a JSON *key* inside a DB cell is detected
+    by ``_key_strings`` — but ``_redact_leaves`` used to rewrite only
+    values, so the key shipped anyway. Flagged keys are rewritten to
+    their tag now."""
+    import json
+
+    db = tmp_path / "sessions.db"
+    con = sqlite3.connect(db)
+    con.executescript(SCHEMA)
+    payload = json.dumps({GHP: "enabled"})
+    con.execute(
+        "INSERT INTO tool_call_state VALUES (?,?,?,?)",
+        ("s1", "tc-1", None, payload),
+    )
+    con.commit()
+    con.close()
+
+    report = devin_redact.scan([db])
+    assert report["publication_status"] == "BLOCKED"
+
+    result = devin_redact.redact(
+        [db], apply=True, confirm_irreversible=True
+    )
+    assert result["applied_ok"] is True
+    con = sqlite3.connect(db)
+    (val,) = con.execute(
+        "SELECT tool_call_update_json FROM tool_call_state"
+    ).fetchone()
+    con.close()
+    assert GHP not in val
+    keys = list(json.loads(val))
+    assert any(k.startswith("<REDACTED:") for k in keys)

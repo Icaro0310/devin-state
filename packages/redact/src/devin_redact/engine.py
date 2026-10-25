@@ -45,6 +45,37 @@ _REDACTED_TAG = "<REDACTED:"
 _SEMANTIC_CATEGORY = "sensitive_tool_output"
 _BLOCKING_CATEGORIES = SECRET_CATEGORIES | {_SEMANTIC_CATEGORY}
 
+# Names that mark content as text even when no codec accepts it —
+# a staged ``.env`` or ``config.yaml`` whose bytes fail every decode is
+# scanned lossy (surrogateescape + printable projection), never skipped
+# silently: the gate cannot vouch for bytes it did not read.
+_TEXT_SUFFIXES = {
+    ".env", ".txt", ".md", ".markdown", ".rst", ".log",
+    ".json", ".jsonl", ".yaml", ".yml", ".toml", ".ini", ".cfg",
+    ".conf", ".config", ".properties", ".xml", ".csv", ".tsv",
+    ".py", ".pyi", ".js", ".jsx", ".ts", ".tsx", ".sh", ".bash",
+    ".zsh", ".fish", ".ps1", ".bat", ".cmd", ".rb", ".go", ".rs",
+    ".java", ".kt", ".c", ".h", ".cpp", ".hpp", ".cs", ".php",
+    ".pl", ".lua", ".sql", ".html", ".htm", ".css", ".tf",
+    ".pem", ".key", ".crt", ".cer", ".pub", ".asc",
+}
+_TEXT_BASENAMES = {
+    ".env", ".envrc", ".netrc", ".npmrc", ".pypirc", ".gitconfig",
+    ".git-credentials", ".htpasswd", ".pgpass", "dockerfile",
+    "makefile", "gnumakefile", "id_rsa", "id_dsa", "id_ecdsa",
+    "id_ed25519", "credentials", "secrets",
+}
+
+
+def _text_marked(name: str) -> bool:
+    """Does this path's *name* mark it as text — a file the gate must
+    never skip silently? Suffix list plus well-known credential-ish
+    basenames (``.env*`` included — dotfiles carry no suffix)."""
+    base = PurePosixPath(str(name).replace("\\", "/")).name.lower()
+    if base in _TEXT_BASENAMES or base.startswith(".env"):
+        return True
+    return Path(base).suffix.lower() in _TEXT_SUFFIXES
+
 Finding = dict[str, object]
 
 
@@ -72,6 +103,56 @@ def _line_of(text: str, offset: int) -> int:
 _CODE_VALUE_RE = re.compile(
     r"^\s*(?:[(\[{]|[A-Za-z_][\w.]*\s*\(|lambda\b)"
 )
+
+# A bare type expression: dotted/subscripted atoms joined by ``|`` —
+# ``str``, ``Optional[str]``, ``typing.List[int]``, ``list[str] | None``.
+_TYPE_ATOM = (
+    r"[A-Za-z_][\w.]*"
+    r"(?:\[[^\[\]\n]*(?:\[[^\[\]\n]*\][^\[\]\n]*)*\])?"
+)
+_TYPE_EXPR_RE = re.compile(
+    _TYPE_ATOM + r"(?:\s*\|\s*" + _TYPE_ATOM + r")*"
+)
+# Builtin + typing names a bare annotation can resolve to. Lowercase
+# scalars that are not in this set (``hunter2``) stay flagged.
+_TYPE_NAMES = frozenset(
+    {
+        "str", "int", "float", "bool", "bytes", "bytearray", "complex",
+        "dict", "list", "set", "tuple", "frozenset", "type", "object",
+        "memoryview", "range", "slice", "None", "True", "False",
+        "Ellipsis", "NotImplemented", "Any", "Optional", "Union",
+        "Literal", "Annotated", "Callable", "ClassVar", "Final",
+        "Self", "Never", "NoReturn", "IO", "Text", "Pattern", "Match",
+        "Sequence", "Mapping", "Iterable", "Iterator", "Awaitable",
+        "Coroutine", "Generator", "ContextManager", "PathLike",
+        "date", "datetime", "time", "timedelta", "Decimal", "UUID",
+        "Path", "SecretStr",
+    }
+)
+
+
+def _looks_like_type_annotation(rhs: str) -> bool:
+    """True when ``rhs`` is a bare type expression, not a secret value.
+
+    ``api_key: str`` and ``token: Optional[str]`` are source-language
+    type annotations, but the colon pattern also fires on them —
+    flagging (and worse, redacting) the type corrupts the code. Only
+    shapes that can *only* name a type are suppressed: a subscripted
+    generic, a ``|`` union, a dotted path, a builtin/typing name, or an
+    annotation with a ``= default`` tail. A bare lowercase scalar
+    (``api_key: hunter2``) or any quoted value still flags — a quoted
+    ``"str"`` is a real string value in YAML/JSON, never an annotation.
+    """
+    v = rhs.strip()
+    if not v:
+        return False
+    v = v.split(" #", 1)[0].rstrip()   # trailing comment
+    v = v.split("=", 1)[0].rstrip()    # annotated default: ``x: T = ...``
+    if not v or not _TYPE_EXPR_RE.fullmatch(v):
+        return False
+    if "[" in v or "|" in v or "." in v:
+        return True                  # generic / union / dotted type
+    return v in _TYPE_NAMES
 
 
 def _literal_string_value(rhs: str) -> bool:
@@ -117,11 +198,20 @@ def _looks_like_code_assignment(whole: str) -> bool:
     parses to a plain string/bytes literal — the only shape that can
     hold a real hardcoded secret — is flagged even inside parentheses
     (``PASSWORD = ("hunter2")``): parens group but do not contain.
+
+    The separator is the FIRST ``:``/``=`` in the match — variable
+    names can contain neither, so it is always the real assignment
+    point. Looking for ``=`` alone inspected text *inside* quoted
+    values: ``"api_key": "hello=fetch()"`` saw the ``=`` mid-string and
+    suppressed the pair as a call. Bare type expressions are suppressed
+    too (``api_key: str`` is an annotation, not a value).
     """
-    eq = whole.find("=")
-    if eq == -1:
+    sep = re.search(r"[:=]", whole)
+    if sep is None:
         return False
-    rhs = whole[eq + 1 :]
+    rhs = whole[sep.end() :]
+    if _looks_like_type_annotation(rhs):
+        return True
     if not _CODE_VALUE_RE.match(rhs):
         return False
     return not _literal_string_value(rhs)
@@ -140,8 +230,14 @@ _TAG_RUN = re.compile(r"<REDACTED:[^>\n]*>")
 # exactly at a key-led fragment start — leading whitespace stays inside
 # the match — and still finds each assignment later in the fragment.
 _ENV_FRAGMENT_RE = re.compile(
-    r"\s*(?<!\w)(?:export\s+)?[\"']?" + ENV_NAME_PATTERN +
-    r"[\"']?\s*[:=]\s*\S[^\n]*"
+    r"[\s\ufeff]*(?<!\w)(?:export\s+)?[\"']?" + ENV_NAME_PATTERN +
+    r"[\"']?\s*[:=]\s*(?:"
+    r"(?:\"(?:\\.|[^\"\\\r\n])*?\""
+    r"|'(?:\\.|[^'\\\r\n])*?'"
+    r"|`(?:\\.|[^`\\\r\n])*?`)"
+    r"(?=[ \t]*[,}\]]|[ \t]*$)"
+    r"|\S[^\n]*"
+    r")"
 )
 
 # Tag-gap rescan regex per env_assignment pattern index: the anchored
@@ -361,12 +457,26 @@ def scan_text(text: str, *, file: str, location: str) -> list[Finding]:
     """Apply every pattern to ``text`` and return findings (sorted, deduped)."""
     findings: list[Finding] = []
     seen: set[tuple[str, str, int]] = set()
+    spans: dict[str, list[tuple[int, int]]] = {}
     for category, name, m in _iter_matches(text):
         value = sensitive_match(m)
         key = (category, name, m.start(1) if m.lastindex else m.start())
         if key in seen:
             continue
         seen.add(key)
+        # A match strictly inside an earlier same-category match is the
+        # same secret in a shorter form: the unterminated-PEM pattern is
+        # a strict prefix of a complete block, so a terminated key must
+        # not count twice (the longer, complete match wins because it
+        # iterates first).
+        span = m.span(0)
+        bucket = spans.setdefault(category, [])
+        if any(
+            s <= span[0] and span[1] <= e and (s, e) != span
+            for s, e in bucket
+        ):
+            continue
+        bucket.append(span)
         line = _line_of(text, m.start())
         findings.append(
             {
@@ -400,7 +510,20 @@ def redact_text(text: str) -> tuple[str, list[dict]]:
             # neither, so the first separator char is the assignment.
             eq = re.search(r"[:=]", whole).start()
             start, end = m.span(0)
-            replacement = f"{whole[: eq + 1]}{_tag(value)}"
+            # A quoted value keeps its enclosing quotes — an unquoted
+            # tag in a string slot breaks JSON/Python structure
+            # (`"api_key":<REDACTED>` is invalid; `"api_key":"<tag>"`
+            # is not). ``qm`` captures the optional whitespace plus the
+            # (possibly ``\``-escaped) opening quote so the replacement
+            # re-emits the same quote token on both sides.
+            qm = re.match(r"\s*(\\?[\"'`])", whole[eq + 1 :])
+            if qm:
+                replacement = (
+                    whole[: eq + 1] + qm.group(0)
+                    + _tag(value) + qm.group(1)
+                )
+            else:
+                replacement = f"{whole[: eq + 1]}{_tag(value)}"
         else:
             start, end = m.span(1) if m.lastindex else m.span(0)
             replacement = _tag(value)
@@ -472,6 +595,24 @@ def _decode_file_bytes(raw: bytes) -> tuple[str, str] | None:
     old NUL-byte sniff classified as opaque binary and skipped entirely.
     Decoded UTF-16 must contain no NUL and be mostly printable, so real
     binaries still fail closed into ``skipped: binary file``.
+
+    Two refinements keep the sniff honest:
+
+    * BOM'd input decodes with the endian-specific codec and keeps the
+      ``\\ufeff`` char, so re-encoding via ``_apply_text`` re-emits the
+      original byte order — a ``FE FF`` big-endian export no longer
+      round-trips as ``FF FE``. The leading mark is ignored for the
+      NUL/printability gates and never lands in a fingerprint
+      (``sensitive_match`` strips it).
+    * A truncated final character (a sniff slice can cut a surrogate
+      pair at ``_BINARY_SNIFF_BYTES``) is dropped before judging — only
+      when the decode error reaches the very end of ``raw``.
+
+    Last resort: a lossy ``surrogateescape`` UTF-8 decode. Text with a
+    few invalid bytes — a staged ``.env`` holding a credential plus one
+    bad byte — still scans instead of skipping as opaque binary; dense
+    non-printable content keeps failing the printability gate and stays
+    binary.
     """
     try:
         text = raw.decode("utf-8")
@@ -481,8 +622,10 @@ def _decode_file_bytes(raw: bytes) -> tuple[str, str] | None:
         return text, "utf-8"
 
     enc: str | None = None
-    if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
-        enc = "utf-16"
+    if raw[:2] == b"\xff\xfe":
+        enc = "utf-16-le"
+    elif raw[:2] == b"\xfe\xff":
+        enc = "utf-16-be"
     elif b"\x00" in raw:
         head = raw[:_BINARY_SNIFF_BYTES]
         even_nuls = sum(
@@ -495,15 +638,29 @@ def _decode_file_bytes(raw: bytes) -> tuple[str, str] | None:
             enc = "utf-16-le"
         elif even_nuls >= max(3, odd_nuls * 3):
             enc = "utf-16-be"
-    if enc is None:
-        return None
-    try:
-        cand = raw.decode(enc)
-    except (UnicodeDecodeError, ValueError):
-        return None
-    if "\x00" in cand or not _mostly_printable(cand):
-        return None
-    return cand, enc
+    if enc is not None:
+        try:
+            cand = raw.decode(enc)
+        except UnicodeDecodeError as exc:
+            # Truncated tail only — an error reaching the end of ``raw``
+            # means the last code point is incomplete (sniff boundary).
+            cand = None
+            if exc.end >= len(raw):
+                try:
+                    cand = raw[: exc.start].decode(enc)
+                except (UnicodeDecodeError, ValueError):
+                    cand = None
+        except ValueError:
+            cand = None
+        if cand is not None:
+            check = cand.removeprefix("\ufeff")
+            if "\x00" not in check and _mostly_printable(check):
+                return cand, enc
+
+    text = raw.decode("utf-8", "surrogateescape")
+    if _mostly_printable(text):
+        return text, "utf-8"
+    return None
 
 
 # ANSI escape sequences are stripped as *units* before the per-char
@@ -557,6 +714,19 @@ def _scan_text_with_projection(
     return findings
 
 
+def _scan_lossy(raw: bytes, display: str) -> list[Finding]:
+    """Fail-closed scan for bytes no decoder accepts but whose name is
+    text-marked: decode with ``surrogateescape`` (keeps every byte) and
+    let the printable projection rejoin the ASCII regions — a
+    credential sitting beside undecodable noise can no longer ride a
+    ``skipped: binary`` verdict through the gate."""
+    return _scan_text_with_projection(
+        raw.decode("utf-8", "surrogateescape"),
+        file=display,
+        location="text",
+    )
+
+
 def _target_type(path: Path) -> str:
     """Dispatch a scan/redact target: ``"sqlite"``, ``"text"`` or ``"binary"``.
 
@@ -597,9 +767,9 @@ def _key_strings(obj) -> list[str]:
     """String dict *keys* of a JSON payload — a secret can sit in key
     position (``{"sk-…": "enabled"}``-style config maps). Keys are kept
     out of ``_leaf_strings`` because the chunked pass joins leaves back
-    together; they are scanned separately in :func:`_scan_cell` and are
-    detection-only (``_redact_leaves`` never rewrites a key — renaming
-    it would change the document's shape, not just mask it)."""
+    together; they are scanned separately in :func:`_scan_cell`, and
+    ``_redact_leaves`` rewrites a flagged key to its tag so detection
+    and redaction cover the same surface."""
     if isinstance(obj, dict):
         out: list[str] = []
         for k, v in obj.items():
@@ -613,7 +783,14 @@ def _key_strings(obj) -> list[str]:
 
 
 def _redact_leaves(obj) -> tuple[object, list[dict]]:
-    """Clone ``obj`` with every string leaf passed through redact_text."""
+    """Clone ``obj`` with every string leaf passed through redact_text.
+
+    A secret-shaped dict *key* is rewritten to its tag too — scan
+    reports it via ``_key_strings`` but the value-only rewrite used to
+    leave it shipping. The pair survives under the masked key so the
+    document's shape is preserved (``{"sk-…": "enabled"}`` →
+    ``{"<REDACTED:…>": "enabled"}``).
+    """
     edits: list[dict] = []
     if isinstance(obj, str):
         new, edits = redact_text(obj)
@@ -622,8 +799,13 @@ def _redact_leaves(obj) -> tuple[object, list[dict]]:
         out = {}
         for k, v in obj.items():
             nv, e = _redact_leaves(v)
-            out[k] = nv
             edits.extend(e)
+            if isinstance(k, str):
+                nk, ke = redact_text(k)
+                if ke:
+                    k = nk
+                    edits.extend(ke)
+            out[k] = nv
         return out, edits
     if isinstance(obj, list):
         out = []
@@ -1179,11 +1361,13 @@ def _scan_text_file(path: Path, display: str) -> tuple[list[Finding], str | None
     except OSError as exc:
         return [], f"read failed: {exc}"
     decoded = _decode_file_bytes(raw)
-    if decoded is None:
-        return [], "skipped: binary file"
-    return _scan_text_with_projection(
-        decoded[0], file=display, location="text"
-    ), None
+    if decoded is not None:
+        return _scan_text_with_projection(
+            decoded[0], file=display, location="text"
+        ), None
+    if _text_marked(path.name):
+        return _scan_lossy(raw, display), None
+    return [], "skipped: binary file"
 
 
 def _summarize(findings: list[Finding]) -> tuple[dict[str, int], int, str]:
@@ -1240,7 +1424,7 @@ def scan(paths) -> dict:
         kind = _target_type(f)
         if kind == "sqlite":
             findings, err = _scan_db(f, display)
-        elif kind == "binary":
+        elif kind == "binary" and not _text_marked(f.name):
             errors.append({"file": display, "error": "skipped: binary file"})
             continue
         else:
@@ -1334,18 +1518,20 @@ def scan_blobs(blobs, *, errors: list[dict] | None = None) -> dict:
         kind = _blob_kind(name, blob)
         if kind == "sqlite":
             findings, err = _scan_blob_db(name, blob, sc)
-        elif kind == "binary":
-            errs.append({"file": name, "error": "skipped: binary file"})
-            return
         else:
             decoded = _decode_file_bytes(blob)
-            if decoded is None:
+            if decoded is not None:
+                findings = _scan_text_with_projection(
+                    decoded[0], file=name, location="text"
+                )
+                err = None
+            elif _text_marked(name):
+                # Text-named but undecodable: never silently CLEAN —
+                # scan the lossy projection (fail closed).
+                findings, err = _scan_lossy(blob, name), None
+            else:
                 errs.append({"file": name, "error": "skipped: binary file"})
                 return
-            findings = _scan_text_with_projection(
-                decoded[0], file=name, location="text"
-            )
-            err = None
         scanned += 1
         all_findings.extend(findings)
         if err:
@@ -1561,11 +1747,18 @@ def _apply_text(path: Path, new_text: str, encoding: str = "utf-8") -> None:
     """Atomic text rewrite: .bak first, then tmp file + os.replace.
 
     ``encoding`` preserves the input's coding — a UTF-16 file goes back
-    as UTF-16 (BOM included when the input had one)."""
+    as UTF-16 in its source byte order (BOM included when the input had
+    one, because the decoded text keeps the ``\\ufeff`` mark). Bytes
+    that arrived via ``surrogateescape`` — text-marked files with a few
+    undecodable bytes — encode back byte-exactly."""
     _backup(path)
     tmp = path.with_name(path.name + ".redact-tmp")
     try:
-        tmp.write_bytes(new_text.encode(encoding))
+        try:
+            data = new_text.encode(encoding)
+        except UnicodeEncodeError:
+            data = new_text.encode(encoding, "surrogateescape")
+        tmp.write_bytes(data)
         os.replace(tmp, path)
     except BaseException:
         tmp.unlink(missing_ok=True)
@@ -1611,7 +1804,7 @@ def redact(paths, *, apply: bool = False, confirm_irreversible: bool = False) ->
                                 **e,
                             }
                         )
-        elif kind == "binary":
+        elif kind == "binary" and not _text_marked(f.name):
             errors.append({"file": display, "error": "skipped: binary file"})
             continue
         else:
@@ -1622,10 +1815,14 @@ def redact(paths, *, apply: bool = False, confirm_irreversible: bool = False) ->
                 continue
             decoded = _decode_file_bytes(raw)
             if decoded is None:
-                errors.append(
-                    {"file": display, "error": "skipped: binary file"}
-                )
-                continue
+                if not _text_marked(f.name):
+                    errors.append(
+                        {"file": display, "error": "skipped: binary file"}
+                    )
+                    continue
+                # Lossy but byte-exact: surrogateescape round-trips the
+                # undecodable bytes through the rewrite untouched.
+                decoded = (raw.decode("utf-8", "surrogateescape"), "utf-8")
             text, encoding = decoded
             new_text, edits = redact_text(text)
             if edits:

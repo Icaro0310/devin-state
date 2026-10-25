@@ -9,6 +9,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Detection coverage expansion (adversarial audit of the privacy
+  boundary): GitLab (`glpat-`/`gldt-`/`glrt-`/`glcbt-`/`glagent-`),
+  npm (`npm_`), PyPI (`pypi-`), DigitalOcean (`dop_v1_`), SendGrid
+  (`SG.`), Square (`sq0atp-`/`sq0csp-`), Shopify
+  (`shpat_`/`shpca_`/`shppa_`/`shpss_`), Google OAuth (`ya29.`),
+  Hugging Face (`hf_`), Stripe webhook secrets (`whsec_`), Slack app
+  tokens (`xapp-`) and age secret keys (`AGE-SECRET-KEY-`); JWTs with
+  short payload/signature and `alg:none` empty signatures; PGP
+  `PRIVATE KEY BLOCK` and unterminated PEM blocks;
+  `Authorization: Basic <b64>`; case-insensitive `Bearer` with
+  `[\s:=]` separators.
+- New secret categories `connection_uri` (`scheme://user:pass@host`,
+  any scheme) and `webhook_url` (Slack, Discord, Office365) — both
+  hold `publication_status` at `BLOCKED`.
+- `env_assignment` learns `:` (YAML) separators, JSON/dict/JS pairs
+  anywhere on a line, escaped JSON quotes and camelCase/lowercase
+  names; machine prefixes match unanchored so `api_key%3D<token>`
+  still lands.
+- Encoding coverage: UTF-8 with stray NUL, UTF-16 (BOM or NUL-parity
+  BOM-less), lossy `surrogateescape` decode for text with a few
+  invalid bytes, and a printable projection (`kind=binary-projection`)
+  that rejoins secrets split by control bytes or ANSI escapes —
+  detection-only.
+- JSON dict *keys* scanned for secret-shaped content and now rewritten
+  on redact (`{"sk-…": "enabled"}` → `{"<REDACTED:…>": "enabled"}`).
+- `verify-publish` hardening: `index.json`/`index.md` enumerate but
+  never limit coverage — on-disk session files are unioned into the
+  scan set so a crafted/stale index omitting a dirty session cannot
+  report `CLEAN`; entries resolving outside the export dir warn.
+- `redact --apply` on a text-marked file with a few undecodable bytes
+  rewrites through `surrogateescape`, byte-exact for the
+  undecodable regions.
 - `devin-redact diff <paths> [-o report.html]` — self-contained HTML
   before/after report for human review of sensitive exports. Renders the
   `scan` report as summary cards, category chips and a per-finding table
@@ -26,6 +58,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   text says "don't mask", "do not redact", "never apply", "skip this"
   or "avoid applying", or injects an "IGNORE PREVIOUS" line
   (devin-state#91).
+
+### Added
+
+- `connection_uri` category — database/service URIs with embedded
+  credentials (`postgres://user:pw@host`, `mongodb+srv://`, AMQP,
+  Redis `redis://:pw@`) are detected and masked (devin-state#92).
+- `webhook_url` category — Slack `hooks.slack.com`, Discord
+  `discord.com/api/webhooks`, Google Chat and Teams/Office webhook
+  endpoints are secrets in the URL itself and are masked
+  (devin-state#92).
+- Vendor-prefix coverage widened: GitLab `glpat-`, npm `npm_`,
+  SendGrid `SG.`, OpenAI `sk-`, Stripe `sk_live`/`rk_`, Hugging Face
+  `hf_`, DigitalOcean `dop_v1_`, Google `AIza`, and lowercase
+  `password=`/`api_secret=` env names and YAML `name: value` pairs
+  (devin-state#92).
+- Unterminated PEM blocks (`-----BEGIN ... PRIVATE KEY-----` with no
+  matching `END`) are detected and removed — a truncated capture no
+  longer ships the key body (devin-state#92).
+
+### Fixed
+
+- Fail-closed decode gate (devin-state#92): a *text-named* blob
+  (`.env`, `.txt`, `.json`, `.pem`, `id_rsa`, …) whose bytes fail
+  every codec is now scanned lossy (surrogateescape + printable
+  projection) instead of skipped — one invalid byte can no longer hide
+  a credential from the staged-file gate. Binary-named blobs still
+  skip.
+- UTF-16 handling (devin-state#92): BOM'd input keeps its original
+  endianness on write (`FE FF` stays big-endian), and a surrogate pair
+  crossing the 8192-byte sniff boundary no longer flips the file to
+  "binary, skip".
+- JSON redaction preserves validity (devin-state#92): quoted
+  `"key":"secret"` pairs keep their quotes (or gain them) so exports
+  stay parseable; escape-aware value bodies mean `\"` inside a value
+  no longer leaks the suffix, `=` inside a quoted value no longer
+  suppresses detection, and an anchored pair cannot eat later
+  same-line properties.
+- JSON-object *keys* carrying credentials are rewritten on apply, not
+  just values — `_key_strings` detections no longer survive
+  `redact --apply` (devin-state#92).
+- Type annotations (`api_key: str`, `token: Optional[str]`) are no
+  longer flagged or redacted as secret assignments — quoted/YAML
+  scalars with the same shape still are (devin-state#92).
+- A complete PEM block is reported once, not once per matching
+  pattern — `scan_text` dedupes overlapping findings so one key no
+  longer inflates the count (devin-state#92).
 
 ## [0.2.5] - 2026-10-23
 
