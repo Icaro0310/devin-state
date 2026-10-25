@@ -136,6 +136,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `with ... as n`, `except ... as n`, `del n`, `n: T = v`, `n := v`
   or `case n` leaves `n.ndarray` a plain attribute read under a
   credential keyword, so it flags (devin-state#92).
+- Finding previews no longer echo the match tail — `first…last`
+  leaked the secret suffix (`api_…ret"`), and a short value leaked
+  outright in SARIF and diff reports; previews are head-only now
+  (devin-state#92).
 - Triple-quoted values mask the whole literal — the single-quote
   arm used to stop at the empty `""`/`''` opener and leave
   `key = """\nsecret\n"""` with its body intact (devin-state#92).

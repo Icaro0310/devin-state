@@ -146,18 +146,19 @@ def test_diff_escapes_html_entities():
 
 
 def test_diff_escapes_preview_metachars_via_cli(tmp_path):
-    """End-to-end escaping: an env value ending in ``<`` survives masking
-    in the last four chars and must be escaped in the HTML."""
+    """End-to-end escaping: a ``<`` inside the masked preview must be
+    escaped in the HTML — and the preview never leaks the secret
+    suffix (the tail is where the sensitive material sits)."""
     src = _write(tmp_path, "leak.env", "MY_TOKEN=fakevalue<\n")
     out = tmp_path / "r.html"
     assert cli.main(["diff", str(src), "-o", str(out)]) == 0
     doc = out.read_text(encoding="utf-8")
-    # Masked preview keeps the "<" in its tail — it must arrive escaped.
-    # (Windows text-mode writes \r\n; the tail may carry a stray \r, so
-    # match the escaped "<" rather than an exact four-char tail.)
-    assert re.search(r"MY_T\.\.\..{0,5}&lt;", doc)
-    # And the raw secret value itself never reaches the report.
+    # Head-only preview: the name head shows, the tail does not.
+    assert "MY_T..." in doc
+    # And the raw secret value never reaches the report — neither
+    # whole nor as a masked-preview suffix.
     assert "fakevalue" not in doc
+    assert "lue&lt;" not in doc and "value<" not in doc
 
 
 def test_diff_marks_detection_only_for_cross_chunk():
@@ -212,7 +213,8 @@ def test_diff_utf8_output(tmp_path):
     assert cli.main(["diff", str(src), "-o", str(out)]) == 0
     doc = out.read_bytes().decode("utf-8")
     assert "café.txt" in doc
-    assert "keé" in doc  # masked preview tail of `T_KEY=fakeé`
+    assert "T_KE..." in doc  # head-only masked preview
+    assert "fakeé" not in doc  # the secret itself stays out
 
 
 def test_diff_fixture_db_renders(tmp_path):

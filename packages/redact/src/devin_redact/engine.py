@@ -90,12 +90,17 @@ def _tag(value: str) -> str:
 
 
 def _mask(value: str) -> str:
-    """Lossy preview — never emits the full sensitive value."""
+    """Lossy preview — never emits the full sensitive value.
+
+    Head only: the secret sits at the tail of an env_assignment match
+    (``api_key = "hunter2secret"``), so showing the last four chars
+    leaks its suffix — and a short value leaks outright.
+    """
     if "\n" in value:
         value = value.splitlines()[0]
     if len(value) <= 6:
         return "*" * len(value)
-    return f"{value[:4]}...{value[-4:]}"
+    return f"{value[:4]}..."
 
 
 def _line_of(text: str, offset: int) -> int:
