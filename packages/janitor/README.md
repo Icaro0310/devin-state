@@ -90,6 +90,9 @@ devin-janitor pending --list       # locked files queued for retry
 devin-janitor pending --retry      # retry them now
 devin-janitor report               # recoverable-space report (advisory)
 devin-janitor report --json        # machine-readable
+devin-janitor report --project 90d # estimated store sizes in 90 days (linear
+                                   # rate since first-seen; 'insufficient data'
+                                   # when a store has no honest rate)
 devin-janitor report --exclude-labeled    # drop bridge-labeled sessions from the counts
 devin-janitor run --apply --tiers 1,2     # default scope: orphans/cache + stale sessions
 devin-janitor run --apply --tiers all --include-gui \

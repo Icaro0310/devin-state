@@ -11,6 +11,7 @@ recoverable-space scan over every store the janitor knows.
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import time
 from datetime import datetime, timezone
@@ -476,6 +477,97 @@ def _cleanup_tier_summary(
     }
 
 
+# ---------------------------------------------------- growth projection ----
+
+# A store younger than this has no meaningful accumulation rate — a
+# sessions.db created today would "project" its whole size per day.
+MIN_OBSERVATION_DAYS = 1.0
+
+_HORIZON_RE = re.compile(r"^(\d+(?:\.\d+)?)\s*([hdw])?$", re.IGNORECASE)
+_HORIZON_UNIT_DAYS = {"h": 1.0 / 24.0, "d": 1.0, "w": 7.0}
+
+
+def parse_horizon(spec: str) -> float:
+    """``'90d'`` → ``90.0`` days; ``'12w'`` → ``84``; ``'48h'`` → ``2``.
+
+    A bare number means days. Raises ``ValueError`` on anything else —
+    the janitor refuses to print a fake projection.
+    """
+    m = _HORIZON_RE.match((spec or "").strip())
+    if not m:
+        raise ValueError(
+            f"invalid --project horizon {spec!r} — use <N>[h|d|w] "
+            "(e.g. 48h, 30d, 12w)"
+        )
+    unit = m.group(2).lower() if m.group(2) else "d"
+    days = float(m.group(1)) * _HORIZON_UNIT_DAYS[unit]
+    if days <= 0:
+        raise ValueError("--project horizon must be positive")
+    return days
+
+
+def growth_projection(
+    stores: list[dict],
+    horizon_days: float,
+    now: float | None = None,
+) -> dict:
+    """Project each store's size ``horizon_days`` ahead, linear model.
+
+    The janitor keeps no size history (``report`` is read-only and the
+    audit log records deletions, not sizes), so the rate is the simplest
+    defensible one: current bytes ÷ days since the store's first-seen
+    timestamp (``oldest``) — an average accumulation rate, not a trend
+    fit. Honest output means printing the rate and the window it came
+    from, not just a number.
+
+    A store is ``ok: false`` with a ``reason`` when no honest rate
+    exists: missing, no first-seen timestamp, or an observation window
+    shorter than ``MIN_OBSERVATION_DAYS`` (a store created today has no
+    rate — printing a number would be a fake projection).
+    """
+    now = time.time() if now is None else now
+    out = []
+    for s in stores:
+        entry: dict = {"name": s.get("name", "?"),
+                       "bytes": int(s.get("bytes") or 0)}
+        if not s.get("exists"):
+            out.append({**entry, "ok": False, "reason": "store missing"})
+            continue
+        oldest = s.get("oldest")
+        if not oldest:
+            out.append({**entry, "ok": False,
+                        "reason": "no first-seen timestamp"})
+            continue
+        window_days = (now - float(oldest)) / 86400.0
+        if window_days < MIN_OBSERVATION_DAYS:
+            out.append({
+                **entry,
+                "ok": False,
+                "reason": "insufficient data — observation window "
+                          f"{window_days * 24:.1f}h < "
+                          f"{MIN_OBSERVATION_DAYS * 24:.0f}h",
+            })
+            continue
+        rate = entry["bytes"] / window_days
+        projected = entry["bytes"] + rate * horizon_days
+        out.append({
+            **entry,
+            "ok": True,
+            "window_days": window_days,
+            "rate_bytes_per_day": rate,
+            "delta_bytes": projected - entry["bytes"],
+            "projected_bytes": projected,
+        })
+    return {
+        "horizon_days": horizon_days,
+        "model": "linear",
+        "caveat": "estimate — rate = current bytes ÷ days since "
+                  "first-seen; assumes steady accumulation, ignores "
+                  "inactivity gaps and future cleanups",
+        "stores": out,
+    }
+
+
 def space_report(
     paths: DevinPaths,
     config: JanitorConfig | None = None,
@@ -486,6 +578,7 @@ def space_report(
     now: float | None = None,
     labels_path: str | Path | None = None,
     exclude_labeled: bool = False,
+    project_days: float | None = None,
 ) -> dict:
     """Recoverable-space report across every store the janitor manages.
 
@@ -500,6 +593,10 @@ def space_report(
     section (JA-4) marking sessions the bridge sidecar labels as
     automation-created. ``exclude_labeled`` drops those sessions from the
     classification so the report reflects only non-automation sessions.
+
+    ``project_days`` (``report --project``) adds a ``projection`` section:
+    a linear estimate of each store's size that many days ahead, at the
+    rate observed since first-seen — see :func:`growth_projection`.
     """
     cfg = config or JanitorConfig()
     labels_p = (
@@ -562,8 +659,9 @@ def space_report(
     except (SchemaError, sqlite3.Error, OSError) as exc:
         tiers = {"error": str(exc)}
 
+    now_s = now if now is not None else time.time()
     report = {
-        "generated_at": int(now if now is not None else time.time()),
+        "generated_at": int(now_s),
         "data_root": str(paths.root),
         "classification": (
             {**classification.summary(), "sessions": len(rows)}
@@ -585,6 +683,10 @@ def space_report(
             ),
         },
     }
+    if project_days is not None:
+        report["projection"] = growth_projection(
+            stores, project_days, now=now_s
+        )
     if error:
         report["classification_error"] = error
     return report
@@ -650,6 +752,29 @@ def render_space_report(report: dict) -> str:
                 f"    {key} {t['label']:<26} "
                 f"{('~' + fmt_bytes(t['bytes'])):>10}  "
                 f"{t['items']} item(s){gated}"
+            )
+    proj = report.get("projection")
+    if proj:
+        h = proj["horizon_days"]
+        h_s = f"{h:g}d" if h >= 1 else f"{h * 24:g}h"
+        lines.append("")
+        lines.append(
+            f"  growth projection +{h_s} "
+            "(estimate — linear rate since first-seen):"
+        )
+        for s in proj["stores"]:
+            if not s["ok"]:
+                lines.append(
+                    f"    {s['name']:<15} {fmt_bytes(s['bytes']):>9}  "
+                    f"insufficient data — {s['reason']}"
+                )
+                continue
+            lines.append(
+                f"    {s['name']:<15} {fmt_bytes(s['bytes']):>9} → "
+                f"{fmt_bytes(s['projected_bytes']):>9}  "
+                f"(+{fmt_bytes(s['delta_bytes'])} @ "
+                f"{fmt_bytes(s['rate_bytes_per_day'])}/d over "
+                f"{s['window_days']:.0f}d)"
             )
     auto = report.get("automatic_sessions") or {}
     if auto.get("count"):

@@ -54,6 +54,7 @@ from devin_janitor.paths import resolve
 from devin_janitor.report import (
     append_log,
     audit_entry,
+    parse_horizon,
     plan_summary,
     render_space_report,
     run_summary,
@@ -421,6 +422,11 @@ def cmd_pending(args: argparse.Namespace) -> int:
 
 def cmd_report(args: argparse.Namespace) -> int:
     paths = _resolve(args)
+    # parse before anything else: an invalid horizon exits 2 instead of
+    # printing a report built on a silently ignored projection request
+    project_days = (
+        parse_horizon(args.project) if args.project is not None else None
+    )
     cfg = JanitorConfig.load(args.config)
     if args.grace_hours is not None:
         cfg.grace_hours = args.grace_hours
@@ -450,6 +456,7 @@ def cmd_report(args: argparse.Namespace) -> int:
             extra_delete_ids=extra_ids,
             labels_path=args.labels_file,
             exclude_labeled=args.exclude_labeled,
+            project_days=project_days,
         )
     except Exception as exc:  # noqa: BLE001 - advisory — must never fail the command
         rep = {
@@ -579,6 +586,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--exclude-labeled", action="store_true",
                    help="exclude bridge-labeled automatic sessions from "
                         "the classification")
+    p.add_argument("--project", default=None, metavar="N[h|d|w]",
+                   help="project each store's size N ahead (e.g. 90d, "
+                        "12w, 720h) at the observed accumulation rate — "
+                        "estimate only; stores without enough history "
+                        "report 'insufficient data'")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_report)
 
