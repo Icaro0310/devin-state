@@ -681,6 +681,51 @@ def test_unbound_alias_still_flags():
     assert any(f["category"] == "env_assignment" for f in findings)
 
 
+def test_parenthesized_import_binds_names():
+    """``from collections import (deque, defaultdict)`` — including the
+    multi-line form — binds the names like the plain form."""
+    src = (
+        "from collections import (\n"
+        "    deque,\n"
+        "    defaultdict,\n"
+        ")\n"
+        "pending: deque\n"
+        "lookup: defaultdict\n"
+    )
+    findings = scan_text(src, file="m.py", location="text")
+    assert not [
+        f for f in findings if f["category"] == "env_assignment"
+    ], findings
+    new, _ = redact_text(src)
+    assert "<REDACTED:" not in new
+
+
+def test_import_like_text_in_env_file_does_not_bind():
+    """A ``.env``/``.yaml`` blob holding ``import numpy as n`` carries
+    text, not a Python binding — ``api_key: n.ndarray`` there is a
+    credential-shaped scalar and must still block the gate."""
+    for fname in ("creds.env", "config.yaml", "notes.txt"):
+        blob = "import numpy as n\napi_key: n.ndarray\n"
+        findings = scan_text(blob, file=fname, location="text")
+        assert any(
+            f["category"] == "env_assignment" for f in findings
+        ), fname
+    report = engine.scan_blobs(
+        [("creds.env", b"import numpy as n\napi_key: n.ndarray\n")]
+    )
+    assert report["publication_status"] == "BLOCKED"
+    # while the same text in a .py file is a real annotation
+    assert not [
+        f
+        for f in scan_text(
+            "import numpy as n\napi_key: n.ndarray\n",
+            file="m.py",
+            location="text",
+        )
+        if f["category"] == "env_assignment"
+    ]
+
+
 def test_complete_pem_reported_once_not_twice():
     """A complete PEM block matched both ``pem_private_key`` and
     ``pem_private_key_unterminated`` (a strict prefix) — one key, two

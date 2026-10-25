@@ -169,9 +169,27 @@ _LOWER_DOTTED_TYPES = {
 # flags).
 _IMPORT_RE = re.compile(r"(?m)^\s*import\s+([^#\n]+)")
 _FROM_IMPORT_RE = re.compile(
-    r"(?m)^\s*from\s+([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s+import\s+([^#\n]+)"
+    r"(?m)^\s*from\s+([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s+import\s+([^#\n(]+)"
+)
+# The parenthesized form may span lines — ``[^)]`` matches newlines.
+_FROM_IMPORT_PAREN_RE = re.compile(
+    r"(?m)^\s*from\s+([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s+import\s*\(([^)]*)\)"
 )
 _NAME_RE = re.compile(r"[A-Za-z_]\w*")
+
+# Aliases only exist where ``x: T`` can be an annotation — Python
+# source. An ``import numpy as n`` line inside an ``.env``/``.yaml``
+# blob is text, not a binding, and must not excuse ``api_key:
+# n.ndarray`` from the gate.
+_PY_SOURCE_SUFFIXES = (".py", ".pyi", ".pyw", ".pyx", ".pxd")
+_PY_SOURCE_NAMES = {"SConstruct", "SConscript", "wscript"}
+
+
+def _python_source_file(file: str) -> bool:
+    base = file.rsplit("/", 1)[-1]
+    return base in _PY_SOURCE_NAMES or base.lower().endswith(
+        _PY_SOURCE_SUFFIXES
+    )
 
 
 def _import_aliases(text: str) -> dict[str, str]:
@@ -194,6 +212,14 @@ def _import_aliases(text: str) -> dict[str, str]:
         mod = m.group(1)
         for part in m.group(2).split(","):
             part = part.strip().strip("()")
+            name, sep, alias = part.partition(" as ")
+            name = name.strip()
+            bound = alias.strip() if sep else name
+            if _NAME_RE.fullmatch(name) and _NAME_RE.fullmatch(bound):
+                aliases[bound] = f"{mod}.{name}"
+    for m in _FROM_IMPORT_PAREN_RE.finditer(text):
+        mod = m.group(1)
+        for part in m.group(2).split(","):
             name, sep, alias = part.partition(" as ")
             name = name.strip()
             bound = alias.strip() if sep else name
@@ -556,9 +582,15 @@ def _iter_tag_gap(
     )
 
 
-def _iter_matches(text: str):
-    """Yield ``(category, pattern_name, match)`` for every pattern hit."""
-    aliases = _import_aliases(text)
+def _iter_matches(text: str, *, python_source: bool | None = None):
+    """Yield ``(category, pattern_name, match)`` for every pattern hit.
+
+    ``python_source`` gates import-alias resolution: ``True`` (a Python
+    file) and ``None`` (bare text — pasted code has no filename) map
+    aliases; ``False`` treats import-like lines as inert text so a
+    credential blob cannot hide a value behind ``import numpy as n``.
+    """
+    aliases = _import_aliases(text) if python_source is not False else {}
     for category, regexes in PATTERNS.items():
         env = category == "env_assignment"
         for index, rx in enumerate(regexes):
@@ -582,7 +614,9 @@ def scan_text(text: str, *, file: str, location: str) -> list[Finding]:
     findings: list[Finding] = []
     seen: set[tuple[str, str, int]] = set()
     spans: dict[str, list[tuple[int, int]]] = {}
-    for category, name, m in _iter_matches(text):
+    for category, name, m in _iter_matches(
+        text, python_source=_python_source_file(file)
+    ):
         value = sensitive_match(m)
         key = (category, name, m.start(1) if m.lastindex else m.start())
         if key in seen:
@@ -616,16 +650,28 @@ def scan_text(text: str, *, file: str, location: str) -> list[Finding]:
     return findings
 
 
-def redact_text(text: str) -> tuple[str, list[dict]]:
+def redact_text(
+    text: str, *, file: str | None = None
+) -> tuple[str, list[dict]]:
     """Replace every secret span in ``text`` with ``<REDACTED:fp>``.
 
     ``env_assignment`` matches keep their ``KEY=`` prefix so a redacted
     ``.env`` stays readable. Overlapping matches resolve greedily: the
     leftmost (then longest) span wins. Returns ``(new_text, edits)``.
     Idempotent — ``<REDACTED:…>`` tags are never re-redacted.
+
+    ``file`` hints the blob's name: for a Python-typed name, import
+    aliases suppress annotation-shaped matches; for any other name,
+    import-like lines are inert text and cannot excuse a credential
+    value. Bare text (no ``file``) resolves aliases from the text
+    itself — pasted code must not be corrupted, and the publication
+    gate never relies on this path.
     """
     candidates: list[tuple[int, int, str, str, str]] = []
-    for category, name, m in _iter_matches(text):
+    for category, name, m in _iter_matches(
+        text,
+        python_source=None if file is None else _python_source_file(file),
+    ):
         value = sensitive_match(m)
         fp = _fingerprint(value)
         if category == "env_assignment":
@@ -1995,7 +2041,7 @@ def redact(paths, *, apply: bool = False, confirm_irreversible: bool = False) ->
                         {"file": display, "error": f"skipped: {exc}"}
                     )
                     continue
-            new_text, edits = redact_text(text)
+            new_text, edits = redact_text(text, file=str(f))
             if edits:
                 planned.append(
                     {
