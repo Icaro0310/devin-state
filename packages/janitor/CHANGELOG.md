@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `_parse_verdict_text` is now fail-closed at the word level: a
+  command judge printing a negated verdict ("do not delete", "don't
+  delete", "never delete") or text mixing keep- and delete-tokens
+  ("keep this one, do not delete it") abstains instead of producing a
+  `delete` verdict. Previously the bare `delete` word matched with no
+  negation handling, so `"do not delete"` on stdout with a zero exit
+  code queued the session — and its messages — for deletion under
+  `run --apply` with tier2 selected, violating the fail-open contract
+  that an unclear verdict can never delete.
+
 ## [0.1.2] - 2026-10-21
 
 ### Added

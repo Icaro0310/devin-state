@@ -122,10 +122,15 @@ def _session_summary(session: SessionRow) -> str:
 
 _TRUE_TOKENS = ("keep", "true", "yes", "durable", "preserve")
 _FALSE_TOKENS = ("delete", "false", "no", "noise", "ephemeral")
+_NEGATORS = ("not", "never", "don't", "dont", "cannot", "can't", "cant")
 
 
 def _parse_verdict_text(text: str) -> bool | None:
-    """``keep``→True, ``delete``→False from free text; None if unclear."""
+    """``keep``→True, ``delete``→False from free text; None if unclear.
+
+    Fail-closed at the word level: a negated ``delete`` ("do not
+    delete") or text mixing keep- and delete-tokens abstains rather
+    than returning a delete verdict."""
     t = text.strip().lower()
     try:
         obj = json.loads(t)
@@ -145,9 +150,16 @@ def _parse_verdict_text(text: str) -> bool | None:
         return True
     if token in _FALSE_TOKENS:
         return False
-    if any(tok in t.split() for tok in _FALSE_TOKENS):
+    words = t.split()
+    has_false = any(tok in words for tok in _FALSE_TOKENS)
+    has_true = any(tok in words for tok in _TRUE_TOKENS)
+    if has_false and has_true:
+        return None
+    if has_false:
+        if any(w in _NEGATORS or w.endswith("n't") for w in words):
+            return None
         return False
-    if any(tok in t.split() for tok in _TRUE_TOKENS):
+    if has_true:
         return True
     return None
 
