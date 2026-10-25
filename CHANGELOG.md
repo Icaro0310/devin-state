@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **CI** — `pr-approve` caller repinned from v1.6 to v1.9 in
+  `auto-approve.yml`: the v1.9 gate fixes self-cancellation so a
+  successful approval no longer renders as a failed check, and adds a
+  fresh-head recheck plus paginated dedup;
+  `tests/integration/test_auto_approve_gate.py` pins the new version.
 - **CI/publish** — the wheel gate in `pypi-publish.yml` no longer crashes
   with `StopIteration` on wheels without `entry_points.txt` (the
   install-scheduler shape, which ships no console scripts). Scriptless
