@@ -1365,3 +1365,67 @@ def test_unquoted_scalar_slots_stay_parseable_in_python():
     assert "hunter2" not in new and '"<REDACTED:' in new
     new, _ = redact_text("API_KEY=hunter2\n", file="creds.env")
     assert "API_KEY=<REDACTED:" in new
+
+
+def test_npmrc_authtoken_keeps_option_name():
+    """``.npmrc`` lines are ``//host/:_authToken=v`` — the match opens
+    with ``:`` so the option name must survive the replacement."""
+    src = "//registry.npmjs.org/:_authToken=hunter2\n"
+    new, findings = redact_text(src, file=".npmrc")
+    assert "hunter2" not in new
+    assert ":_authToken=<REDACTED:" in new
+    assert len(findings) == 1
+
+
+def test_netrc_positional_forms():
+    """``.netrc``/``.authinfo`` credentials are positional
+    (``machine h login u password p``), usually wrapped across lines;
+    a ``default`` entry has no host. Only the password is masked —
+    the surrounding context survives."""
+    for src in (
+        "machine github.com login ikaros password hunter2\n",
+        "machine github.com\n  login ikaros\n  password hunter2\n",
+        "default login u password hunter2\n",
+        "machine a.com login u account hunter2\n",
+    ):
+        new, findings = redact_text(src, file="creds.netrc")
+        assert "hunter2" not in new, src
+        assert len(findings) == 1, (src, findings)
+        assert "login" in new and "password" in new or "account" in new
+    # an entry missing its password is not consumed into the next one
+    src = "machine a.com login u\nmachine b.com login u2 password hunter2\n"
+    new, findings = redact_text(src, file="creds.netrc")
+    assert "machine a.com login u" in new and "hunter2" not in new
+    assert len(findings) == 1
+    # entries are line-anchored — prose spelling the keywords stays out
+    for prose in (
+        "the default login uses password authentication\n",
+        "note: machine a.com login u password hunter2 inline\n",
+    ):
+        new, findings = redact_text(prose, file="doc.md")
+        assert findings == [] and new == prose, (prose, findings)
+
+
+def test_terraform_variable_default():
+    """``variable "api_key" { default = "hunter2" }`` masks the
+    quoted default and keeps the block structure."""
+    src = 'variable "api_key" {\n  default = "hunter2"\n}\n'
+    new, findings = redact_text(src, file="main.tf")
+    assert "hunter2" not in new
+    assert 'default = "<REDACTED:' in new
+    assert len(findings) == 1
+
+
+def test_ansible_vault_block_scalar():
+    """An ``!vault |`` block scalar carries the ciphertext on the
+    indented lines — all of it is masked and the next key survives."""
+    src = (
+        "api_key: !vault |\n"
+        "  $ANSIBLE_VAULT;1.1;AES256\n"
+        "  6162636465\n"
+        "next: v\n"
+    )
+    new, findings = redact_text(src, file="secrets.yml")
+    assert "ANSIBLE_VAULT" not in new and "6162636465" not in new
+    assert "next: v" in new
+    assert len(findings) == 1

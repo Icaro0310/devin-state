@@ -865,8 +865,25 @@ def redact_text(
         if category == "env_assignment":
             whole = m.group(0)
             start, end = m.span(0)
+            if m.lastindex:
+                # The arm captured the sensitive token — group 1 —
+                # inside wider context (``.netrc``'s
+                # ``machine … password p``). Mask only that span so
+                # the line keeps its shape.
+                g_start, g_end = m.span(1)
+                candidates.append(
+                    (g_start, g_end, _tag(value), category, fp)
+                )
+                continue
             eq_m = re.search(r"[:=]", whole)
-            if eq_m is None:
+            eq = None if eq_m is None else eq_m.start()
+            if eq == 0 and whole[0] in "?&;#:":
+                # URL/npmrc arm — the match opens with its separator
+                # char (``?api_key=``, ``:_authToken=``); the real
+                # ``=`` sits after the name.
+                eq_m = re.search(r"[:=]", whole[1:])
+                eq = None if eq_m is None else eq_m.start() + 1
+            if eq is None:
                 # ``setdefault("name", "v")`` call-arg shape — the
                 # credential name is a string argument, so no
                 # ``=``/``:`` separator exists in the match. Keep
@@ -891,7 +908,6 @@ def redact_text(
                     )
                 candidates.append((start, end, replacement, category, fp))
                 continue
-            eq = eq_m.start()
             # ``name: T = "lit"`` — an annotated assignment whose
             # literal default flagged: only the literal is sensitive.
             # Keep ``name: T = `` and re-emit the literal as a quoted

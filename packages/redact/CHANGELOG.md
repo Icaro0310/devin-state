@@ -235,6 +235,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `[^\n]*` after `#` let a `#####` run partition across iterations,
   the last exponential-backtracking shape in that matcher (CodeQL
   py/redos; devin-state#92).
+- Structured-config credentials flag in place — Terraform
+  `variable "k" { default = "v" }` masks the quoted default, an
+  Ansible `!vault |` block scalar masks the ciphertext lines, an
+  `.npmrc` `//host/:_authToken=v` keeps the option name, and
+  `.netrc`/`.authinfo` positional entries (`machine h login u
+  password p`, wrapped across lines, `default` entries, `account`
+  values) mask only the password (devin-state#92).
 
 ## [0.2.5] - 2026-10-23
 

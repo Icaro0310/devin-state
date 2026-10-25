@@ -212,8 +212,10 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
             r"(?=[ \t]*[,}\]]|[ \t]*$)"
             # YAML block scalar — ``key: |`` / ``key: >`` puts the
             # value on the following indented lines; masking only
-            # the indicator leaves the secret behind.
-            r"|[|>][-+]?[ \t]*(?:\r?\n[ \t]+\S[^\n]*)+"
+            # the indicator leaves the secret behind. A YAML tag
+            # (``!vault``…) may sit between ``:`` and the bar —
+            # ``api_key: !vault |`` hides ciphertext, not text.
+            r"|(?:!\S+[ \t]+)?[|>][-+]?[ \t]*(?:\r?\n[ \t]+\S[^\n]*)+"
             # Bare value runs to end of logical line — a ``\``
             # continuation keeps the tail inside the mask.
             r"|\S(?:[^\n\\]|\\\r?\n)*"
@@ -297,12 +299,35 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
         ),
         # URL query secrets — ``?api_key=v``, ``&token=v``,
         # ``;secret=v`` — live mid-line in logged URLs, so no line
-        # anchor. The value stops at the next param, fragment or
-        # whitespace; ``#`` doubles as a separator (fragment-style
-        # params) — a ``#api_key=v`` in a comment is exactly the
-        # leak it should mask.
+        # anchor. ``:`` covers the .npmrc/.yarnrc host-scoped form
+        # ``//registry.io/:_authToken=v``. The value stops at the
+        # next param, fragment or whitespace; ``#`` doubles as a
+        # separator (fragment-style params) — a ``#api_key=v`` in a
+        # comment is exactly the leak it should mask.
         _rx(
-            r"[?&;#]" + ENV_NAME_PATTERN + r"=[^\s&#]+"
+            r"[?&;#:]" + ENV_NAME_PATTERN + r"=[^\s&#]+"
+        ),
+        # Terraform/HCL variable defaults — the credential name is
+        # the block's *argument* (``variable "api_key"``) and the
+        # secret sits in ``default = "…"``, so no mid-line arm can
+        # see the pair. ``[^}]`` keeps the bridge inside the block.
+        _rx(
+            r"(?i)variable[ \t]+\\?[\"']" + ENV_NAME_PATTERN +
+            r"\\?[\"'][ \t]*\{[^}]*?default[ \t]*=[ \t]*(?:"
+            r"\"(?:\\.|[^\"\\\r\n])*?\""
+            r"|'(?:\\.|[^'\\\r\n])*?'"
+            r")"
+        ),
+        # .netrc / .authinfo — ``machine h login u password p``:
+        # positional keywords, no ``=``, and real files usually wrap
+        # the tokens across lines (``\s`` covers the newlines). A
+        # ``default`` entry has no host name. Entries are
+        # line-anchored so "the default login uses password x" prose
+        # stays out. Group 1 is the password so the fingerprint
+        # covers the secret, not the context.
+        _rx(
+            r"(?im)^[ \t]*(?:machine\s+\S+|default)\s+login\s+\S+\s+"
+            r"(?:password|account)\s+(\S+)"
         ),
         # Commented-out secrets — ``# password=x``,
         # ``// api_key=x``, ``<!-- token=x -->``, ``; secret=x``.
