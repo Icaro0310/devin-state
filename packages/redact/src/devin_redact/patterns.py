@@ -156,9 +156,12 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
             # ``readonly``/``typeset``/``env``/``set`` and flag-taking
             # ``declare -x`` — bind the same secret. Case-insensitive
             # so Dockerfile ``ENV``/``ARG KEY=v`` and cmd ``SET``
-            # match the same anchor.
+            # match the same anchor. A list bullet (``-``/``*``/``+``)
+            # or comment opener (``#``/``//``/``<!--``/``;``) before
+            # the name hides the same bind — docker-compose
+            # ``environment:`` lists and commented-out credentials.
             r"(?:(?i:export|local|readonly|typeset|env|declare|arg|set)"
-            r"\s+(?:-\w+\s+)*)?"
+            r"\s+(?:-\w+\s+)*|(?:[*+-]|#+|//+|<!--|;)\s*)?"
             # The name can hide behind a receiver — ``cfg.api_key``,
             # ``self.api_key``, ``config["api_key"]``: a hardcoded
             # secret is the same wherever it is bound.
@@ -300,6 +303,22 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
         # leak it should mask.
         _rx(
             r"[?&;#]" + ENV_NAME_PATTERN + r"=[^\s&#]+"
+        ),
+        # Commented-out secrets — ``# password=x``,
+        # ``// api_key=x``, ``<!-- token=x -->``, ``; secret=x``.
+        # A credential parked in a comment still ships, and a
+        # `` #`` comment trailing any matched line can carry a
+        # second secret the first finding would hide. Unanchored:
+        # the comment may sit behind code.
+        _rx(
+            r"(?<![\w])(?:#+|//+|<!--|;)[ \t]*"
+            + ENV_NAME_PATTERN +
+            r"[ \t]*[:=][ \t]*(?:"
+            r"\"(?:\\.|[^\"\\\r\n])*?\""
+            r"|'(?:\\.|[^'\\\r\n])*?'"
+            r"|`(?:\\.|[^`\\\r\n])*?`"
+            r"|\S(?:[^\n\\]|\\\r?\n)*"
+            r")"
         ),
     ],
     "connection_uri": [

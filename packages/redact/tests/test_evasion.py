@@ -809,6 +809,46 @@ def test_url_query_secret_masked():
         assert keep in new, (src, new)
 
 
+def test_list_bullet_env_entries():
+    """``- API_KEY=x`` in docker-compose ``environment:`` lists —
+    the bullet broke the line anchor and shipped the value."""
+    src = "environment:\n  - API_KEY=hunter2\n  - DEBUG=1\n"
+    findings = scan_text(src, file="dc.yml", location="text")
+    env = [f for f in findings if f["category"] == "env_assignment"]
+    assert len(env) == 1, findings
+    new, _ = redact_text(src, file="dc.yml")
+    assert "hunter2" not in new and "DEBUG=1" in new
+
+
+def test_commented_out_secrets_still_flag():
+    """``# API_KEY=x`` / ``// api_key=x`` / ``<!-- token=x -->``
+    park the credential in a comment — it still ships."""
+    for src in (
+        "# API_KEY=hunter2",
+        "// api_key=hunter2",
+        "<!-- password=hunter2 -->",
+        "; secret=hunter2",
+    ):
+        findings = scan_text(src, file="x.cfg", location="text")
+        env = [f for f in findings if f["category"] == "env_assignment"]
+        assert len(env) == 1, (src, findings)
+        new, _ = redact_text(src, file="x.cfg")
+        assert "hunter2" not in new
+
+
+def test_trailing_comment_secret_is_own_finding():
+    """``f(api_key="x") # password=y`` — the kwarg match must not
+    let the comment's second credential slip through: the scan
+    reports both and the redaction masks both."""
+    src = 'f(api_key="x") # password=hunter2\n'
+    findings = scan_text(src, file="x.py", location="text")
+    env = [f for f in findings if f["category"] == "env_assignment"]
+    assert len(env) == 2, findings
+    new, _ = redact_text(src, file="x.py")
+    assert "hunter2" not in new
+    ast.parse(new)
+
+
 def test_bindings_do_not_apply_inside_strings():
     """A ``name: value`` inside a triple-quoted string is string
     content, not annotation position — import bindings cannot excuse

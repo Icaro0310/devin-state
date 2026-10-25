@@ -183,6 +183,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   query secrets (`?api_key=v`, `&token=v`, `;secret=v`,
   `#`-separated params) are now credential binds too
   (devin-state#92).
+- List bullets (`- API_KEY=x`, docker-compose `environment:`)
+  and commented-out credentials (`#`/`//`/`<!--`/`;` + `name=`)
+  are masked instead of shipping — and a `#` comment trailing a
+  matched line no longer hides a second credential from the
+  scan: it is its own finding now (devin-state#92).
 - `np` is no longer a hardcoded `numpy` owner — `api_key: np.ndarray`
   only suppresses when `import numpy as np` actually appears in the
   text; every other alias keeps resolving from real imports
