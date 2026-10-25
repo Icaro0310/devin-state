@@ -79,6 +79,51 @@ def test_parse_verdict_text():
     assert _parse_verdict_text("hmm not sure") is None
 
 
+def test_parse_verdict_text_never_deletes_on_negation():
+    """Fail-closed: a negated or contradictory verdict must never come
+    back as ``delete`` — abstain (None) or keep (True) only."""
+    for text in (
+        "do not delete",
+        "don't delete",
+        "dont delete",
+        "please keep, do not delete",
+        "keep this one, do not delete it",
+        "never delete",
+        "shouldn't delete",
+        "absolutely not",
+    ):
+        assert _parse_verdict_text(text) is not False, text
+
+
+def test_parse_verdict_text_explicit_delete_still_works():
+    for text in (
+        "delete",
+        "delete it",
+        "Delete it.",
+        "this is noise",
+        "ephemeral",
+        "no durable knowledge",
+        "not useful; delete",
+        "not keep, delete",
+    ):
+        assert _parse_verdict_text(text) is False, text
+
+
+def test_parse_verdict_text_mixed_tokens_abstain():
+    """keep- and delete-tokens in the same text → abstain, never delete."""
+    for text in ("yes delete", "no, keep it", "delete if empty, keep if useful"):
+        assert _parse_verdict_text(text) is None, text
+
+
+def test_command_judge_negated_delete_keeps(tmp_path):
+    """A command judge that prints "do not delete" and exits 0 must not
+    produce a delete verdict."""
+    script = tmp_path / "judge.py"
+    script.write_text('print("do not delete")\n', encoding="utf-8")
+    v = CommandJudge(f'"{sys.executable}" "{script}"').judge(row(), "s")
+    assert v.keep is not False
+
+
 # ------------------------------------------------------------ devin-judge --
 
 
