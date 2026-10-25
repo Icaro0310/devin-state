@@ -153,10 +153,12 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
         _rx(
             r"(?m)^[\s\ufeff]*"
             # Shell declaration prefixes — ``export``/``local``/
-            # ``readonly``/``typeset``/``env`` and flag-taking
-            # ``declare -x`` — bind the same secret.
-            r"(?:(?:export|local|readonly|typeset|env|declare)\s+"
-            r"(?:-\w+\s+)*)?"
+            # ``readonly``/``typeset``/``env``/``set`` and flag-taking
+            # ``declare -x`` — bind the same secret. Case-insensitive
+            # so Dockerfile ``ENV``/``ARG KEY=v`` and cmd ``SET``
+            # match the same anchor.
+            r"(?:(?i:export|local|readonly|typeset|env|declare|arg|set)"
+            r"\s+(?:-\w+\s+)*)?"
             # The name can hide behind a receiver — ``cfg.api_key``,
             # ``self.api_key``, ``config["api_key"]``: a hardcoded
             # secret is the same wherever it is bound.
@@ -211,6 +213,19 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
             r"|[|>][-+]?[ \t]*(?:\r?\n[ \t]+\S[^\n]*)+"
             # Bare value runs to end of logical line — a ``\``
             # continuation keeps the tail inside the mask.
+            r"|\S(?:[^\n\\]|\\\r?\n)*"
+            r")"
+        ),
+        # Dockerfile ``ENV KEY value`` / ``ARG KEY value`` — the
+        # legacy whitespace separator (still parsed by the builder)
+        # carries no ``=``, so it needs its own line-anchored arm.
+        _rx(
+            r"(?mi)^[\s\ufeff]*(?:env|arg)[ \t]+"
+            + ENV_NAME_PATTERN +
+            r"(?:[ \t]*=[ \t]*|[ \t]+)(?:"
+            r"\"(?:\\.|[^\"\\\r\n])*?\""
+            r"|'(?:\\.|[^'\\\r\n])*?'"
+            r"|`(?:\\.|[^`\\\r\n])*?`"
             r"|\S(?:[^\n\\]|\\\r?\n)*"
             r")"
         ),
@@ -276,6 +291,15 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
             r"|'(?:\\.|[^'\\\r\n])*?'"
             r"|`(?:\\.|[^`\\\r\n])*?`"
             r")"
+        ),
+        # URL query secrets — ``?api_key=v``, ``&token=v``,
+        # ``;secret=v`` — live mid-line in logged URLs, so no line
+        # anchor. The value stops at the next param, fragment or
+        # whitespace; ``#`` doubles as a separator (fragment-style
+        # params) — a ``#api_key=v`` in a comment is exactly the
+        # leak it should mask.
+        _rx(
+            r"[?&;#]" + ENV_NAME_PATTERN + r"=[^\s&#]+"
         ),
     ],
     "connection_uri": [

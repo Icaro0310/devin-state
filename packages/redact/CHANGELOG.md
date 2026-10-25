@@ -178,6 +178,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instead of an unquoted tag that cannot parse — and YAML
   block scalars (`key: |`, `key: >`) mask the indented
   body lines that used to ship the secret (devin-state#92).
+- Dockerfile `ENV`/`ARG` (case-insensitive, both `=` and the
+  legacy whitespace separator), cmd `SET`/`EXPORT`, and URL
+  query secrets (`?api_key=v`, `&token=v`, `;secret=v`,
+  `#`-separated params) are now credential binds too
+  (devin-state#92).
 - `np` is no longer a hardcoded `numpy` owner — `api_key: np.ndarray`
   only suppresses when `import numpy as np` actually appears in the
   text; every other alias keeps resolving from real imports

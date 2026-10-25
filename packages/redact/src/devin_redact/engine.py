@@ -871,13 +871,24 @@ def redact_text(
                 # credential name is a string argument, so no
                 # ``=``/``:`` separator exists in the match. Keep
                 # everything through the comma and mask only the
-                # value, quoted so the call still parses.
+                # value, quoted so the call still parses. A
+                # Dockerfile ``ENV KEY v``/``ARG KEY v`` match has
+                # no separator either — keep ``ENV KEY `` and emit
+                # the tag as the whitespace-separated value.
                 sep = re.search(r",\s*", whole)
-                replacement = (
-                    whole[: sep.end()] + '"' + _tag(value) + '"'
-                    if sep is not None
-                    else _tag(value)
-                )
+                if sep is not None:
+                    replacement = (
+                        whole[: sep.end()] + '"' + _tag(value) + '"'
+                    )
+                else:
+                    env_m = re.match(
+                        r"(?i)(?:env|arg)\s+.*?\s+", whole
+                    )
+                    replacement = (
+                        env_m.group(0) + _tag(value)
+                        if env_m is not None
+                        else _tag(value)
+                    )
                 candidates.append((start, end, replacement, category, fp))
                 continue
             eq = eq_m.start()

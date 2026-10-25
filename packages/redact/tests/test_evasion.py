@@ -771,6 +771,44 @@ def test_yaml_block_scalar_value_masked():
     assert "other: v" in new2
 
 
+def test_dockerfile_env_arg_forms():
+    """``ENV KEY=v``, ``ARG KEY=v`` and the legacy whitespace
+    separator ``ENV KEY v`` are Dockerfile secret binds — the
+    prefix was case-sensitive lowercase only."""
+    for src, want in (
+        ("ENV API_KEY=hunter2", "ENV API_KEY=<REDACTED:"),
+        ("ARG TOKEN=hunter2", "ARG TOKEN=<REDACTED:"),
+        ("ENV API_KEY hunter2", "ENV API_KEY <REDACTED:"),
+        ("ARG TOKEN hunter2", "ARG TOKEN <REDACTED:"),
+        ("SET API_KEY=hunter2", "SET API_KEY=<REDACTED:"),
+        ("EXPORT API_KEY=hunter2", "EXPORT API_KEY=<REDACTED:"),
+    ):
+        findings = scan_text(src, file="Dockerfile", location="text")
+        env = [f for f in findings if f["category"] == "env_assignment"]
+        assert len(env) == 1, (src, findings)
+        new, _ = redact_text(src, file="Dockerfile")
+        assert want in new, (src, new)
+        assert "hunter2" not in new
+
+
+def test_url_query_secret_masked():
+    """``?api_key=v`` lives mid-line in logged URLs — the value
+    stops at the next param, fragment or whitespace."""
+    cases = (
+        ("https://x/cb?api_key=hunter2&state=1", "&state=1"),
+        ("GET /a?token=hunter2 HTTP/1.1", "HTTP/1.1"),
+        ("u?x=1&amp;api_key=hunter2", "&amp;"),
+        ("#api_key=hunter2", "#api_key=<REDACTED:"),
+    )
+    for src, keep in cases:
+        findings = scan_text(src, file="log.txt", location="text")
+        env = [f for f in findings if f["category"] == "env_assignment"]
+        assert len(env) == 1, (src, findings)
+        new, _ = redact_text(src, file="log.txt")
+        assert "hunter2" not in new
+        assert keep in new, (src, new)
+
+
 def test_bindings_do_not_apply_inside_strings():
     """A ``name: value`` inside a triple-quoted string is string
     content, not annotation position — import bindings cannot excuse
