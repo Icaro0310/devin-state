@@ -782,6 +782,24 @@ def test_unclosed_parenthesized_import_still_scans():
     assert any(f["category"] == "env_assignment" for f in findings)
 
 
+def test_concatenated_and_continued_literals_flag():
+    """Implicit string concatenation — ``"a" <backslash><newline>"b"``
+    and ``("a" "b")`` — is one literal value; the whole of it must
+    flag and the rewrite must stay parseable."""
+    for src in (
+        'api_key = "hun" \\\n "ter2"\n',
+        'api_key = ("hun"\n "ter2")\n',
+        'api_key = ("hun" \\\n "ter2")\n',
+        'api_key = \\\n "hunter2"\n',
+    ):
+        findings = scan_text(src, file="m.py", location="text")
+        env = [f for f in findings if f["category"] == "env_assignment"]
+        assert len(env) == 1, (src, findings)
+        new, _ = redact_text(src, file="m.py")
+        assert "ter2" not in new and "hunter2" not in new, (src, new)
+        ast.parse(new)
+
+
 def test_shell_builtin_declarations_flag():
     """``declare -x``/``readonly``/``local``/``typeset``/``env``
     prefix assignments bind the same secret ``export`` did."""

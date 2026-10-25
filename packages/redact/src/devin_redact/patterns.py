@@ -165,14 +165,17 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
             + ENV_NAME_PATTERN + r"[\"']?\s*\]"
             r"|(?:[A-Za-z_]\w*\.)*\s*[\"']?" + ENV_NAME_PATTERN + r"[\"']?"
             r")"
-            r"\s*[:=]\s*(?:"
+            # A ``\``-continued separator — ``key = \<newline>"v"`` —
+            # puts the literal on the next physical line.
+            r"\s*[:=][ \t]*(?:\\\r?\n[ \t]*)*\s*(?:"
             # An annotation head first — ``name: T = value``: the
             # ``T`` and its ``=`` belong to the match so a literal
             # default on a later line stays inside the span.
             r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*"
             r"(?:\s*\|\s*[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)*\s*=\s*)?"
             # A parenthesized literal — ``key = ("x")``, possibly
-            # wrapped across lines — needs its closer in the match:
+            # wrapped across lines or implicit-concatenated
+            # ``("a" "b")`` — needs its closer in the match:
             # ``("x", "y")`` must fall through to the bare arm so a
             # second secret in the tuple is never left behind.
             r"(?:\(\s*"
@@ -181,14 +184,30 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
             r"|\"(?:\\.|[^\"\\\r\n])*?\""
             r"|'(?:\\.|[^'\\\r\n])*?'"
             r"|`(?:\\.|[^`\\\r\n])*?`)"
+            r"(?:(?:\s|\\[ \t]*\r?\n[ \t]*)*"
+            r"(?:\"\"\"(?:\\.|[^\"\\])*?\"\"\""
+            r"|'''(?:\\.|[^'\\])*?'''"
+            r"|\"(?:\\.|[^\"\\\r\n])*?\""
+            r"|'(?:\\.|[^'\\\r\n])*?'"
+            r"|`(?:\\.|[^`\\\r\n])*?`))*"
             r"\s*\)(?=[ \t]*[,}\]]|[ \t]*$)"
             r"|(?:\"\"\"(?:\\.|[^\"\\])*?\"\"\""
             r"|'''(?:\\.|[^'\\])*?'''"
             r"|\"(?:\\.|[^\"\\\r\n])*?\""
             r"|'(?:\\.|[^'\\\r\n])*?'"
             r"|`(?:\\.|[^`\\\r\n])*?`)"
+            # Implicit ``\``-continuation concatenation —
+            # ``"a" \<newline> "b"`` — extends the literal.
+            r"(?:[ \t]*\\\r?\n[ \t]*"
+            r"(?:\"\"\"(?:\\.|[^\"\\])*?\"\"\""
+            r"|'''(?:\\.|[^'\\])*?'''"
+            r"|\"(?:\\.|[^\"\\\r\n])*?\""
+            r"|'(?:\\.|[^'\\\r\n])*?'"
+            r"|`(?:\\.|[^`\\\r\n])*?`))*"
             r"(?=[ \t]*[,}\]]|[ \t]*$)"
-            r"|\S[^\n]*"
+            # Bare value runs to end of logical line — a ``\``
+            # continuation keeps the tail inside the mask.
+            r"|\S(?:[^\n\\]|\\\r?\n)*"
             r")"
         ),
         # JSON/dict entries anywhere on a line — `"token": "..."`,
