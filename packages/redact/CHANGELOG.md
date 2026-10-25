@@ -124,6 +124,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - An annotated default no longer hides a hardcoded value —
   `api_key: str = "hunter2"` flags while `x: str = None` and
   `x: T = call()` stay annotations (devin-state#92).
+- Import bindings only suppress outside string literals — a
+  `name: value` line inside `'''`/`"""` is string content and always
+  flags, so a docstring cannot launder a credential through a
+  wildcard or relative import (devin-state#92).
+- The parenthesized-import matcher is per-character now — an
+  unclosed `from x import (` scans linearly instead of
+  exponentially partitioning the file (ReDoS; devin-state#92).
 - A complete PEM block is reported once, not once per matching
   pattern — `scan_text` dedupes overlapping findings so one key no
   longer inflates the count (devin-state#92).

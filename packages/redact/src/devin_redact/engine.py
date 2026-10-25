@@ -173,11 +173,52 @@ _FROM_IMPORT_RE = re.compile(
 )
 # The parenthesized form may span lines and hold inline comments —
 # each character is either not ``)``/``#`` or a ``#``-to-EOL run, so a
-# ``)`` inside a comment cannot terminate the block early.
+# ``)`` inside a comment cannot terminate the block early. The inner
+# alternation is per-character (``X`` or ``X*`` inside ``(...)*`` would
+# leave a ``(a+)+``-style partition ambiguity and stall on an unclosed
+# ``import (`` — the ReDoS shape both review and CodeQL flagged).
 _FROM_IMPORT_PAREN_RE = re.compile(
-    r"(?m)^\s*from\s+(\.*[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s+import\s*\(((?:[^)#]+|#[^\n]*)*)\)"
+    r"(?m)^\s*from\s+(\.*[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s+import\s*\(((?:[^)#]|#[^\n]*)*)\)"
 )
 _COMMENT_RE = re.compile(r"#[^\n]*")
+_TRIPLE_QUOTE_RE = re.compile(r"('''|\"\"\")")
+
+
+def _string_spans(text: str) -> list[tuple[int, int]]:
+    """Ranges covered by triple-quoted string literals.
+
+    Only ``'''``/``\"\"\"`` spans put a ``name: value`` at line start
+    inside a string — single-quoted strings cannot contain real
+    newlines. An unclosed opener runs to EOF (fail-closed: everything
+    after it is treated as string content).
+    """
+    spans: list[tuple[int, int]] = []
+    start: int | None = None
+    delim = ""
+    for m in _TRIPLE_QUOTE_RE.finditer(text):
+        if start is None:
+            start, delim = m.start(), m.group(1)
+        elif m.group(1) == delim:
+            spans.append((start, m.end()))
+            start = None
+    if start is not None:
+        spans.append((start, len(text)))
+    return spans
+
+
+def _inside_spans(spans: list[tuple[int, int]], pos: int) -> bool:
+    """Is ``pos`` inside any ``(start, end)`` span? (spans are sorted,
+    disjoint — bisect.)"""
+    lo, hi = 0, len(spans)
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if pos < spans[mid][0]:
+            hi = mid
+        elif pos >= spans[mid][1]:
+            lo = mid + 1
+        else:
+            return True
+    return False
 _NAME_RE = re.compile(r"[A-Za-z_]\w*")
 
 # Aliases only exist where ``x: T`` can be an annotation — Python
@@ -527,6 +568,7 @@ def _iter_fragment_matches(
     env: bool,
     value_start: int,
     bindings: tuple[dict[str, str], list[str]] | None = None,
+    strings: list[tuple[int, int]] | None = None,
 ):
     """Yield ``rx`` matches inside ``text[lo:hi]`` shifted by ``lo``.
 
@@ -553,7 +595,9 @@ def _iter_fragment_matches(
             # never re-processed, same as the whole-match rule.
             continue
         if env:
-            if _looks_like_code_assignment(whole, bindings):
+            if strings and _inside_spans(strings, lo + m.start()):
+                pass  # inside a string literal: no annotation position
+            elif _looks_like_code_assignment(whole, bindings):
                 continue
             start, end = lo + m.start(), lo + m.end()
             if not (
@@ -571,6 +615,7 @@ def _iter_tag_gap(
     env: bool,
     index: int = 0,
     bindings: tuple[dict[str, str], list[str]] | None = None,
+    strings: list[tuple[int, int]] | None = None,
 ):
     """Yield ``rx`` matches inside the tag-free fragments of ``m``.
 
@@ -603,11 +648,12 @@ def _iter_tag_gap(
     pos = m.start()
     for tag in tags:
         yield from _iter_fragment_matches(
-            scan_rx, text, pos, tag.start(), env, value_start, bindings
+            scan_rx, text, pos, tag.start(), env, value_start,
+            bindings, strings,
         )
         pos = tag.end()
     yield from _iter_fragment_matches(
-        scan_rx, text, pos, m.end(), env, value_start, bindings
+        scan_rx, text, pos, m.end(), env, value_start, bindings, strings
     )
 
 
@@ -622,6 +668,10 @@ def _iter_matches(text: str, *, python_source: bool | None = None):
     bindings = (
         _import_aliases(text) if python_source is not False else None
     )
+    # Inside a triple-quoted string there is no annotation or
+    # assignment position — ``api_key: ref`` in a docstring is string
+    # content and must flag regardless of bindings (devin-state#92).
+    strings = _string_spans(text) if python_source is not False else []
     for category, regexes in PATTERNS.items():
         env = category == "env_assignment"
         for index, rx in enumerate(regexes):
@@ -631,13 +681,13 @@ def _iter_matches(text: str, *, python_source: bool | None = None):
                     # fragments; the env code guard and the enclosure
                     # check apply per fragment there.
                     for fm in _iter_tag_gap(
-                        rx, text, m, env, index, bindings
+                        rx, text, m, env, index, bindings, strings
                     ):
                         yield category, pattern_name(category, index), fm
                     continue
-                if env and _looks_like_code_assignment(
-                    m.group(0), bindings
-                ):
+                if env and not (
+                    strings and _inside_spans(strings, m.start())
+                ) and _looks_like_code_assignment(m.group(0), bindings):
                     continue
                 yield category, pattern_name(category, index), m
 

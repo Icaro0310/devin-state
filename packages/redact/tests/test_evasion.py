@@ -703,6 +703,39 @@ def test_annotated_string_default_still_flags():
     assert "hunter2" not in new
 
 
+def test_bindings_do_not_apply_inside_strings():
+    """A ``name: value`` inside a triple-quoted string is string
+    content, not annotation position — import bindings cannot excuse
+    it (devin-state#92 review)."""
+    src = (
+        "from weakref import *\n"
+        "from .collections import deque\n"
+        'NOTES = """\n'
+        "api_key: ref\n"
+        "api_key: deque\n"
+        '"""\n'
+        "pending: deque\n"
+        "handle: ref\n"
+    )
+    findings = scan_text(src, file="m.py", location="text")
+    env = [
+        f for f in findings if f["category"] == "env_assignment"
+    ]
+    assert len(env) == 2, findings
+    # both flagged lines are the ones inside the string; the real
+    # annotations after it still suppress
+    new, _ = redact_text(src, file="m.py")
+    assert "pending: deque" in new and "handle: ref" in new
+
+
+def test_unclosed_parenthesized_import_still_scans():
+    """An unclosed ``from x import (`` binds nothing and must not stall
+    or blind the scan — the secret after it still flags."""
+    src = "from x import (\n    deque,\npassword: hunter2secret\n"
+    findings = scan_text(src, file="m.py", location="text")
+    assert any(f["category"] == "env_assignment" for f in findings)
+
+
 def test_unbound_alias_still_flags():
     """Without the import line there is no binding — ``n.ndarray`` is
     just a dotted scalar under a credential keyword and must flag."""
