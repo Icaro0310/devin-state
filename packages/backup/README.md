@@ -79,7 +79,7 @@ Requires Python ≥ 3.10. Install with `pipx install devin-backup`, `uv tool ins
 ## Usage
 
 ```bash
-devin-backup create  [--data-dir <session-data-root>] [--config-dir <ui-config-root>] [--out <backups-dir>]
+devin-backup create  [--data-dir <session-data-root>] [--config-dir <ui-config-root>] [--out <backups-dir>] [--remote <dest>] [--move]
 devin-backup verify  <snapshot-dir>
 devin-backup diff    <snapshot-dir> [--data-dir <session-data-root>] [--config-dir <ui-config-root>] [--json]
 devin-backup list    [--out <backups-dir>]
@@ -110,6 +110,12 @@ devin-backup rotate  [--keep N] --yes
   preview, still read-only) without it. Exits 1 if any store fails.
 - `rotate` keeps the newest N snapshots (default `$DEVIN_BACKUP_KEEP` or 10)
   and is a no-op until `--yes`. `pre-restore-*` dirs are never rotated.
+- `create --remote <dest>` re-verifies the fresh snapshot and offloads it:
+  an ssh-style `[user@]host:path` goes through the system `rsync -a`
+  (credentials stay with ssh/rsync — never in argv), a mounted/local
+  path takes the same byte-verified copy as `copy-to`. The local
+  snapshot is kept by default; `--move` deletes it only after a
+  successful offload.
 - **A snapshot is a copy of every secret the stores hold.** Snapshot dirs
   are created owner-only (`0700` dirs, `0600` files — make sure the
   backups dir you pick is too). `create --exclude <PATTERN>` skips stores
@@ -193,7 +199,8 @@ separately under `XDG_DATA_HOME/devin` and `XDG_CONFIG_HOME/Devin`. Use
 Copies a whole snapshot into a secondary directory (mounted drive, NAS
 mount, synced folder) and **re-verifies every sha256 at the destination** —
 a corrupt copy is removed and reported instead of silently archived.
-Encryption/remote sync is intentionally out of scope (personal-track P-8).
+For ssh-style remotes (`[user@]host:path`) see `create --remote`;
+encryption and cloud targets stay out of scope (personal-track P-8).
 
 ### `devin-backup install` — daily scheduled snapshots (BK-1)
 
@@ -218,6 +225,12 @@ unless you run it.
 - **Writes only on `--apply`.** Backup never touches Devin's databases except
   through the read-only backup API. `restore --apply` is the only write path
   and is always guarded by a pre-restore backup.
+- **`--remote` ssh targets need rsync — posix only.** `user@host:path`
+  offload shells out to the system `rsync`, which Windows does not ship;
+  on Windows only mounted/local destinations work, and a missing rsync
+  fails loudly rather than falling back silently. rsync transfers are
+  integrity-checked in flight by ssh but **not re-hashed at the remote**
+  afterwards — mounted-path copies are (every sha256 is re-verified).
 - Tested only against **synthetic fixtures** — no real session content is
   ever copied, by design.
 
@@ -248,9 +261,9 @@ spec: [docs/SPEC.md](docs/SPEC.md).
 
 - You need scheduled backups — M1 only runs when you run it; wrap
   `devin-backup create` in cron/Task Scheduler yourself for now.
-- You need encrypted or offsite/cloud backup — snapshots are plain files in
-  a folder you pick; put that folder on an encrypted volume or sync it with
-  your own tool.
+- You need encrypted or cloud backup — snapshots are plain files;
+  `create --remote` covers rsync/ssh hosts and mounted paths only, with
+  no encryption layer or cloud backends (S3/rclone).
 - You only want the session text, not restorable state —
   [`devin-history`](https://github.com/Icaro0310/devin-explore) export may
   be all you need.
@@ -272,10 +285,13 @@ you pass `--apply`, and even then every existing file is moved to a
 `pre-restore-<timestamp>` backup first; `--no-backup` refuses overwrites
 entirely.
 
-**Does it encrypt or upload my backups?** No. Snapshots are plain copies in
-a local folder. They contain real session data (prompts, paths, commands),
-so keep the destination on a private or encrypted volume and apply the same
-care you give the original stores.
+**Does it encrypt or upload my backups?** It never encrypts. `create
+--remote` can offload a snapshot to an ssh host via `rsync` or to a
+mounted path — opt-in, filesystem/ssh destinations only, no cloud
+backends. Snapshots stay plain copies containing real session data
+(prompts, paths, commands), so keep the destination — local or remote —
+on a private or encrypted volume and apply the same care you give the
+original stores.
 
 ## License
 

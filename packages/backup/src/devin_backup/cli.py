@@ -40,6 +40,10 @@ def _resolve_dirs(args) -> tuple[Path, Path]:
 
 
 def _cmd_create(args) -> int:
+    if args.move and not args.remote:
+        print("error: --move only makes sense with --remote",
+              file=sys.stderr)
+        return 2
     data_dir, out = _resolve_dirs(args)
     config_dir = args.config_dir
     if config_dir is None and args.data_dir is None:
@@ -60,6 +64,14 @@ def _cmd_create(args) -> int:
     for entry in manifest["files"]:
         if entry["copied_via"] != "sqlite-backup" and entry["kind"] == "sqlite":
             print(f"  note: {entry['path']} fell back to file-copy")
+    if args.remote:
+        from devin_backup import remote
+        result = remote.offload_snapshot(
+            snap, args.remote, move=args.move)
+        print(f"offloaded → {result['dest']}  "
+              f"({result['bytes']} bytes via {result['method']})")
+        if result["moved"]:
+            print("  local snapshot removed")
     return 0
 
 
@@ -262,6 +274,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--exclude-secrets", action="store_true",
         help="skip stores known to carry credentials/PII "
         "(state.vscdb, credentials.toml, *.pem, *.key)",
+    )
+    p_create.add_argument(
+        "--remote", metavar="DEST",
+        help="after creating and re-verifying the snapshot, offload it to "
+        "DEST — an rsync-style '[user@]host:path' ssh target (needs rsync "
+        "on PATH; posix) or a mounted/local path (verified copy, no rsync "
+        "needed). The local snapshot is kept unless --move is also given",
+    )
+    p_create.add_argument(
+        "--move", action="store_true",
+        help="with --remote: delete the local snapshot after a successful "
+        "offload (default keeps the local copy)",
     )
     p_create.set_defaults(func=_cmd_create)
 

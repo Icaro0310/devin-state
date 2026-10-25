@@ -6,8 +6,10 @@ then ``verify_snapshot`` runs **against the copy**: every file's sha256 is
 re-hashed at the destination, so a corrupt transfer fails loudly instead of
 silently archiving a bad backup.
 
-Encryption/sync to remote is out of scope here — that's the personal-track
-P-8 concern; this command only guarantees a byte-verified local copy.
+Offloading to an ssh-style remote (``[user@]host:path`` via rsync) lives
+in ``remote.py``, behind ``create --remote``; this command only guarantees
+a byte-verified local/mounted copy. Encryption and cloud targets stay out
+of scope — that's the personal-track P-8 concern.
 """
 
 from __future__ import annotations

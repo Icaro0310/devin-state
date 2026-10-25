@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `create --remote <dest>` + `devin_backup.remote` (BK-3): offload the
+  freshly created snapshot after re-verifying it. An ssh-style
+  `[user@]host:path` goes through the system `rsync -a --protect-args`
+  (posix; a missing rsync fails loudly, credentials never appear in
+  argv), while a mounted/local path takes the same destination-verified
+  copy as `copy-to`. The local snapshot is kept by default — `--move`
+  deletes it only after a successful offload. Cloud backends and
+  encryption remain out of scope.
+
 ## [0.1.1] - 2026-10-20
 
 ### Fixed
