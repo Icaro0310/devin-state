@@ -791,6 +791,19 @@ def test_env_redaction_preserves_separator_whitespace():
     assert new.startswith("KEY=<REDACTED:"), new
 
 
+def test_conventional_alias_needs_the_import():
+    """``np.ndarray`` is only a type when ``import numpy as np`` is
+    in the text — without it the dotted name is credential-shaped.
+    ``np`` must not be hardcoded as a numpy owner."""
+    findings = scan_text("api_key: np.ndarray\n", file="m.py",
+                         location="text")
+    assert any(f["category"] == "env_assignment" for f in findings)
+    findings = scan_text(
+        "import numpy as np\napi_key: np.ndarray\n", file="m.py",
+        location="text")
+    assert not any(f["category"] == "env_assignment" for f in findings)
+
+
 def test_unbound_alias_still_flags():
     """Without the import line there is no binding — ``n.ndarray`` is
     just a dotted scalar under a credential keyword and must flag."""

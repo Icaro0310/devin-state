@@ -136,6 +136,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `with ... as n`, `except ... as n`, `del n`, `n: T = v`, `n := v`
   or `case n` leaves `n.ndarray` a plain attribute read under a
   credential keyword, so it flags (devin-state#92).
+- `np` is no longer a hardcoded `numpy` owner — `api_key: np.ndarray`
+  only suppresses when `import numpy as np` actually appears in the
+  text; every other alias keeps resolving from real imports
+  (devin-state#92).
 - A `:`-separated env pair keeps its whitespace on redaction —
   `key: v` stays `key: <REDACTED:…>` so the line still reads as a
   YAML mapping instead of collapsing to a scalar, while `KEY=v`

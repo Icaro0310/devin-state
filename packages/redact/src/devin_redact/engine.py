@@ -152,7 +152,6 @@ _DOTTED_PATH_RE = re.compile(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+")
 # namespace.
 _LOWER_DOTTED_TYPES = {
     "numpy": {"ndarray", "dtype", "generic", "bool_"},
-    "np": {"ndarray", "dtype", "generic", "bool_"},
     "collections": {"deque", "defaultdict", "namedtuple"},
     "datetime": {"datetime", "timedelta", "date", "time", "timezone", "tzinfo"},
     "socket": {"socket"},
