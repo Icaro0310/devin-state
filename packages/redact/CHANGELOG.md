@@ -164,6 +164,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `key = "a" \<newline>"b"`, `key = ("a" "b")`, and
   `key = \<newline>"v"` keep the whole literal inside the
   mask and the rewrite stays parseable (devin-state#92).
+- Dense-match scans are no longer quadratic — the same-category
+  span containment check now bisects a sorted interval list,
+  so `f(api_key="x", api_key="x", …)` walls scan in linear
+  time (devin-state#92).
 - `np` is no longer a hardcoded `numpy` owner — `api_key: np.ndarray`
   only suppresses when `import numpy as np` actually appears in the
   text; every other alias keeps resolving from real imports

@@ -16,6 +16,7 @@ post-redact open test (rollback + restore on failure).
 from __future__ import annotations
 
 import ast
+import bisect
 import hashlib
 import io
 import itertools
@@ -785,32 +786,43 @@ def _iter_matches(text: str, *, python_source: bool | None = None):
 
 def scan_text(text: str, *, file: str, location: str) -> list[Finding]:
     """Apply every pattern to ``text`` and return findings (sorted, deduped)."""
+    # Sort by span — longest first on a shared start — so a
+    # containing match is always considered before the shorter
+    # form it covers. Exact ties keep iteration order, so the
+    # first pattern to match identical text keeps its name.
+    raw = sorted(
+        _iter_matches(text, python_source=_python_source_file(file)),
+        key=lambda t: (t[0], t[2].start(), -t[2].end()),
+    )
     findings: list[Finding] = []
     seen: set[tuple[str, str, int]] = set()
-    spans: dict[str, list[tuple[int, int]]] = {}
-    for category, name, m in _iter_matches(
-        text, python_source=_python_source_file(file)
-    ):
+    acc_starts: dict[str, list[int]] = {}
+    acc_ends: dict[str, list[int]] = {}
+    for category, name, m in raw:
         value = sensitive_match(m)
         key = (category, name, m.start(1) if m.lastindex else m.start())
         if key in seen:
             continue
         seen.add(key)
-        # A match inside an earlier same-category match — strict or
-        # identical span — is the same secret: the unterminated-PEM
-        # pattern is a strict prefix of a complete block, and two
-        # env_assignment arms can cover identical text
-        # (`api_key = "x"` is both a line assignment and a
-        # keyword-argument shape). The first pattern to iterate
-        # wins, so the longer/more specific match keeps its name.
+        # A match inside an earlier same-category match — strict
+        # or identical span — is the same secret: the
+        # unterminated-PEM pattern is a strict prefix of a
+        # complete block, and two env_assignment arms can cover
+        # identical text (`api_key = "x"` is both a line
+        # assignment and a keyword-argument shape). Accepted
+        # spans never contain one another, so their starts and
+        # ends rise together: only the last accepted span with
+        # ``start <= span[0]`` can hold this match — a bisect
+        # replaces a per-match O(n) rescan (quadratic on dense
+        # inputs like ``f(api_key="x", api_key="x", ...)``).
         span = m.span(0)
-        bucket = spans.setdefault(category, [])
-        if any(
-            s <= span[0] and span[1] <= e
-            for s, e in bucket
-        ):
+        starts = acc_starts.setdefault(category, [])
+        ends = acc_ends.setdefault(category, [])
+        i = bisect.bisect_right(starts, span[0]) - 1
+        if i >= 0 and ends[i] >= span[1]:
             continue
-        bucket.append(span)
+        starts.insert(i + 1, span[0])
+        ends.insert(i + 1, span[1])
         line = _line_of(text, m.start())
         findings.append(
             {
