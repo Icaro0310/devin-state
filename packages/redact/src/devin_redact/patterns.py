@@ -151,8 +151,16 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
         # second property intact. A bare value still runs to end of
         # line, keeping `# comments` and shell tails redacted-in-line.
         _rx(
-            r"(?m)^[\s\ufeff]*(?:export\s+)?[\"']?" + ENV_NAME_PATTERN +
-            r"[\"']?\s*[:=]\s*(?:"
+            r"(?m)^[\s\ufeff]*(?:export\s+)?"
+            # The name can hide behind a receiver — ``cfg.api_key``,
+            # ``self.api_key``, ``config["api_key"]``: a hardcoded
+            # secret is the same wherever it is bound.
+            r"(?:"
+            r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*\s*\[\s*[\"']?"
+            + ENV_NAME_PATTERN + r"[\"']?\s*\]"
+            r"|(?:[A-Za-z_]\w*\.)*\s*[\"']?" + ENV_NAME_PATTERN + r"[\"']?"
+            r")"
+            r"\s*[:=]\s*(?:"
             # An annotation head first — ``name: T = value``: the
             # ``T`` and its ``=`` belong to the match so a literal
             # default on a later line stays inside the span.

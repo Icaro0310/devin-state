@@ -782,6 +782,25 @@ def test_unclosed_parenthesized_import_still_scans():
     assert any(f["category"] == "env_assignment" for f in findings)
 
 
+def test_receiver_prefixed_assignments_flag():
+    """``cfg.api_key = "x"`` / ``config["api_key"] = "x"``: a
+    credential name hidden behind a receiver still binds a
+    hardcoded secret, and the rewrite keeps the file parseable."""
+    for src in (
+        'config["api_key"] = "hunter2"\n',
+        "config['token'] = 'hunter2'\n",
+        'cfg.api_key = "hunter2"\n',
+        'self.api_key = "hunter2"\n',
+        'a.b.api_key = "hunter2"\n',
+    ):
+        findings = scan_text(src, file="m.py", location="text")
+        env = [f for f in findings if f["category"] == "env_assignment"]
+        assert len(env) == 1, (src, findings)
+        new, _ = redact_text(src, file="m.py")
+        assert "hunter2" not in new, (src, new)
+        ast.parse(new)
+
+
 def test_parenthesized_literal_across_lines_flags():
     """``key = (\\n "x"\\n)`` wraps a hardcoded secret — the value
     must flag and the rewrite must stay parseable, with or without
