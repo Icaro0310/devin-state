@@ -152,8 +152,12 @@ def test_diff_escapes_preview_metachars_via_cli(tmp_path):
     out = tmp_path / "r.html"
     assert cli.main(["diff", str(src), "-o", str(out)]) == 0
     doc = out.read_text(encoding="utf-8")
-    # Masked preview keeps the trailing "<" — it must arrive escaped.
-    assert "MY_T...lue&lt;" in doc
+    # Masked preview keeps the "<" in its tail — it must arrive escaped.
+    # (Windows text-mode writes \r\n; the tail may carry a stray \r, so
+    # match the escaped "<" rather than an exact four-char tail.)
+    assert re.search(r"MY_T\.\.\..{0,5}&lt;", doc)
+    # And the raw secret value itself never reaches the report.
+    assert "fakevalue" not in doc
 
 
 def test_diff_marks_detection_only_for_cross_chunk():
