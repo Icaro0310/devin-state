@@ -271,9 +271,12 @@ def _import_aliases(
     for m in _IMPORT_RE.finditer(text):
         for part in m.group(1).split(","):
             name, sep, alias = part.partition(" as ")
-            if sep and _NAME_RE.fullmatch(alias.strip()):
-                if _NAME_RE.fullmatch(name.strip().split(".", 1)[0]):
-                    aliases[alias.strip()] = name.strip()
+            if (
+                sep
+                and _NAME_RE.fullmatch(alias.strip())
+                and _NAME_RE.fullmatch(name.strip().split(".", 1)[0])
+            ):
+                aliases[alias.strip()] = name.strip()
     for m in _FROM_IMPORT_RE.finditer(text):
         _bind(m.group(1).lstrip("."), m.group(2))
     for m in _FROM_IMPORT_PAREN_RE.finditer(text):
