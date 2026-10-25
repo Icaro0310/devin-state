@@ -281,7 +281,14 @@ def _looks_like_type_annotation(
     if not v:
         return False
     v = v.split(" #", 1)[0].rstrip()   # trailing comment
-    v = v.split("=", 1)[0].rstrip()    # annotated default: ``x: T = ...``
+    head, eq, tail = v.partition("=")
+    if eq:
+        # ``x: T = default`` is an annotated assignment — but a
+        # string-literal default (``api_key: str = "hunter2"``) is a
+        # hardcoded value wearing an annotation and must still flag.
+        if _literal_string_value(tail):
+            return False
+        v = head.rstrip()
     if not v or not _TYPE_EXPR_RE.fullmatch(v):
         return False
     if "[" in v or "|" in v:

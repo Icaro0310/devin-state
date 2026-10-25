@@ -121,6 +121,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Python-typed files. An `import` line inside a `.env`/`.yaml` blob is
   inert text, so `api_key: n.ndarray` there still blocks the gate
   (devin-state#92).
+- An annotated default no longer hides a hardcoded value —
+  `api_key: str = "hunter2"` flags while `x: str = None` and
+  `x: T = call()` stay annotations (devin-state#92).
 - A complete PEM block is reported once, not once per matching
   pattern — `scan_text` dedupes overlapping findings so one key no
   longer inflates the count (devin-state#92).

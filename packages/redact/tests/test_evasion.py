@@ -690,6 +690,19 @@ def test_import_aliased_type_annotations_suppressed():
     )
 
 
+def test_annotated_string_default_still_flags():
+    """``api_key: str = "hunter2"`` is an annotation *and* a hardcoded
+    secret — the ``= default`` tail may only be stripped when the
+    default is not a literal value."""
+    src = 'api_key: str = "hunter2"\nweights: n.ndarray = None\n'
+    src = "import numpy as n\n" + src
+    findings = scan_text(src, file="m.py", location="text")
+    env = [f for f in findings if f["category"] == "env_assignment"]
+    assert len(env) == 1, findings
+    new, _ = redact_text(src, file="m.py")
+    assert "hunter2" not in new
+
+
 def test_unbound_alias_still_flags():
     """Without the import line there is no binding — ``n.ndarray`` is
     just a dotted scalar under a credential keyword and must flag."""
