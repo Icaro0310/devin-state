@@ -96,8 +96,23 @@ def test_parse_verdict_text_never_deletes_on_negation():
 
 
 def test_parse_verdict_text_explicit_delete_still_works():
-    for text in ("delete", "delete it", "this is noise", "ephemeral"):
+    for text in (
+        "delete",
+        "delete it",
+        "Delete it.",
+        "this is noise",
+        "ephemeral",
+        "no durable knowledge",
+        "not useful; delete",
+        "not keep, delete",
+    ):
         assert _parse_verdict_text(text) is False, text
+
+
+def test_parse_verdict_text_mixed_tokens_abstain():
+    """keep- and delete-tokens in the same text → abstain, never delete."""
+    for text in ("yes delete", "no, keep it", "delete if empty, keep if useful"):
+        assert _parse_verdict_text(text) is None, text
 
 
 def test_command_judge_negated_delete_keeps(tmp_path):

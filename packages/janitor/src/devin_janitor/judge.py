@@ -123,14 +123,16 @@ def _session_summary(session: SessionRow) -> str:
 _TRUE_TOKENS = ("keep", "true", "yes", "durable", "preserve")
 _FALSE_TOKENS = ("delete", "false", "no", "noise", "ephemeral")
 _NEGATORS = ("not", "never", "don't", "dont", "cannot", "can't", "cant")
+_CLAUSE_RE = re.compile(r"[.,;:!?\n]+")
+_WORD_RE = re.compile(r"[a-z']+")
 
 
 def _parse_verdict_text(text: str) -> bool | None:
     """``keep``→True, ``delete``→False from free text; None if unclear.
 
-    Fail-closed at the word level: a negated ``delete`` ("do not
-    delete") or text mixing keep- and delete-tokens abstains rather
-    than returning a delete verdict."""
+    Fail-closed at the word level: a verdict token negated inside its
+    clause ("do not delete") or contradicted by the opposite token in
+    the same text abstains instead of returning a delete verdict."""
     t = text.strip().lower()
     try:
         obj = json.loads(t)
@@ -150,16 +152,25 @@ def _parse_verdict_text(text: str) -> bool | None:
         return True
     if token in _FALSE_TOKENS:
         return False
-    words = t.split()
-    has_false = any(tok in words for tok in _FALSE_TOKENS)
-    has_true = any(tok in words for tok in _TRUE_TOKENS)
-    if has_false and has_true:
+    unneg_keep = unneg_delete = False
+    for clause in _CLAUSE_RE.split(t):
+        negated = False
+        for w in _WORD_RE.findall(clause):
+            if w in _NEGATORS or w.endswith("n't"):
+                negated = True
+                continue
+            if w in _TRUE_TOKENS or w in _FALSE_TOKENS:
+                if not negated:
+                    if w in _TRUE_TOKENS:
+                        unneg_keep = True
+                    else:
+                        unneg_delete = True
+                negated = w == "no"  # "no durable knowledge"
+    if unneg_delete and unneg_keep:
         return None
-    if has_false:
-        if any(w in _NEGATORS or w.endswith("n't") for w in words):
-            return None
+    if unneg_delete:
         return False
-    if has_true:
+    if unneg_keep:
         return True
     return None
 
