@@ -136,6 +136,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `with ... as n`, `except ... as n`, `del n`, `n: T = v`, `n := v`
   or `case n` leaves `n.ndarray` a plain attribute read under a
   credential keyword, so it flags (devin-state#92).
+- A `:`-separated env pair keeps its whitespace on redaction —
+  `key: v` stays `key: <REDACTED:…>` so the line still reads as a
+  YAML mapping instead of collapsing to a scalar, while `KEY=v`
+  keeps the tight `KEY=<tag>` form (devin-state#92).
 - The parenthesized-import matcher is per-character now — an
   unclosed `from x import (` scans linearly instead of
   exponentially partitioning the file (ReDoS; devin-state#92).

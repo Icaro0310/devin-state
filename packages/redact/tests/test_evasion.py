@@ -782,6 +782,15 @@ def test_unclosed_parenthesized_import_still_scans():
     assert any(f["category"] == "env_assignment" for f in findings)
 
 
+def test_env_redaction_preserves_separator_whitespace():
+    """``key: v`` must stay a mapping — dropping the space turns the
+    line into a YAML scalar. ``KEY=v`` has no space to keep."""
+    new, _ = redact_text("api_key: n.ndarray\n", file="config.yaml")
+    assert new.startswith("api_key: <REDACTED:"), new
+    new, _ = redact_text("KEY=hunter2val\n", file=".env")
+    assert new.startswith("KEY=<REDACTED:"), new
+
+
 def test_unbound_alias_still_flags():
     """Without the import line there is no binding — ``n.ndarray`` is
     just a dotted scalar under a credential keyword and must flag."""

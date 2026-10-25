@@ -896,7 +896,17 @@ def redact_text(
                     # ``KEY=``-style output keep the plain tag.
                     replacement = f'{whole[: eq + 1]} "{_tag(value)}"'
                 else:
-                    replacement = f"{whole[: eq + 1]}{_tag(value)}"
+                    # ``.env``/YAML-style bare tag. A ``:``-separated
+                    # pair keeps its whitespace — ``key: v`` must
+                    # stay a mapping (``key:<tag>`` re-reads as a
+                    # scalar); ``=`` keeps the tight ``KEY=<tag>``
+                    # convention.
+                    lead = 0
+                    if whole[eq] == ":":
+                        lead = len(rhs) - len(rhs.lstrip())
+                    replacement = (
+                        whole[: eq + 1] + rhs[:lead] + _tag(value)
+                    )
         else:
             start, end = m.span(1) if m.lastindex else m.span(0)
             replacement = _tag(value)
