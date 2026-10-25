@@ -695,7 +695,9 @@ def test_annotated_string_default_still_flags():
     """``api_key: str = "hunter2"`` is an annotation *and* a hardcoded
     secret — the ``= default`` tail may only be stripped when the
     default is not a literal value. Redaction scopes to the literal
-    and keeps the line parseable (``name: T = "<tag>"``)."""
+    and keeps the line parseable (``name: T = "<tag>"``). The
+    trailing comment is dropped: it can carry secrets the single
+    consumed finding hides from later scans."""
     src = 'api_key: str = "hunter2"  # keep me\nweights: n.ndarray = None\n'
     src = "import numpy as n\n" + src
     findings = scan_text(src, file="m.py", location="text")
@@ -703,8 +705,35 @@ def test_annotated_string_default_still_flags():
     assert len(env) == 1, findings
     new, _ = redact_text(src, file="m.py")
     assert "hunter2" not in new
-    assert 'api_key: str = "<REDACTED:' in new and "# keep me" in new
+    assert 'api_key: str = "<REDACTED:' in new
     ast.parse(new)
+
+
+def test_annotated_default_comment_never_survives():
+    """``api_key: str = "x"  # password=y`` — the trailing comment
+    can itself hold a credential; preserving it ships the secret
+    even though the finding consumed the whole line."""
+    src = 'api_key: str = "hunter2"  # password=secret123\n'
+    findings = scan_text(src, file="m.py", location="text")
+    env = [f for f in findings if f["category"] == "env_assignment"]
+    assert len(env) == 1, findings
+    new, _ = redact_text(src, file="m.py")
+    assert "secret123" not in new and "hunter2" not in new
+    ast.parse(new)
+
+
+def test_annotated_default_keeps_literal_shape():
+    """``b"…"`` stays bytes and ``("…",)`` stays a one-tuple — the
+    tag becomes the payload, not a plain string."""
+    for src, want in (
+        ('api_key: bytes = b"hunter2"\n', 'b"<REDACTED:'),
+        ('api_key: bytes = rb"hunter2"\n', 'rb"<REDACTED:'),
+        ('api_key: tuple = ("hunter2",)\n', '("<REDACTED:'),
+    ):
+        new, _ = redact_text(src, file="m.py")
+        assert want in new, (src, new)
+        assert "hunter2" not in new
+        ast.parse(new)
 
 
 def test_bindings_do_not_apply_inside_strings():

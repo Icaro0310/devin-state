@@ -168,6 +168,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   span containment check now bisects a sorted interval list,
   so `f(api_key="x", api_key="x", …)` walls scan in linear
   time (devin-state#92).
+- Annotated defaults keep the literal's own shape — `b"…"`
+  stays bytes and `("…",)` stays a one-tuple — and the
+  trailing comment on an annotated assignment is dropped:
+  it can carry a credential the single consumed finding
+  hides from later scans (devin-state#92).
 - `np` is no longer a hardcoded `numpy` owner — `api_key: np.ndarray`
   only suppresses when `import numpy as np` actually appears in the
   text; every other alias keeps resolving from real imports

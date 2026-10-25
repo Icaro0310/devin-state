@@ -895,11 +895,34 @@ def redact_text(
                 if _literal_string_value(lit):
                     lead = len(ann_tail) - len(ann_tail.lstrip())
                     tok = lit.strip()
-                    q = '"' if '"' in tok else "'"
+                    # Re-emit the literal's own shape so the
+                    # annotated default keeps its type —
+                    # ``b"…"`` stays bytes and ``("…",)`` stays
+                    # a one-tuple — with the tag as the new
+                    # payload.
+                    m_t = re.fullmatch(r"\(\s*(.+?)\s*,\s*\)", tok)
+                    inner = m_t.group(1) if m_t else tok
+                    pm = re.match(
+                        r"([rRbBuUfF]*)(\"\"\"|'''|[\"'])", inner
+                    )
+                    if pm:
+                        body = (
+                            pm.group(1) + pm.group(2)
+                            + _tag(value) + pm.group(2)
+                        )
+                        if m_t:
+                            body = f"({body},)"
+                    else:
+                        q = '"' if '"' in tok else "'"
+                        body = q + _tag(value) + q
+                        if m_t:
+                            body = f"({body},)"
+                    # Trailing comment text is dropped — it can
+                    # carry secrets the single finding already
+                    # consumed.
                     replacement = (
                         whole[: eq + 1] + ann_head + "="
-                        + ann_tail[:lead] + q + _tag(value) + q
-                        + ann_tail[lead + len(tok) :]
+                        + ann_tail[:lead] + body
                     )
             if replacement is None:
                 # A quoted value keeps its enclosing quotes — an
