@@ -29,6 +29,7 @@ from devin_janitor.cleanup import (
 )
 from devin_janitor.config import JanitorConfig
 from devin_janitor.inventory import (
+    DevinArtifactError,
     SessionRow,
     live_session_ids,
     load_inventory,
@@ -39,7 +40,12 @@ from devin_janitor.labels import (
     load_labels,
 )
 from devin_janitor.paths import DevinPaths
-from devin_janitor.tiers import Classification, classify
+from devin_janitor.tiers import (
+    Classification,
+    Tier,
+    classify,
+    devin_artifacts_payload,
+)
 
 
 def audit_entry(
@@ -348,6 +354,61 @@ def _vscdb_entry(paths: DevinPaths) -> dict:
     }
 
 
+def _devin_artifacts_entry(devin_dir: Path) -> dict:
+    """``.devin/`` runtime-artifact store (PAS loop + janitor state).
+
+    Tiered by :func:`tiers.classify_devin_artifacts`; ``recoverable_bytes``
+    counts only AUTO_DELETE artifacts — regenerable caches, checkpoint
+    sidecars, transient leftovers and bounded logs. Advisory: ``run``
+    deletes sessions only, nothing here is touched by the pipeline.
+    """
+    entry = {
+        "name": ".devin",
+        "path": str(devin_dir),
+        "exists": devin_dir.is_dir(),
+        "bytes": 0,
+        "artifacts": 0,
+        "by_tier": {"keep": 0, "auto_delete": 0, "judge": 0},
+        "oldest": None,
+        "newest": None,
+        "recoverable_bytes": 0,
+        "note": "",
+        "recoverable_why": "regenerable caches & bounded logs — advisory; "
+                           "run deletes sessions only",
+        "detail": [],
+    }
+    try:
+        payload = devin_artifacts_payload(devin_dir)
+    except DevinArtifactError as exc:
+        entry["error"] = str(exc)
+        entry["exists"] = False  # unreadable — renders as the error row
+        return entry
+    detail = payload["artifacts"]
+    reclaimable = sum(
+        a["bytes"] for a in detail if a["tier"] == Tier.AUTO_DELETE.value
+    )
+    oldest, newest = _span(a["mtime"] for a in detail)
+    n = payload["total"]
+    by_tier = payload["by_tier"]
+    n_rec = by_tier["auto_delete"]
+    entry.update(
+        {
+            "bytes": sum(a["bytes"] for a in detail),
+            "artifacts": n,
+            "by_tier": by_tier,
+            "oldest": oldest,
+            "newest": newest,
+            "recoverable_bytes": reclaimable,
+            "note": f"{n} artifact{'s' if n != 1 else ''} · "
+                    f"{n_rec} reclaimable"
+                    + (f" · {by_tier['judge']} to review"
+                       if by_tier["judge"] else ""),
+            "detail": detail,
+        }
+    )
+    return entry
+
+
 def _locks_entry(paths: DevinPaths) -> dict:
     locks_dir = paths.session_locks_dir
     locks = sorted(locks_dir.glob("*.lock")) if locks_dir.is_dir() else []
@@ -579,6 +640,7 @@ def space_report(
     labels_path: str | Path | None = None,
     exclude_labeled: bool = False,
     project_days: float | None = None,
+    devin_dir: str | Path | None = None,
 ) -> dict:
     """Recoverable-space report across every store the janitor manages.
 
@@ -587,6 +649,12 @@ def space_report(
     ``extra_delete_ids`` for judge verdicts / pending-queue ids), sqlite
     sidecars of deleted stores, orphan session locks, and the sessions.db
     WAL that ``wal_checkpoint(TRUNCATE)`` reclaims during a safe vacuum.
+
+    ``devin_dir`` is the ``.devin/`` runtime-state dir (default ``./.devin``
+    — same convention as the keep/pending/log file defaults). Its
+    artifacts are tiered (keep / auto_delete / judge) and the
+    AUTO_DELETE bytes count as recoverable; ``run`` still deletes
+    sessions only.
 
     Also carries a per-tier cleanup summary (JA-2: orphans & cache /
     stale sessions / gated GUI state) and an ``automatic_sessions``
@@ -633,6 +701,10 @@ def space_report(
     if classification is not None:
         deletable.update(r.id for r, _ in classification.auto_delete)
 
+    devin_d = (
+        Path(devin_dir).expanduser() if devin_dir else Path(".devin")
+    )
+
     stores = []
     for name, builder in (
         ("sessions.db", lambda: _sessions_db_entry(
@@ -640,6 +712,7 @@ def space_report(
         ("acp-messages", lambda: _acp_entry(paths, deletable)),
         ("state.vscdb", lambda: _vscdb_entry(paths)),
         ("session_locks", lambda: _locks_entry(paths)),
+        (".devin", lambda: _devin_artifacts_entry(devin_d)),
     ):
         try:
             stores.append(builder())
@@ -776,6 +849,20 @@ def render_space_report(report: dict) -> str:
                 f"{fmt_bytes(s['rate_bytes_per_day'])}/d over "
                 f"{s['window_days']:.0f}d)"
             )
+    devin_store = next(
+        (s for s in report["stores"] if s["name"] == ".devin"), None
+    )
+    if devin_store and devin_store.get("detail"):
+        detail = devin_store["detail"]
+        lines.append("")
+        lines.append(f"  .devin artifacts ({len(detail)}):")
+        for a in detail[:10]:
+            lines.append(
+                f"    {a['tier']:<11} {a['rel_path'][:44]:44} "
+                f"{fmt_bytes(a['bytes']):>9}  {a['reason']}"
+            )
+        if len(detail) > 10:
+            lines.append(f"    … and {len(detail) - 10} more")
     auto = report.get("automatic_sessions") or {}
     if auto.get("count"):
         lines.append("")

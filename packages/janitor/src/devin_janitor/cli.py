@@ -54,17 +54,23 @@ from devin_janitor.paths import resolve
 from devin_janitor.report import (
     append_log,
     audit_entry,
+    fmt_bytes,
     parse_horizon,
     plan_summary,
     render_space_report,
     run_summary,
     space_report,
 )
-from devin_janitor.tiers import classify, load_keep_file
+from devin_janitor.tiers import (
+    classify,
+    devin_artifacts_payload,
+    load_keep_file,
+)
 
 DEFAULT_KEEP_FILE = ".devin/janitor-keep.json"
 DEFAULT_PENDING_FILE = ".devin/janitor-pending.json"
 DEFAULT_LOG_FILE = ".devin/memory/janitor-log.jsonl"
+DEFAULT_DEVIN_DIR = ".devin"
 
 
 def _row_json(row: SessionRow, tier: str, reason: str) -> dict:
@@ -80,6 +86,12 @@ def _add_path_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--sessions-db", help="explicit path to sessions.db")
     p.add_argument("--acp-dir", help="explicit acp-messages directory")
     p.add_argument("--locks-dir", help="explicit session_locks directory")
+
+
+def _add_devin_dir_arg(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--devin-dir", default=DEFAULT_DEVIN_DIR,
+                   help=".devin/ runtime-state dir to classify "
+                        f"(default: {DEFAULT_DEVIN_DIR})")
 
 
 def _resolve(args: argparse.Namespace):
@@ -173,12 +185,16 @@ def cmd_scan(args: argparse.Namespace) -> int:
     classification = classify(
         rows, cfg, keep_ids=keep_ids, keep_patterns=keep_patterns
     )
+    # .devin/ artifacts: unreadable/malformed paths raise here — loud,
+    # not silently skipped (absence is fine, yields an empty listing)
+    artifacts = devin_artifacts_payload(args.devin_dir)
 
     if args.json:
         payload = _classification_payload(
             rows, classification, [], [],
             {r.id for r in classification.judge},
         )
+        payload["devin_artifacts"] = artifacts
         print(json.dumps(payload, indent=2, ensure_ascii=False))
         return 0
 
@@ -193,6 +209,21 @@ def cmd_scan(args: argparse.Namespace) -> int:
         if args.verbose:
             for r, why in items:
                 print(f"    {r.id[:40]:40} {why:42} {r.title[:50]}")
+    if not artifacts["exists"]:
+        print(f"  .devin: missing ({artifacts['dir']})")
+    else:
+        t = artifacts["by_tier"]
+        print(
+            f"  .devin: {artifacts['total']} artifacts · "
+            f"keep {t['keep']} · auto_delete {t['auto_delete']} · "
+            f"judge {t['judge']}"
+        )
+        if args.verbose:
+            for a in artifacts["artifacts"]:
+                print(
+                    f"    {a['rel_path'][:48]:48} {a['tier']:11} "
+                    f"{a['reason']:38} {fmt_bytes(a['bytes'])}"
+                )
     return 0
 
 
@@ -457,6 +488,7 @@ def cmd_report(args: argparse.Namespace) -> int:
             labels_path=args.labels_file,
             exclude_labeled=args.exclude_labeled,
             project_days=project_days,
+            devin_dir=args.devin_dir,
         )
     except Exception as exc:  # noqa: BLE001 - advisory — must never fail the command
         rep = {
@@ -524,6 +556,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("scan", help="classification preview")
     _add_path_args(p)
+    _add_devin_dir_arg(p)
     p.add_argument("--config", help="JSON config overriding tier rules")
     p.add_argument("--keep-file", default=DEFAULT_KEEP_FILE)
     p.add_argument("--grace-hours", type=float, default=None)
@@ -574,6 +607,7 @@ def build_parser() -> argparse.ArgumentParser:
         "report", help="recoverable-space report (advisory, read-only)"
     )
     _add_path_args(p)
+    _add_devin_dir_arg(p)
     p.add_argument("--config", help="JSON config overriding tier rules")
     p.add_argument("--keep-file", default=DEFAULT_KEEP_FILE)
     p.add_argument("--pending-file", default=DEFAULT_PENDING_FILE)

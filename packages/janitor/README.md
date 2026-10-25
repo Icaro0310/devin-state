@@ -78,7 +78,7 @@ Requires Python ≥ 3.10 and `pipx` or `uv`. Per-OS setup lives in the platform 
 ## Usage
 
 ```bash
-devin-janitor scan                 # classification preview
+devin-janitor scan                 # classification preview (+ .devin/ artifacts)
 devin-janitor scan --json          # machine-readable
 devin-janitor run                  # dry-run: prints the exact plan, writes nothing
 devin-janitor run --apply          # execute the pipeline
@@ -119,6 +119,28 @@ by `report` and selectable via `run --tiers`:
   Each deleted key leaves a metadata-only `devin.janitor.tombstone/…`
   marker (original key, slug, backend, size, timestamps) so the removal
   stays auditable; the verified snapshot owns payload restoration.
+
+### `.devin/` runtime artifacts
+
+The PAS learning loop and the janitor itself accumulate runtime state in
+the project's `.devin/` dir. `scan` and `report` tier every file there
+with the same KEEP / AUTO_DELETE / JUDGE enum (`--devin-dir` points at
+another `.devin/`; default `./.devin`):
+
+- **auto_delete** — regenerable caches (`search.db`, `graph.db`), sqlite
+  sidecars, transient leftovers (`*.tmp`, `__pycache__`, OS droppings),
+  and bounded append logs (`*.jsonl`/`*.log` like
+  `memory/hook-fires.jsonl` — prune/rotate candidates)
+- **keep** — durable state: `*.json` state files (`learning-state.json`,
+  `janitor-keep.json`, the pending queue), docs, config, everything under
+  `rules/` and `skills/`
+- **judge** — unrecognized files: unknown sqlite stores, possible live
+  `*.lock` files, anything else — fail-open kept, flagged for review
+
+`report` shows per-artifact tiers and counts AUTO_DELETE bytes as
+recoverable; `run` still deletes sessions only — `.devin/` is reported,
+never touched. An unreadable or malformed artifact is an error (`scan`
+exits 2); a missing `.devin/` is fine.
 
 ### Automatic sessions (bridge labels)
 
@@ -172,7 +194,8 @@ bridge labels sidecar follows `DEVIN_BRIDGE_STATE_DIR`. Protect
 sessions in `.devin/janitor-keep.json`
 (`{"ids": [...], "title_patterns": [...]}`); tune classification rules via
 `--config file.json`. `report` reads every store (`sessions.db`,
-`acp-messages/`, `state.vscdb`, `session_locks/`) and estimates what the
+`acp-messages/`, `state.vscdb`, `session_locks/`, `.devin/` artifacts) and
+estimates what the
 janitor's own rules would free — it never writes and always exits 0. Full
 details: [docs/SPEC.md](docs/SPEC.md).
 
@@ -235,8 +258,8 @@ Tested on **Windows and Linux** (`windows-latest` + `ubuntu-latest` in CI).
 Session data uses `%APPDATA%/devin` on Windows and `$XDG_DATA_HOME/devin` on
 Linux (default `~/.local/share/devin`). ACP files use the separate
 `$XDG_CONFIG_HOME/Devin` root on Linux (default `~/.config/Devin`). Explicit
-`--data-dir`, `--config-dir`, `--sessions-db`, `--acp-dir`, and `--locks-dir`
-overrides are available.
+`--data-dir`, `--config-dir`, `--sessions-db`, `--acp-dir`, `--locks-dir`,
+and `--devin-dir` overrides are available.
 
 ## Limitations
 

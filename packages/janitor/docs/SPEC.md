@@ -29,6 +29,14 @@ Inside the root:
 - `User/acp-messages/*.db` — one store per GUI session (`meta` + `messages`)
 - `cli/session_locks/*.lock` — live-session locks; presence ⇒ Devin active
 
+One more store lives outside the data root, in the project dir:
+
+- `.devin/` — runtime accumulators: the PAS learning loop's
+  `memory/hook-fires.jsonl`, `search.db`, `graph.db`,
+  `learning-state.json` and friends, plus the janitor's own
+  keep/pending/log files. Located by `--devin-dir` (default `./.devin` —
+  the same CWD convention as the keep/pending/log defaults).
+
 ## Environment overrides
 
 Every root is env-overridable. Precedence per root is explicit CLI flag
@@ -81,6 +89,12 @@ disables it (see *Pipeline (`run`)* step 8).
 - `prompt`: first user message text (feeds the judge)
 - timestamps normalized ms → s; GUI rows use file mtime as `last_activity`
 
+`inventory.load_devin_artifacts(devin_dir)` lists the `.devin/` dir into
+`DevinArtifact`s (`rel_path`, `bytes`, `mtime`). Absence is fine (empty
+list); an unreadable or malformed artifact — `.devin` not being a
+directory, a non-regular or unstat-able file, a `*.json` state file that
+does not parse — raises `DevinArtifactError`, never a silent skip.
+
 ## Tiers (`tiers.classify`)
 
 Evaluated in order; first match wins:
@@ -102,6 +116,33 @@ Evaluated in order; first match wins:
 
 All patterns and thresholds come from `JanitorConfig` (`--config file.json`,
 merged over defaults). An empty pattern list matches nothing.
+
+### `.devin/` artifacts (`tiers.classify_devin_artifacts`)
+
+`.devin/` runtime files get the same three tiers, assigned by path —
+first match wins, no session counters involved:
+
+1. transient leftovers (`*.tmp`, `*.bak`, `*.swp`, `*.pyc`/`*.pyo`, `*~`,
+   `__pycache__/`, `.DS_Store`/`Thumbs.db`/`desktop.ini`) → **AUTO_DELETE**
+2. sqlite sidecars (`*-wal`, `*-shm`, `*-journal`) → **AUTO_DELETE**
+   (`sqlite sidecar (checkpoint-reclaimed)`)
+3. regenerable caches (`search.db`, `graph.db`) → **AUTO_DELETE**
+4. bounded append logs (`*.jsonl`, `*.ndjson`, `*.log` — e.g.
+   `memory/hook-fires.jsonl`, `memory/janitor-log.jsonl`) → **AUTO_DELETE**
+   (`bounded log — prune/rotate`)
+5. anything under `rules/` or `skills/` → **KEEP** (learned knowledge)
+6. docs (`*.md`, `*.txt`, `*.rst`) → **KEEP**
+7. `*.json` → **KEEP** (`durable state` — `learning-state.json`,
+   `janitor-keep.json`, `janitor-pending.json`)
+8. config (`*.toml`, `*.yaml`, `*.yml`, `*.ini`, `*.cfg`) → **KEEP**
+9. `*.lock` → **JUDGE** (possible live lock)
+10. other `*.db`/`*.sqlite*` → **JUDGE** (unrecognized sqlite store —
+    verify it is regenerable before reclaiming)
+11. anything else → **JUDGE** (`unrecognized artifact — review manually`)
+
+JUDGE stays fail-open like sessions: the file is kept and flagged.
+`scan` (exit 2) fails loudly on an unreadable/malformed artifact;
+`report` shows it as the `.devin` store's `error` row and still exits 0.
 
 Keep-file format (default `.devin/janitor-keep.json`):
 
@@ -170,8 +211,8 @@ fail-open**: unavailable/error/timeout/unclear verdict ⇒ keep.
 
 ```
 devin-janitor scan [--data-dir D] [--sessions-db F] [--acp-dir D]
-                   [--locks-dir D] [--config F] [--keep-file F]
-                   [--grace-hours N] [--json] [-v]
+                   [--locks-dir D] [--devin-dir D] [--config F]
+                   [--keep-file F] [--grace-hours N] [--json] [-v]
 devin-janitor run  [path flags...] [--config F] [--grace-hours N]
                    [--max-delete N] [--judge SPEC] [--export-cmd CMD]
                    [--notify-cmd CMD]
@@ -183,6 +224,10 @@ devin-janitor report  [path flags...] [--config F] [--keep-file F]
                       [--pending-file F] [--grace-hours N] [--judge SPEC]
                       [--labels-file F] [--exclude-labeled]
                       [--project N[h|d|w]] [--json]
+devin-janitor report  [path flags...] [--devin-dir D] [--config F]
+                      [--keep-file F] [--pending-file F]
+                      [--grace-hours N] [--judge SPEC]
+                      [--labels-file F] [--exclude-labeled] [--json]
 devin-janitor install --daily [--config-dir D]
                       [--backend auto|tasksch|cron|elapsed] [--json]
 ```
@@ -193,8 +238,11 @@ and exits 0 without writing anything (no db writes, no pending file, no log).
 `report` is advisory: it exits 0 always, writes nothing, and estimates
 recoverable bytes from the same classification rules as `run` —
 AUTO_DELETE + judged deletes + pending-queue ids, the `-wal`/`-shm` sidecars
-that a safe vacuum truncates, stale acp-messages leftovers, and orphan
-`session_locks/*.lock`. Per-session byte figures are payload estimates
+that a safe vacuum truncates, stale acp-messages leftovers, orphan
+`session_locks/*.lock`, and the `.devin` store's AUTO_DELETE artifacts
+(regenerable caches, sidecars, bounded logs — `run` deletes sessions
+only, so `.devin` bytes are reported but never freed by the pipeline).
+Per-session byte figures are payload estimates
 (`SUM(LENGTH(...))` per message table), not exact page accounting.
 
 `report --project N[h|d|w]` adds a **growth projection** section (and a
@@ -265,6 +313,8 @@ entry on Windows, or an elapsed job record in
 - locked files are never force-deleted — they queue for retry
 - VACUUM never runs while Devin may have the db open
 - schema versions outside the spec's known range abort loudly
+- `.devin/` reads are honest: a missing dir is an empty listing, an
+  unreadable or malformed artifact is an error, never a silent skip
 
 ## Limitations
 
