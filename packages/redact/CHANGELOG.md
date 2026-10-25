@@ -104,6 +104,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A complete PEM block is reported once, not once per matching
   pattern — `scan_text` dedupes overlapping findings so one key no
   longer inflates the count (devin-state#92).
+- `redact --apply` no longer silently truncates a UTF-16 file whose
+  final code point is incomplete (devin-state#92). The truncated-tail
+  tolerance that lets the bounded binary sniff and read-only scans
+  judge the decodable head used to reach the rewrite too: only the
+  decoded prefix was written while success was reported. The rewrite
+  now re-verifies the whole file under the detected codec and carries
+  the undecodable tail bytes through `_apply_text`, re-appending them
+  verbatim — and a mid-content decode failure skips with a loud error
+  instead of dropping bytes.
+- Type-shaped credentials no longer bypass scanning (devin-state#92):
+  `api_key: abc.def` matched the *dotted type* escape hatch in the
+  annotation guard and reported CLEAN. A dotted path now only counts
+  as an annotation when it is well-formed *and* its terminal segment
+  is a builtin/typing name or a CapWords class (`pathlib.Path`,
+  `datetime.datetime`, `models.User`, `typing.Any`) — the same check
+  applies inside generics/unions, so `list[abc.def]` cannot smuggle a
+  credential either. Real type annotations stay suppressed.
 
 ## [0.2.5] - 2026-10-23
 

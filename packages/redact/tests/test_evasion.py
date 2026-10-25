@@ -561,6 +561,52 @@ def test_yaml_scalar_and_quoted_type_names_still_flagged():
         ), text
 
 
+def test_dotted_credential_value_flagged():
+    """``api_key: abc.def`` used to scan CLEAN — the ``.`` in the bare
+    value tripped the *dotted type* escape hatch and suppressed the
+    finding. A dotted path only counts as an annotation when its
+    terminal segment is a builtin/typing name or a CapWords class —
+    ``abc.def`` and version-shaped ``v1.2`` are credential-shaped."""
+    for text in ("api_key: abc.def\n", "api_key: v1.2\n"):
+        findings = scan_text(text, file="x", location="text")
+        assert any(
+            f["category"] == "env_assignment" for f in findings
+        ), text
+        new, edits = redact_text(text)
+        assert "<REDACTED:" in new and edits
+    # the staged-file gate sees it too — no more silent CLEAN
+    report = engine.scan_blobs([("s.env", b"api_key: abc.def\n")])
+    assert report["publication_status"] == "BLOCKED"
+
+
+def test_dotted_credential_inside_generic_flagged():
+    """A credential cannot hide inside a subscript either —
+    ``api_key: list[abc.def]`` carries no real type parameter."""
+    findings = scan_text(
+        "api_key: list[abc.def]\n", file="x", location="text"
+    )
+    assert any(f["category"] == "env_assignment" for f in findings)
+
+
+def test_dotted_type_annotations_still_suppressed():
+    """Real dotted annotations keep working: the terminal segment is a
+    builtin/typing name (``datetime.datetime``, ``typing.Any``) or a
+    CapWords class (``pathlib.Path``, ``models.User``)."""
+    src = (
+        "class Settings:\n"
+        "    api_key: pathlib.Path\n"
+        "    token: datetime.datetime\n"
+        "    secret: Mapping[str, typing.Any]\n"
+        "    auth: models.User | None\n"
+    )
+    findings = scan_text(src, file="settings.py", location="text")
+    assert not [
+        f for f in findings if f["category"] == "env_assignment"
+    ], findings
+    new, _ = redact_text(src)
+    assert "<REDACTED:" not in new
+
+
 def test_complete_pem_reported_once_not_twice():
     """A complete PEM block matched both ``pem_private_key`` and
     ``pem_private_key_unterminated`` (a strict prefix) — one key, two
@@ -650,6 +696,49 @@ def test_utf16le_apply_still_preserves_byte_order(tmp_path):
     assert data[:2] == b"\xff\xfe"
     text = data.decode("utf-16")
     assert AWS not in text
+
+
+def test_utf16_truncated_tail_preserved_on_apply(tmp_path):
+    """A UTF-16 file ending mid-code-point used to rewrite *without*
+    its tail bytes — ``_decode_file_bytes`` returned the decodable
+    prefix and ``--apply`` wrote it back, silently truncating the file
+    behind an applied_ok report. The undecodable tail now travels
+    beside the plan and is re-appended verbatim."""
+    raw = ("API_KEY=" + AWS + "\n").encode("utf-16") + b"\x61"
+    p = tmp_path / "truncated.env"
+    p.write_bytes(raw)
+    result = devin_redact.redact(
+        [p], apply=True, confirm_irreversible=True
+    )
+    assert result["applied_ok"] is True
+    assert result["replacements"] == 1
+    data = p.read_bytes()
+    assert data.endswith(b"\x61")
+    body = data[:-1].decode("utf-16")
+    assert AWS not in body
+    assert "<REDACTED:" in body
+
+
+def test_utf16_truncated_tail_no_secret_untouched(tmp_path):
+    """A secret-free truncated UTF-16 file is never rewritten — the
+    tail-preservation path only runs when an edit is planned."""
+    raw = "note=fine".encode("utf-16") + b"\x62"
+    p = tmp_path / "clean.env"
+    p.write_bytes(raw)
+    result = devin_redact.redact(
+        [p], apply=True, confirm_irreversible=True
+    )
+    assert result["applied_ok"] is True
+    assert p.read_bytes() == raw
+
+
+def test_utf16_truncated_tail_blob_still_scanned():
+    """The tail-drop tolerance stays for *detection*: a BOM-less
+    UTF-16 staged blob with a clipped final char still scans the
+    decodable body instead of failing closed to binary."""
+    blob = ("API_KEY=" + AWS + "\n").encode("utf-16-le") + b"\x42"
+    report = engine.scan_blobs([("s.env", blob)])
+    assert report["publication_status"] == "BLOCKED"
 
 
 def test_json_key_secret_redacted_on_apply(tmp_path):

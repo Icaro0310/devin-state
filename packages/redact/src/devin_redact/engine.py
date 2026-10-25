@@ -131,6 +131,23 @@ _TYPE_NAMES = frozenset(
 )
 
 
+# A dotted path in annotation position — ``pathlib.Path``,
+# ``datetime.datetime``, ``typing.Optional``. The terminal segment of a
+# real annotation names a type: a builtin/typing name or, by
+# convention, a CapWords class. A bare ``abc.def`` whose last segment is
+# neither is credential-shaped (``api_key: abc.def``), not an
+# annotation.
+_DOTTED_PATH_RE = re.compile(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+")
+
+
+def _dotted_terminal_is_type(path: str) -> bool:
+    """Is the last segment of a dotted path a plausible type name —
+    builtin/typing (``datetime.datetime``) or CapWords class
+    (``pathlib.Path``, ``models.User``)?"""
+    last = path.rsplit(".", 1)[1]
+    return last in _TYPE_NAMES or last[:1].isupper()
+
+
 def _looks_like_type_annotation(rhs: str) -> bool:
     """True when ``rhs`` is a bare type expression, not a secret value.
 
@@ -138,10 +155,12 @@ def _looks_like_type_annotation(rhs: str) -> bool:
     type annotations, but the colon pattern also fires on them —
     flagging (and worse, redacting) the type corrupts the code. Only
     shapes that can *only* name a type are suppressed: a subscripted
-    generic, a ``|`` union, a dotted path, a builtin/typing name, or an
-    annotation with a ``= default`` tail. A bare lowercase scalar
-    (``api_key: hunter2``) or any quoted value still flags — a quoted
-    ``"str"`` is a real string value in YAML/JSON, never an annotation.
+    generic, a ``|`` union, a dotted path whose terminal segment is a
+    type name, a builtin/typing name, or an annotation with a
+    ``= default`` tail. A bare lowercase scalar (``api_key: hunter2``),
+    a lowercase dotted scalar (``api_key: abc.def`` — credential-shaped,
+    not a type) or any quoted value still flags — a quoted ``"str"`` is
+    a real string value in YAML/JSON, never an annotation.
     """
     v = rhs.strip()
     if not v:
@@ -150,8 +169,22 @@ def _looks_like_type_annotation(rhs: str) -> bool:
     v = v.split("=", 1)[0].rstrip()    # annotated default: ``x: T = ...``
     if not v or not _TYPE_EXPR_RE.fullmatch(v):
         return False
-    if "[" in v or "|" in v or "." in v:
-        return True                  # generic / union / dotted type
+    if "[" in v or "|" in v:
+        # generic / union — but a credential can hide inside a
+        # subscript (``list[abc.def]``), so every dotted path in the
+        # expression must still terminate in a type-like name.
+        return all(
+            _dotted_terminal_is_type(m.group(0))
+            for m in _DOTTED_PATH_RE.finditer(v)
+        )
+    if "." in v:
+        # ``mod.Type`` is an annotation; ``abc.def``/``v1.2`` is a
+        # credential-shaped scalar. Require a well-formed dotted path
+        # whose terminal segment reads like a type name.
+        return (
+            _DOTTED_PATH_RE.fullmatch(v) is not None
+            and _dotted_terminal_is_type(v)
+        )
     return v in _TYPE_NAMES
 
 
@@ -606,7 +639,14 @@ def _decode_file_bytes(raw: bytes) -> tuple[str, str] | None:
       (``sensitive_match`` strips it).
     * A truncated final character (a sniff slice can cut a surrogate
       pair at ``_BINARY_SNIFF_BYTES``) is dropped before judging — only
-      when the decode error reaches the very end of ``raw``.
+      when the decode error reaches the very end of ``raw``. That
+      tolerance exists so the bounded sniffs (``_looks_binary``,
+      ``_target_type``, ``_blob_kind``) and the read-only scans still
+      see the decodable head; it must never reach a rewrite.
+      ``redact()`` therefore re-verifies a non-UTF-8 decode against the
+      whole file and carries any undecodable tail through
+      ``_apply_text`` as raw bytes — a rewrite can no longer silently
+      truncate the file.
 
     Last resort: a lossy ``surrogateescape`` UTF-8 decode. Text with a
     few invalid bytes — a staged ``.env`` holding a credential plus one
@@ -1743,14 +1783,22 @@ def _apply_db(path: Path, cell_edits: list[dict]) -> None:
         raise
 
 
-def _apply_text(path: Path, new_text: str, encoding: str = "utf-8") -> None:
+def _apply_text(
+    path: Path,
+    new_text: str,
+    encoding: str = "utf-8",
+    tail: bytes = b"",
+) -> None:
     """Atomic text rewrite: .bak first, then tmp file + os.replace.
 
     ``encoding`` preserves the input's coding — a UTF-16 file goes back
     as UTF-16 in its source byte order (BOM included when the input had
     one, because the decoded text keeps the ``\\ufeff`` mark). Bytes
     that arrived via ``surrogateescape`` — text-marked files with a few
-    undecodable bytes — encode back byte-exactly."""
+    undecodable bytes — encode back byte-exactly. ``tail`` carries raw
+    bytes that never entered the decoded text — the truncated final
+    code point of a damaged UTF-16 file — and is re-appended verbatim
+    so the rewrite cannot silently drop them."""
     _backup(path)
     tmp = path.with_name(path.name + ".redact-tmp")
     try:
@@ -1758,7 +1806,7 @@ def _apply_text(path: Path, new_text: str, encoding: str = "utf-8") -> None:
             data = new_text.encode(encoding)
         except UnicodeEncodeError:
             data = new_text.encode(encoding, "surrogateescape")
-        tmp.write_bytes(data)
+        tmp.write_bytes(data + tail)
         os.replace(tmp, path)
     except BaseException:
         tmp.unlink(missing_ok=True)
@@ -1824,6 +1872,38 @@ def redact(paths, *, apply: bool = False, confirm_irreversible: bool = False) ->
                 # undecodable bytes through the rewrite untouched.
                 decoded = (raw.decode("utf-8", "surrogateescape"), "utf-8")
             text, encoding = decoded
+            tail = b""
+            if encoding != "utf-8":
+                # ``_decode_file_bytes`` tolerates a truncated final
+                # code point for the bounded binary sniff and the
+                # read-only scans — but rewriting only the decoded
+                # prefix would silently delete the original tail bytes.
+                # Re-decode the whole file: when the error sits at EOF
+                # the raw tail travels beside the plan and is appended
+                # verbatim by ``_apply_text``; a mid-content error
+                # (unreachable — such files decode None above, but
+                # belt-and-braces) skips loudly instead of truncating.
+                try:
+                    raw.decode(encoding)
+                except UnicodeDecodeError as exc:
+                    if exc.end >= len(raw):
+                        tail = raw[exc.start :]
+                    else:
+                        errors.append(
+                            {
+                                "file": display,
+                                "error": (
+                                    f"skipped: undecodable {encoding}"
+                                    " content — rewrite would corrupt"
+                                ),
+                            }
+                        )
+                        continue
+                except ValueError as exc:
+                    errors.append(
+                        {"file": display, "error": f"skipped: {exc}"}
+                    )
+                    continue
             new_text, edits = redact_text(text)
             if edits:
                 planned.append(
@@ -1832,6 +1912,7 @@ def redact(paths, *, apply: bool = False, confirm_irreversible: bool = False) ->
                         "path": f,
                         "new_text": new_text,
                         "encoding": encoding,
+                        "tail": tail,
                     }
                 )
                 for e in edits:
@@ -1859,7 +1940,10 @@ def redact(paths, *, apply: bool = False, confirm_irreversible: bool = False) ->
                 _apply_db(path, plan["cells"])
             else:
                 _apply_text(
-                    path, plan["new_text"], plan.get("encoding", "utf-8")
+                    path,
+                    plan["new_text"],
+                    plan.get("encoding", "utf-8"),
+                    tail=plan.get("tail", b""),
                 )
             result["backups"].append(str(path.with_name(path.name + ".bak")))
         except Exception as exc:  # noqa: BLE001 - collect per-file errors, keep applying
