@@ -23,7 +23,8 @@ Code/Codex — **nenhuma lê a `sessions.db`**.
 
 ## 3. Escopo
 
-- `scan` (read-only), `redact` (dry-run por defeito), `verify` (bloqueia publicação).
+- `scan` (read-only), `redact` (dry-run por defeito), `verify` (bloqueia publicação),
+  `diff` (relatório HTML autocontido antes/depois, mascarado).
 - Alvos: `sessions.db`, `acp-messages/*.db`, `.devin/memory/memories.jsonl`,
   exports Markdown/CSV, `.env`/`mcp_config.json`.
 - Deteção: padrões (chaves, tokens, cookies, credenciais), ficheiros sensíveis
@@ -44,7 +45,7 @@ Code/Codex — **nenhuma lê a `sessions.db`**.
 | Interface | Descrição |
 |---|---|
 | **Biblioteca** `devin_redact` | Motor de deteção + redação (reutilizável por outros repos) |
-| **CLI** `devin-redact` | `scan` · `redact` · `verify` · `--report` |
+| **CLI** `devin-redact` | `scan` · `redact` · `verify` · `diff` · `--report` |
 | **Hook** (opcional) | `SessionEnd` → scan automático do dia |
 | **Skill** | `/redact` para uso dentro do Devin |
 | **PyPI** | `pipx install devin-redact` |

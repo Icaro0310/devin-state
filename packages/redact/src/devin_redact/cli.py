@@ -8,7 +8,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from . import __version__, cflite, engine, paths, publish, session_end, staged
+from . import __version__, cflite, diffhtml, engine, paths, publish, session_end, staged
 from .sarif import report_to_sarif
 
 
@@ -41,6 +41,24 @@ def _build_parser() -> argparse.ArgumentParser:
         "--i-know-this-is-irreversible",
         action="store_true",
         help="required with --apply (long flag, on purpose)",
+    )
+
+    diff_p = sub.add_parser(
+        "diff",
+        help="self-contained HTML before/after report — masked previews "
+        "and <REDACTED:fp> tags only, never secret text; for human "
+        "review of what redact would change",
+    )
+    diff_p.add_argument(
+        "paths", nargs="+", type=Path, help="files or directories to inspect"
+    )
+    diff_p.add_argument(
+        "-o",
+        "--out",
+        type=Path,
+        default=None,
+        metavar="REPORT.html",
+        help="write the HTML report to this file (default: stdout)",
     )
 
     verify_p = sub.add_parser("verify", help="publication gate — non-zero exit unless CLEAN")
@@ -236,6 +254,51 @@ def main(argv: list[str] | None = None) -> int:
             return 3
         _emit(result, args.report)
         return 0 if result.get("applied_ok", True) else 1
+
+    if args.command == "diff":
+        missing = [p for p in args.paths if not (p.is_file() or p.is_dir())]
+        for p in missing:
+            print(
+                f"devin-redact: not a file or directory: {p}", file=sys.stderr
+            )
+        if missing:
+            return 2
+        report = engine.scan(args.paths)
+        plan = engine.redact(args.paths)  # dry-run — never applies
+        hard = _blocking_errors(report)
+        seen_hard = {(str(e["file"]), str(e["error"])) for e in hard}
+        for e in plan.get("errors", []):
+            if str(e.get("error", "")).startswith("skipped:"):
+                continue
+            if (str(e["file"]), str(e["error"])) not in seen_hard:
+                hard.append(e)
+        if hard:
+            for e in hard:
+                print(f"devin-redact: {e['file']}: {e['error']}", file=sys.stderr)
+            return 2
+        document = diffhtml.render_html(
+            report,
+            targets=[str(p) for p in args.paths],
+            planned=diffhtml.planned_locations(plan),
+        )
+        if args.out is not None:
+            try:
+                # utf-8 explicitly — Windows parity (default locale varies).
+                args.out.write_text(document, encoding="utf-8")
+            except OSError as exc:
+                print(
+                    f"devin-redact: cannot write {args.out}: {exc}",
+                    file=sys.stderr,
+                )
+                return 2
+            print(
+                f"devin-redact: wrote {args.out} "
+                f"({report['findings_total']} finding(s), "
+                f"{report['publication_status']})"
+            )
+        else:
+            print(document)
+        return 0
 
     if args.command == "verify":
         report = engine.scan(args.paths)

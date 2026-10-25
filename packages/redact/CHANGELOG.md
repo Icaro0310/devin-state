@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `devin-redact diff <paths> [-o report.html]` — self-contained HTML
+  before/after report for human review of sensitive exports. Renders the
+  `scan` report as summary cards, category chips and a per-finding table
+  (file, `table.column#rowid`/`line` location, category, masked *before*
+  preview, `<REDACTED:sha256prefix>` *after* tag, fingerprint) and joins
+  the dry-run `redact()` plan so each row is marked `planned` or
+  `detection-only` (cross-chunk secrets the per-cell rewrite cannot
+  cover). Same secrecy contract as the JSON/SARIF outputs: secret text
+  never appears, and every dynamic value is HTML-escaped. Unreadable
+  targets fail loudly (exit 2, no report); a clean input still produces
+  a valid "no findings" page. Output is always written utf-8.
+
 ## [0.2.5] - 2026-10-23
 
 ### Fixed

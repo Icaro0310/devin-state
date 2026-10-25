@@ -17,6 +17,7 @@ devin-redact solves the problem that agent transcripts accumulate secrets (a `ca
 - `devin-redact redact sessions.db`: dry-run redact, shows exactly what would change, modifies nothing
 - `devin-redact redact sessions.db --apply --i-know-this-is-irreversible`: in-place redact (writes `.bak` backups first)
 - `devin-redact verify sessions.db exports/`: publication gate; exit 0 only when CLEAN, else 1 (`--json` available)
+- `devin-redact diff sessions.db -o review.html`: self-contained HTML before/after report for human review — masked previews + `<REDACTED:fp>` tags, never secret text; `-o` optional (stdout by default)
 - `devin-redact gate sessions.db`: machine gate; prints just CLEAN/REVIEW/BLOCKED, exits 0/0/1 (2 on error) — for devin-history-style pipelines
 - `devin-redact sessionend-scan`: SessionEnd hook handler; read-only scan of the default sessions.db, one verdict line (`findings=N publication_status=X`), exit 0 unless hard error
 - `devin-redact session-end`: per-session SessionEnd hook; resolves the just-ended session (`--session-id` → stdin `{"session_id": …}` → `DEVIN_SESSION_ID` → latest active), scans only its messages, writes a verdict side file to `<data-dir>/redact/<id>.json`; fail-soft, exits 0 even on SKIPPED
