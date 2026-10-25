@@ -136,6 +136,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `with ... as n`, `except ... as n`, `del n`, `n: T = v`, `n := v`
   or `case n` leaves `n.ndarray` a plain attribute read under a
   credential keyword, so it flags (devin-state#92).
+- Triple-quoted values mask the whole literal — the single-quote
+  arm used to stop at the empty `""`/`''` opener and leave
+  `key = """\nsecret\n"""` with its body intact (devin-state#92).
 - A parenthesized literal wrapped across lines now flags —
   `key = (\n "x"\n)` and `key: T = (\n "x"\n)` leak the same
   hardcoded value the one-line form did, and the rewrite stays

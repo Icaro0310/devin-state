@@ -799,6 +799,19 @@ def test_parenthesized_literal_across_lines_flags():
         ast.parse(new)
 
 
+def test_triple_quoted_value_masks_body_not_empty_opener():
+    """``key = \"\"\"\\nx\\n\"\"\"`` must mask the whole literal — a
+    single-quote arm matching the empty ``""`` prefix used to leave
+    the body behind."""
+    for src in (
+        'api_key = """\nhunter2\n"""\n',
+        "api_key = '''\nhunter2\n'''\n",
+        'api_key = """hunter2"""\n',
+    ):
+        new, _ = redact_text(src, file="x.env")
+        assert "hunter2" not in new, (src, new)
+
+
 def test_env_redaction_preserves_separator_whitespace():
     """``key: v`` must stay a mapping — dropping the space turns the
     line into a YAML scalar. ``KEY=v`` has no space to keep."""
