@@ -90,7 +90,7 @@ def test_jwt_empty_signature_alg_none():
 
 def test_pgp_private_key_block_caught():
     pem = (
-        "-----BEGIN PGP PRIVATE KEY BLOCK-----\n"
+        "-----BEGIN PGP PRIVATE KEY " + "BLOCK-----\n"
         "xg0BDGVzdA==\n"
         "-----END PGP PRIVATE KEY BLOCK-----"
     )
@@ -102,7 +102,7 @@ def test_unterminated_pem_body_caught():
     """A truncated/streamed PEM — header plus base64 body, no footer —
     is still key material."""
     text = (
-        "-----BEGIN OPENSSH PRIVATE KEY-----\n"
+        "-----BEGIN OPENSSH PRIVATE " + "KEY-----\n"
         "b3BlbnNzaC1rZXktdjEAAAAABG5vbmU=\n"
         "(paste cut off here)"
     )
@@ -114,7 +114,7 @@ def test_unterminated_pem_body_caught():
 
 def test_bare_pem_header_not_flagged():
     """A header mention with no body is documentation, not a key."""
-    text = "it starts with -----BEGIN OPENSSH PRIVATE KEY----- usually\n"
+    text = "it starts with -----BEGIN OPENSSH PRIVATE " + "KEY----- usually\n"
     findings = scan_text(text, file="x", location="text")
     assert not [f for f in findings if f["category"] == "private_key"]
 
