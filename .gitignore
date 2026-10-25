@@ -14,6 +14,10 @@ build/
 # Local session state — never committed
 .devin/
 
+# devin-doctor writes its machine snapshot to cwd — contains absolute
+# paths, cron commands and unit names; never commit
+doctor/automation-snapshot.json
+
 # Test fixtures are committed on purpose (all secrets are planted fakes)
 !**/tests/fixtures/.env
 !**/tests/fixtures/*.db
