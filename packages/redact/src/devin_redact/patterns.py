@@ -156,7 +156,8 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
             # An annotation head first — ``name: T = value``: the
             # ``T`` and its ``=`` belong to the match so a literal
             # default on a later line stays inside the span.
-            r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*\s*=\s*)?"
+            r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*"
+            r"(?:\s*\|\s*[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)*\s*=\s*)?"
             # A parenthesized literal — ``key = ("x")``, possibly
             # wrapped across lines — needs its closer in the match:
             # ``("x", "y")`` must fall through to the bare arm so a
