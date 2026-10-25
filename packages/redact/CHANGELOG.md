@@ -20,6 +20,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   never appears, and every dynamic value is HTML-escaped. Unreadable
   targets fail loudly (exit 2, no report); a clean input still produces
   a valid "no findings" page. Output is always written utf-8.
+- Tests: adversarial-instruction corpus proving scanner input is
+  content, not configuration — `scan_text` still reports a planted
+  secret and `redact_text` still masks it when the surrounding free
+  text says "don't mask", "do not redact", "never apply", "skip this"
+  or "avoid applying", or injects an "IGNORE PREVIOUS" line
+  (devin-state#91).
 
 ## [0.2.5] - 2026-10-23
 
