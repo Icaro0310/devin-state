@@ -732,6 +732,20 @@ def test_bindings_do_not_apply_inside_strings():
     assert "pending: deque" in new and "handle: ref" in new
 
 
+def test_import_inside_docstring_binds_nothing():
+    """An ``import`` line inside a triple-quoted string is string
+    content — it cannot create the alias that would excuse a later
+    ``api_key: n.ndarray``."""
+    src = (
+        'DOC = """\n'
+        "import numpy as n\n"
+        '"""\n'
+        "api_key: n.ndarray\n"
+    )
+    findings = scan_text(src, file="m.py", location="text")
+    assert any(f["category"] == "env_assignment" for f in findings)
+
+
 def test_unclosed_parenthesized_import_still_scans():
     """An unclosed ``from x import (`` binds nothing and must not stall
     or blind the scan — the secret after it still flags."""

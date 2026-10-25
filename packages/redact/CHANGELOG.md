@@ -128,8 +128,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (devin-state#92).
 - Import bindings only suppress outside string literals — a
   `name: value` line inside `'''`/`"""` is string content and always
-  flags, so a docstring cannot launder a credential through a
-  wildcard or relative import (devin-state#92).
+  flags, and an `import` line inside one binds nothing, so a
+  docstring cannot launder a credential through a wildcard or
+  relative import (devin-state#92).
 - The parenthesized-import matcher is per-character now — an
   unclosed `from x import (` scans linearly instead of
   exponentially partitioning the file (ReDoS; devin-state#92).

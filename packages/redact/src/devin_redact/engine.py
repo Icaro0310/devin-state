@@ -238,6 +238,7 @@ def _python_source_file(file: str) -> bool:
 
 def _import_aliases(
     text: str,
+    strings: list[tuple[int, int]] | None = None,
 ) -> tuple[dict[str, str], list[str]]:
     """Map bound names to module paths, plus wildcard ``*`` modules.
 
@@ -249,7 +250,9 @@ def _import_aliases(
     own names can be resolved anyway. Only top-level
     ``import``/``from ... import`` statements bind names — a file with
     no imports maps nothing, so credential-shaped dotted scalars still
-    flag there.
+    flag there. ``strings`` carries triple-quoted string spans: an
+    ``import`` line inside a docstring is string content and binds
+    nothing.
     """
     aliases: dict[str, str] = {}
     stars: list[str] = []
@@ -269,6 +272,8 @@ def _import_aliases(
                 aliases[bound] = f"{mod}.{name}"
 
     for m in _IMPORT_RE.finditer(text):
+        if strings and _inside_spans(strings, m.start()):
+            continue
         for part in m.group(1).split(","):
             name, sep, alias = part.partition(" as ")
             if (
@@ -278,8 +283,12 @@ def _import_aliases(
             ):
                 aliases[alias.strip()] = name.strip()
     for m in _FROM_IMPORT_RE.finditer(text):
+        if strings and _inside_spans(strings, m.start()):
+            continue
         _bind(m.group(1).lstrip("."), m.group(2))
     for m in _FROM_IMPORT_PAREN_RE.finditer(text):
+        if strings and _inside_spans(strings, m.start()):
+            continue
         _bind(m.group(1).lstrip("."), _COMMENT_RE.sub("", m.group(2)))
     return aliases, stars
 
@@ -668,13 +677,16 @@ def _iter_matches(text: str, *, python_source: bool | None = None):
     aliases; ``False`` treats import-like lines as inert text so a
     credential blob cannot hide a value behind ``import numpy as n``.
     """
-    bindings = (
-        _import_aliases(text) if python_source is not False else None
-    )
-    # Inside a triple-quoted string there is no annotation or
+    # Inside a triple-quoted string there is no annotation, import or
     # assignment position — ``api_key: ref`` in a docstring is string
-    # content and must flag regardless of bindings (devin-state#92).
+    # content and must flag, and an ``import`` line there binds
+    # nothing (devin-state#92).
     strings = _string_spans(text) if python_source is not False else []
+    bindings = (
+        _import_aliases(text, strings)
+        if python_source is not False
+        else None
+    )
     for category, regexes in PATTERNS.items():
         env = category == "env_assignment"
         for index, rx in enumerate(regexes):
