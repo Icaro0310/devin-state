@@ -29,7 +29,7 @@ and it redacts **in-place in SQLite**, not just text.
 ## 3. Scope
 
 - `scan` (read-only), `redact` (dry-run by default), `verify` (blocks
-  publication).
+  publication), `diff` (self-contained masked HTML before/after report).
 - Targets: `sessions.db`, `acp-messages/*.db`, `.devin/memory/memories.jsonl`,
   Markdown/CSV exports, `.env`/`mcp_config.json`.
 - Detection: patterns (keys, tokens, cookies, credentials), known sensitive
@@ -52,7 +52,7 @@ and it redacts **in-place in SQLite**, not just text.
 | Interface | Description |
 |---|---|
 | **Library** `devin_redact` | Detection + redaction engine (reusable by other repos) |
-| **CLI** `devin-redact` | `scan` · `redact` · `verify` · `--report` |
+| **CLI** `devin-redact` | `scan` · `redact` · `verify` · `diff` · `--report` |
 | **Hook** (optional) | `SessionEnd` → automatic scan of the day |
 | **Skill** | `/redact` for use inside Devin |
 | **PyPI** | `pipx install devin-redact` |
@@ -67,6 +67,16 @@ and it redacts **in-place in SQLite**, not just text.
 
 Irreversible flags in long form only (`--apply --i-know-this-is-irreversible`),
 like `geheim` does — avoids accidental keystrokes.
+
+`diff` renders the same report as self-contained HTML (inline CSS, no
+external assets, utf-8): summary counts, per-finding before/after table.
+The secrecy contract is identical to the JSON/SARIF outputs — *before* is
+the lossy masked preview, *after* is the `<REDACTED:sha256prefix>` tag; a
+*Plan* column joins the dry-run `redact()` edit plan so rows the
+per-cell rewrite cannot cover (e.g. cross-chunk secrets) read
+`detection-only`. Every dynamic value is HTML-escaped; unreadable targets
+exit non-zero without writing a report, and a legitimately clean input
+still produces a valid "no findings" page.
 
 ## 7. Fixtures and tests (TDD — fixtures first)
 

@@ -111,6 +111,11 @@ devin-redact scan sessions.db --report report.json
 # SARIF 2.1.0 for CI / code-scanning ingestion (never contains secret text)
 devin-redact scan sessions.db --format sarif > scan.sarif
 
+# Self-contained HTML before/after report for human review — masked
+# previews and <REDACTED:fp> tags only, never secret text
+devin-redact diff sessions.db exports/ -o review.html
+devin-redact diff sessions.db > review.html   # stdout works too
+
 # Dry-run redact — shows exactly what would change, modifies nothing
 devin-redact redact sessions.db
 
@@ -192,6 +197,20 @@ and the sha256 fingerprint as `partialFingerprints` for deduplication.
 Secret-class categories map to `level: error`, PII/hygiene to `warning`.
 The log never contains the matched secret text, so it is safe to upload to
 code-scanning dashboards or archive as a CI artifact.
+
+`diff` renders the same report as a self-contained HTML page (inline CSS,
+no external assets, always written utf-8): a summary card row, category
+chips, and a per-finding before/after table — file and
+`table.column#rowid`/`line` location, category badge, the masked *before*
+preview, the `<REDACTED:sha256prefix>` *after* tag, the fingerprint, and a
+*Plan* column marking each row `planned` (the dry-run `redact` would
+rewrite that location) or `detection-only` (the scanner sees it but the
+per-cell rewrite cannot — e.g. secrets split across chunk boundaries —
+manual review needed). It is built for eyeballing a sensitive export
+*before* running `--apply`, and is safe to attach to a review thread:
+matched secret text never appears. Unreadable targets fail loudly (exit
+2, no report written); a legitimately clean input still produces a valid
+"no findings" report.
 
 ## SessionEnd hook
 
