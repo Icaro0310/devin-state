@@ -110,8 +110,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Import aliases are resolved from the scanned text itself —
   `import numpy as n` makes `n.ndarray` an annotation and
   `from collections import deque` binds the bare name, while an
-  unbound alias (`api_key: n.ndarray` with no import) still flags
-  (devin-state#92).
+  unbound alias (`api_key: n.ndarray` with no import) still flags.
+  Relative (`from .x import y`) and wildcard (`from x import *`)
+  imports bind the same way — `weakref`'s starred `ref` suppresses,
+  `os`'s `environ` does not (devin-state#92).
 - Parenthesized from-imports (`from collections import (deque)`),
   including the multi-line form and inline comments inside the parens,
   bind names like the plain form (devin-state#92).

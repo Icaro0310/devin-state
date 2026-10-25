@@ -668,6 +668,26 @@ def test_import_aliased_type_annotations_suppressed():
     ], findings
     new, _ = redact_text(src)
     assert "<REDACTED:" not in new
+    # relative and star imports bind the same way
+    src = (
+        "from .collections import deque\n"
+        "from weakref import *\n"
+        "api_key: deque\n"
+        "handle: ref\n"
+    )
+    findings = scan_text(src, file="m.py", location="text")
+    assert not [
+        f for f in findings if f["category"] == "env_assignment"
+    ], findings
+    # but a starred non-type module cannot excuse a credential value
+    assert any(
+        f["category"] == "env_assignment"
+        for f in scan_text(
+            "from os import *\napi_key: environ\n",
+            file="m.py",
+            location="text",
+        )
+    )
 
 
 def test_unbound_alias_still_flags():
