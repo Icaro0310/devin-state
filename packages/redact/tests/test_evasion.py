@@ -782,6 +782,34 @@ def test_unclosed_parenthesized_import_still_scans():
     assert any(f["category"] == "env_assignment" for f in findings)
 
 
+def test_call_bound_secrets_flag():
+    """``f(api_key="x")`` / ``cfg.setdefault("api_key", "x")``:
+    a credential name bound to a literal inside a call is the
+    same hardcoded secret without the line anchor."""
+    flagged = (
+        'f(api_key="hunter2")\n',
+        'cfg.update(api_key="hunter2")\n',
+        'boto3.client("s3", aws_secret_access_key="hunter2")\n',
+        'os.environ.setdefault("API_KEY", "hunter2")\n',
+        'd.get("api_key", "hunter2")\n',
+    )
+    for src in flagged:
+        findings = scan_text(src, file="m.py", location="text")
+        env = [f for f in findings if f["category"] == "env_assignment"]
+        assert len(env) == 1, (src, findings)
+        new, _ = redact_text(src, file="m.py")
+        assert "hunter2" not in new, (src, new)
+        ast.parse(new)
+    # ``name == "x"`` is a comparison, not a binding — the
+    # ``(?!=)`` guard keeps it out of env_assignment.
+    findings = scan_text(
+        'check(api_key=="hunter2")\n', file="m.py", location="text"
+    )
+    assert not [
+        f for f in findings if f["category"] == "env_assignment"
+    ]
+
+
 def test_receiver_prefixed_assignments_flag():
     """``cfg.api_key = "x"`` / ``config["api_key"] = "x"``: a
     credential name hidden behind a receiver still binds a

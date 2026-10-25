@@ -206,6 +206,49 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
             r"|\\'(?:\\.|[^'\\\r\n\\])*?\\'"
             r")"
         ),
+        # Keyword-argument secrets — ``f(api_key="x")``,
+        # ``client(token = "x")``: a credential name bound to a
+        # literal inside a call is the same hardcoded secret,
+        # just without the line anchor. ``=`` only, and the
+        # ``(?!=)`` guard keeps ``name==v`` comparisons and
+        # ``=>`` arrows out. The value must be quoted — an
+        # unquoted name mid-line is prose/code, not a secret.
+        _rx(
+            r"(?<![\w'\"])" + ENV_NAME_PATTERN +
+            r"\s*=(?!=)\s*(?:"
+            r"\(\s*"
+            r"(?:\"\"\"(?:\\.|[^\"\\])*?\"\"\""
+            r"|'''(?:\\.|[^'\\])*?'''"
+            r"|\"(?:\\.|[^\"\\\r\n])*?\""
+            r"|'(?:\\.|[^'\\\r\n])*?'"
+            r"|`(?:\\.|[^`\\\r\n])*?`)"
+            r"\s*\)(?=[ \t]*[,}\])]|[ \t]*$)"
+            r"|\"\"\"(?:\\.|[^\"\\])*?\"\"\""
+            r"|'''(?:\\.|[^'\\])*?'''"
+            r"|\"(?:\\.|[^\"\\\r\n])*?\""
+            r"|'(?:\\.|[^'\\\r\n])*?'"
+            r"|`(?:\\.|[^`\\\r\n])*?`"
+            r"|\\\"(?:\\.|[^\"\\\r\n\\])*?\\\""
+            r"|\\'(?:\\.|[^'\\\r\n\\])*?\\'"
+            r")"
+        ),
+        # Name-string call args — ``cfg.setdefault("api_key", "v")``,
+        # ``d.get("token", "v")``: the credential name arrives as
+        # the first call argument and the hardcoded secret as the
+        # second. Bound to dict-style methods so ordinary
+        # two-string calls stay out. The match has no ``=``/``:``
+        # separator — the rewrite keeps everything through the
+        # comma and masks only the value.
+        _rx(
+            r"(?<!\w)(?:setdefault|get|pop)\(\s*"
+            r"\\?[\"']" + ENV_NAME_PATTERN + r"\\?[\"']\s*,\s*(?:"
+            r"\"\"\"(?:\\.|[^\"\\])*?\"\"\""
+            r"|'''(?:\\.|[^'\\])*?'''"
+            r"|\"(?:\\.|[^\"\\\r\n])*?\""
+            r"|'(?:\\.|[^'\\\r\n])*?'"
+            r"|`(?:\\.|[^`\\\r\n])*?`"
+            r")"
+        ),
     ],
     "connection_uri": [
         # scheme://user:password@host — postgres, mysql, mongodb(+srv),

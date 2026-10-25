@@ -153,6 +153,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `self.api_key`, and `config["api_key"]` bind hardcoded secrets
   the same as a bare `api_key`, and the quoted rewrite keeps
   the assignment parseable (devin-state#92).
+- Call-bound secrets now flag — `f(api_key="x")` and
+  `setdefault("api_key", "x")` bind literals the same way; the
+  rewrite keeps the call parseable and comparisons
+  (`api_key=="x"`) stay out (devin-state#92).
 - `np` is no longer a hardcoded `numpy` owner — `api_key: np.ndarray`
   only suppresses when `import numpy as np` actually appears in the
   text; every other alias keeps resolving from real imports

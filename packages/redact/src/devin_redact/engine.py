@@ -796,15 +796,17 @@ def scan_text(text: str, *, file: str, location: str) -> list[Finding]:
         if key in seen:
             continue
         seen.add(key)
-        # A match strictly inside an earlier same-category match is the
-        # same secret in a shorter form: the unterminated-PEM pattern is
-        # a strict prefix of a complete block, so a terminated key must
-        # not count twice (the longer, complete match wins because it
-        # iterates first).
+        # A match inside an earlier same-category match — strict or
+        # identical span — is the same secret: the unterminated-PEM
+        # pattern is a strict prefix of a complete block, and two
+        # env_assignment arms can cover identical text
+        # (`api_key = "x"` is both a line assignment and a
+        # keyword-argument shape). The first pattern to iterate
+        # wins, so the longer/more specific match keeps its name.
         span = m.span(0)
         bucket = spans.setdefault(category, [])
         if any(
-            s <= span[0] and span[1] <= e and (s, e) != span
+            s <= span[0] and span[1] <= e
             for s, e in bucket
         ):
             continue
@@ -850,10 +852,23 @@ def redact_text(
         fp = _fingerprint(value)
         if category == "env_assignment":
             whole = m.group(0)
-            # ``=`` or ``:`` — variable names (quoted or bare) contain
-            # neither, so the first separator char is the assignment.
-            eq = re.search(r"[:=]", whole).start()
             start, end = m.span(0)
+            eq_m = re.search(r"[:=]", whole)
+            if eq_m is None:
+                # ``setdefault("name", "v")`` call-arg shape — the
+                # credential name is a string argument, so no
+                # ``=``/``:`` separator exists in the match. Keep
+                # everything through the comma and mask only the
+                # value, quoted so the call still parses.
+                sep = re.search(r",\s*", whole)
+                replacement = (
+                    whole[: sep.end()] + '"' + _tag(value) + '"'
+                    if sep is not None
+                    else _tag(value)
+                )
+                candidates.append((start, end, replacement, category, fp))
+                continue
+            eq = eq_m.start()
             # ``name: T = "lit"`` — an annotated assignment whose
             # literal default flagged: only the literal is sensitive.
             # Keep ``name: T = `` and re-emit the literal as a quoted
