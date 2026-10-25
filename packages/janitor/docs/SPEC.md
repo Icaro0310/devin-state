@@ -181,7 +181,8 @@ devin-janitor run  [path flags...] [--config F] [--grace-hours N]
 devin-janitor pending [path flags...] [--pending-file F] [--list] [--retry]
 devin-janitor report  [path flags...] [--config F] [--keep-file F]
                       [--pending-file F] [--grace-hours N] [--judge SPEC]
-                      [--labels-file F] [--exclude-labeled] [--json]
+                      [--labels-file F] [--exclude-labeled]
+                      [--project N[h|d|w]] [--json]
 devin-janitor install --daily [--config-dir D]
                       [--backend auto|tasksch|cron|elapsed] [--json]
 ```
@@ -195,6 +196,28 @@ AUTO_DELETE + judged deletes + pending-queue ids, the `-wal`/`-shm` sidecars
 that a safe vacuum truncates, stale acp-messages leftovers, and orphan
 `session_locks/*.lock`. Per-session byte figures are payload estimates
 (`SUM(LENGTH(...))` per message table), not exact page accounting.
+
+`report --project N[h|d|w]` adds a **growth projection** section (and a
+`projection` object in `--json`): each store's estimated size `N` hours,
+days or weeks ahead (bare number = days). The janitor keeps **no size
+history** — the report is read-only and the audit log records deletions,
+not sizes — so the model is the simplest defensible one:
+
+    rate      = current bytes ÷ days since first-seen
+    projected = current bytes + rate × horizon
+
+where *first-seen* is the store's `oldest` timestamp already reported
+(session span for `sessions.db`, oldest `*.db` mtime for `acp-messages`,
+oldest `*.lock` mtime for `session_locks`). It is an **average
+accumulation rate**, not a trend fit — the output prints the rate and
+the window it came from, and the payload carries the caveat, because an
+estimate that hides its assumptions is a fake. Stores with no honest
+rate report `insufficient data` instead of a number: missing stores,
+stores with no first-seen timestamp (e.g. `state.vscdb`, or a
+`sessions.db` holding zero sessions), and observation windows shorter
+than 24h — a store created today has no rate. Invalid horizons
+(non-numeric, zero/negative, unknown units) exit 2 before any report is
+printed.
 
 ## Cleanup tiers (JA-2)
 
@@ -245,6 +268,10 @@ entry on Windows, or an elapsed job record in
 
 ## Limitations
 
+- `--project` is a straight-line estimate, not a forecast: it assumes the
+  average accumulation rate since first-seen continues unchanged, so it
+  ignores inactivity gaps, bursts, cleanups and vacuums, and it has no
+  signal for stores that expose no start-of-accumulation timestamp.
 - Default `judge=none` is purely rules-based: ambiguous low-activity sessions
   are always kept, so the db may retain some noise that a judge would catch.
 - `files_touched` is a heuristic over tool-call payloads; a session that
