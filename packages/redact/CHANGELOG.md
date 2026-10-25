@@ -147,7 +147,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `key = (\n "x"\n)` and `key: T = (\n "x"\n)` leak the same
   hardcoded value the one-line form did, and the rewrite stays
   parseable; tuples still fall through so a second literal in
-  `("x", "y")` is never left half-masked (devin-state#92).
+  `("x", "y")` is never left half-masked. Union annotation heads
+  (`str | None`) reach the multiline literal too (devin-state#92).
 - `np` is no longer a hardcoded `numpy` owner — `api_key: np.ndarray`
   only suppresses when `import numpy as np` actually appears in the
   text; every other alias keeps resolving from real imports
