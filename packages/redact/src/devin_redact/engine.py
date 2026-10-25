@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import io
 import itertools
 import json
 import os
@@ -24,6 +25,7 @@ import re
 import shutil
 import sqlite3
 import tempfile
+import tokenize
 from pathlib import Path, PurePosixPath
 
 from . import __version__
@@ -176,9 +178,11 @@ _FROM_IMPORT_RE = re.compile(
 # ``)`` inside a comment cannot terminate the block early. The inner
 # alternation is per-character (``X`` or ``X*`` inside ``(...)*`` would
 # leave a ``(a+)+``-style partition ambiguity and stall on an unclosed
-# ``import (`` — the ReDoS shape both review and CodeQL flagged).
+# ``import (`` — the ReDoS shape both review and CodeQL flagged). The
+# comment run stops at ``#`` too: ``[^\n]*`` would let a ``#####`` run
+# split across iterations, re-opening the same exponential partition.
 _FROM_IMPORT_PAREN_RE = re.compile(
-    r"(?m)^\s*from\s+(\.*[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s+import\s*\(((?:[^)#]|#[^\n]*)*)\)"
+    r"(?m)^\s*from\s+(\.*[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s+import\s*\(((?:[^)#]|#[^\n#]*)*)\)"
 )
 _COMMENT_RE = re.compile(r"#[^\n]*")
 _ASSIGN_NAME_RE = re.compile(
@@ -188,17 +192,62 @@ _TRIPLE_QUOTE_RE = re.compile(r"('''|\"\"\")")
 
 
 def _string_spans(text: str) -> list[tuple[int, int]]:
-    """Ranges covered by triple-quoted string literals.
+    """Ranges covered by multiline string literals.
 
-    Only ``'''``/``\"\"\"`` spans put a ``name: value`` at line start
-    inside a string — single-quoted strings cannot contain real
-    newlines. An unclosed opener runs to EOF (fail-closed: everything
-    after it is treated as string content).
+    Python's own tokenizer decides what is a string — a ``'''`` or
+    ``\"\"\"`` inside a comment or an ordinary quoted literal is text,
+    not a delimiter, and a ``\\``-escaped quote does not close a
+    docstring. A regex over raw text cannot see either (devin-state#92
+    review). Only multiline STRING tokens matter: a line-anchored
+    ``name: value`` cannot sit inside a single-line literal, and a
+    ``\\``-continued plain string spanning lines counts the same as a
+    triple-quoted one. Source the tokenizer rejects falls back to the
+    delimiter scan — an unclosed opener still runs to EOF
+    (fail-closed: everything after it is treated as string content).
+    """
+    try:
+        return _token_string_spans(text)
+    except (tokenize.TokenError, IndentationError, SyntaxError,
+            ValueError, RecursionError):
+        return _delimiter_string_spans(text)
+
+
+def _token_string_spans(text: str) -> list[tuple[int, int]]:
+    """Multiline STRING-token ranges as absolute offsets."""
+    line_starts = [0]
+    for line in text.split("\n"):
+        line_starts.append(line_starts[-1] + len(line) + 1)
+    spans: list[tuple[int, int]] = []
+    for tok in tokenize.generate_tokens(io.StringIO(text).readline):
+        if tok.type == tokenize.STRING and tok.end[0] > tok.start[0]:
+            spans.append(
+                (
+                    line_starts[tok.start[0] - 1] + tok.start[1],
+                    line_starts[tok.end[0] - 1] + tok.end[1],
+                )
+            )
+    return spans
+
+
+def _delimiter_string_spans(text: str) -> list[tuple[int, int]]:
+    """Best-effort triple-quote scan for source the tokenizer rejects.
+
+    A delimiter run preceded by an odd count of ``\\`` is an escape —
+    ``\\"`` swallows the first quote, so ``\\"\"\"`` inside a docstring
+    is an escaped quote plus ``""``, not a closer. The parity check
+    keeps a credential sitting after an escaped quote inside the span.
     """
     spans: list[tuple[int, int]] = []
     start: int | None = None
     delim = ""
     for m in _TRIPLE_QUOTE_RE.finditer(text):
+        backslashes = 0
+        i = m.start() - 1
+        while i >= 0 and text[i] == "\\":
+            backslashes += 1
+            i -= 1
+        if backslashes % 2:
+            continue
         if start is None:
             start, delim = m.start(), m.group(1)
         elif m.group(1) == delim:
@@ -780,10 +829,10 @@ def redact_text(
     itself — pasted code must not be corrupted, and the publication
     gate never relies on this path.
     """
+    python_source = None if file is None else _python_source_file(file)
     candidates: list[tuple[int, int, str, str, str]] = []
     for category, name, m in _iter_matches(
-        text,
-        python_source=None if file is None else _python_source_file(file),
+        text, python_source=python_source
     ):
         value = sensitive_match(m)
         fp = _fingerprint(value)
@@ -827,6 +876,17 @@ def redact_text(
                         whole[: eq + 1] + qm.group(0)
                         + _tag(value) + qm.group(1)
                     )
+                elif python_source is True or (
+                    python_source is None and whole[eq] == ":"
+                ):
+                    # An unquoted tag is not a valid Python
+                    # expression — ``api_key:<tag>`` or
+                    # ``x =<tag>`` will not parse — so a ``.py``
+                    # blob emits it quoted; untyped text gets the
+                    # same care for the ``:`` slot
+                    # (annotation/dict), while ``.env`` and
+                    # ``KEY=``-style output keep the plain tag.
+                    replacement = f'{whole[: eq + 1]} "{_tag(value)}"'
                 else:
                     replacement = f"{whole[: eq + 1]}{_tag(value)}"
         else:

@@ -1006,3 +1006,70 @@ def test_json_key_secret_redacted_on_apply(tmp_path):
     assert GHP not in val
     keys = list(json.loads(val))
     assert any(k.startswith("<REDACTED:") for k in keys)
+
+
+def test_delimiter_text_inside_literal_does_not_open_span():
+    """A ``'''``/``\"\"\"`` inside an ordinary string or a comment is
+    text, not a delimiter — the span detector must not open a phantom
+    docstring over later real annotations (devin-state#92 review)."""
+    for decoy in (
+        'EXAMPLE = "\'\'\'"',
+        'EXAMPLE = \'"""\'',
+        "# the docstring opener is ''', not here",
+    ):
+        src = decoy + "\napi_key: str\nhandle: int\n"
+        findings = scan_text(src, file="m.py", location="text")
+        assert not [
+            f for f in findings if f["category"] == "env_assignment"
+        ], (decoy, findings)
+        new, _ = redact_text(src, file="m.py")
+        assert new == src
+        ast.parse(new)
+
+
+def test_escaped_quote_does_not_close_docstring_span():
+    """``\\"`` inside a docstring is an escape, not a closer — a
+    credential on the lines after it is still string content and must
+    flag even when bindings would excuse it in code position."""
+    src = (
+        "from weakref import *\n"
+        'NOTES = """header \\""" still inside\n'
+        "api_key: ref\n"
+        '"""\n'
+    )
+    findings = scan_text(src, file="m.py", location="text")
+    assert any(
+        f["category"] == "env_assignment" for f in findings
+    ), findings
+    new, _ = redact_text(src, file="m.py")
+    assert "api_key: ref" not in new and "<REDACTED:" in new
+
+
+def test_annotated_default_redaction_preserves_syntax():
+    """``api_key: str = "hunter2"`` masks only the literal — the
+    annotation and ``=`` survive so the rewritten file still parses
+    (devin-state#92 review)."""
+    src = 'api_key: str = "hunter2"\nweights: list[float]\n'
+    new, _ = redact_text(src, file="m.py")
+    assert "hunter2" not in new
+    assert 'api_key: str = "<REDACTED:' in new
+    ast.parse(new)
+
+
+def test_unquoted_scalar_slots_stay_parseable_in_python():
+    """An unquoted tag is not a valid Python expression — in a ``.py``
+    blob it is emitted quoted (and in untyped text for the ``:``
+    annotation/dict slot), while ``.env`` output keeps the plain
+    ``KEY=<tag>`` convention."""
+    for src in (
+        "api_key: hunter2\n",
+        "api_key = hunter2\n",
+        'api_key: str = ("hunter2")\n',
+    ):
+        new, _ = redact_text(src, file="m.py")
+        assert "hunter2" not in new
+        ast.parse(new), src
+    new, _ = redact_text("api_key: hunter2\n")  # bare ``:`` slot
+    assert "hunter2" not in new and '"<REDACTED:' in new
+    new, _ = redact_text("API_KEY=hunter2\n", file="creds.env")
+    assert "API_KEY=<REDACTED:" in new

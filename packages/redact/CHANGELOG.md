@@ -157,6 +157,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `datetime.datetime`, `models.User`, `typing.Any`) — the same check
   applies inside generics/unions, so `list[abc.def]` cannot smuggle a
   credential either. Real type annotations stay suppressed.
+- String-span detection now uses Python's own tokenizer
+  (devin-state#92): a `'''`/`"""` inside a comment or an ordinary
+  quoted literal no longer opens a phantom docstring over later real
+  annotations, and a `\`-escaped quote no longer closes one early —
+  a credential sitting after `\""` inside a docstring flags again.
+  Source the tokenizer rejects falls back to the delimiter scan,
+  which now also skips escape-spelled delimiters.
+- A flag landing in an unquoted Python value slot
+  (`api_key: hunter2`, `x = hunter2`) now emits the tag quoted —
+  `api_key: "<REDACTED:…>"` still parses where the bare tag did not;
+  `.env` output keeps the plain `KEY=<REDACTED:…>` convention
+  (devin-state#92).
+- The parenthesized-import comment run is per-character too —
+  `[^\n]*` after `#` let a `#####` run partition across iterations,
+  the last exponential-backtracking shape in that matcher (CodeQL
+  py/redos; devin-state#92).
 
 ## [0.2.5] - 2026-10-23
 
