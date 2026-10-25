@@ -123,7 +123,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (devin-state#92).
 - An annotated default no longer hides a hardcoded value —
   `api_key: str = "hunter2"` flags while `x: str = None` and
-  `x: T = call()` stay annotations (devin-state#92).
+  `x: T = call()` stay annotations, and the rewrite scopes to the
+  literal (`api_key: str = "<REDACTED:…>"`, still parseable)
+  (devin-state#92).
 - Import bindings only suppress outside string literals — a
   `name: value` line inside `'''`/`"""` is string content and always
   flags, so a docstring cannot launder a credential through a

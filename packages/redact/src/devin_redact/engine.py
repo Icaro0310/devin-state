@@ -763,20 +763,42 @@ def redact_text(
             # neither, so the first separator char is the assignment.
             eq = re.search(r"[:=]", whole).start()
             start, end = m.span(0)
-            # A quoted value keeps its enclosing quotes — an unquoted
-            # tag in a string slot breaks JSON/Python structure
-            # (`"api_key":<REDACTED>` is invalid; `"api_key":"<tag>"`
-            # is not). ``qm`` captures the optional whitespace plus the
-            # (possibly ``\``-escaped) opening quote so the replacement
-            # re-emits the same quote token on both sides.
-            qm = re.match(r"\s*(\\?[\"'`])", whole[eq + 1 :])
-            if qm:
-                replacement = (
-                    whole[: eq + 1] + qm.group(0)
-                    + _tag(value) + qm.group(1)
-                )
-            else:
-                replacement = f"{whole[: eq + 1]}{_tag(value)}"
+            # ``name: T = "lit"`` — an annotated assignment whose
+            # literal default flagged: only the literal is sensitive.
+            # Keep ``name: T = `` and re-emit the literal as a quoted
+            # tag so the line still parses
+            # (`api_key: str = "<REDACTED:…>"`, not
+            # `api_key:<REDACTED:…>`).
+            rhs = whole[eq + 1 :]
+            ann_head, ann_sep, ann_tail = rhs.partition("=")
+            replacement = None
+            if ann_sep and _TYPE_EXPR_RE.fullmatch(ann_head.strip()):
+                lit = ann_tail.split(" #", 1)[0]
+                if _literal_string_value(lit):
+                    lead = len(ann_tail) - len(ann_tail.lstrip())
+                    tok = lit.strip()
+                    q = '"' if '"' in tok else "'"
+                    replacement = (
+                        whole[: eq + 1] + ann_head + "="
+                        + ann_tail[:lead] + q + _tag(value) + q
+                        + ann_tail[lead + len(tok) :]
+                    )
+            if replacement is None:
+                # A quoted value keeps its enclosing quotes — an
+                # unquoted tag in a string slot breaks JSON/Python
+                # structure (`"api_key":<REDACTED>` is invalid;
+                # `"api_key":"<tag>"` is not). ``qm`` captures the
+                # optional whitespace plus the (possibly
+                # ``\``-escaped) opening quote so the replacement
+                # re-emits the same quote token on both sides.
+                qm = re.match(r"\s*(\\?[\"'`])", rhs)
+                if qm:
+                    replacement = (
+                        whole[: eq + 1] + qm.group(0)
+                        + _tag(value) + qm.group(1)
+                    )
+                else:
+                    replacement = f"{whole[: eq + 1]}{_tag(value)}"
         else:
             start, end = m.span(1) if m.lastindex else m.span(0)
             replacement = _tag(value)
