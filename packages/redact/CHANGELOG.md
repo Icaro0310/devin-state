@@ -389,6 +389,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   directive in `msmtprc`/`esmtprc`/`fetchmailrc` (including
   fetchmail's mid-line `poll … password "x"`) but prose elsewhere,
   so the arm is gated to those filenames (devin-state#92).
+- Registry `login -p` now covers `skopeo`, `buildah`, `oras`,
+  `crane (auth) login`, `helm registry login` and `podman-remote`,
+  not just docker/podman; `docker run -p` port mappings stay
+  untouched (devin-state#92).
+- `credstash put [-k] NAME v`, `chamber write svc NAME v`,
+  `redis-cli SET NAME v`, `conjur variable … -v`, `mc admin user
+  add` secret-key positional, influx 1.x single-dash `-password`,
+  `sendemail -xp`, and Capistrano `set :password, "v"` all mask
+  the credential (devin-state#92).
 
 ## [0.2.5] - 2026-10-23
 

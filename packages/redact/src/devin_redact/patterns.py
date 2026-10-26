@@ -526,7 +526,10 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
         # (uppercase, case matters), 7z ``-p``, and
         # ``aws configure set <name> <value>``.
         _rx(
-            r"\b(?:docker|podman)[ \t]+login\b[^\n]*?[ \t]-p[ \t=]*"
+            r"\b(?:(?:docker|podman|skopeo|buildah|oras"
+            r"|podman-remote)[ \t]+login|crane[ \t]+(?:auth[ \t]+)?"
+            r"login|helm[ \t]+registry[ \t]+login)\b"
+            r"[^\n]*?[ \t]-p[ \t=]*"
             r"(\"[^\"\r\n]*\"|'[^'\r\n]*'|\S+)"
         ),
         _rx(r"\b(?:zip|unzip)\b[^\n]*?[ \t]-P[ \t=]*(\S+)"),
@@ -922,6 +925,56 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
             r"(?i)\bdoppler[ \t]+secrets[ \t]+set[ \t]+"
             + ENV_NAME_PATTERN +
             r"[ \t]+(\"[^\"\r\n]*\"|'[^'\r\n]*'|\S+)"
+        ),
+        # Same shape: ``credstash put [-k kms] NAME v``,
+        # ``chamber write <service> NAME v``, ``redis-cli SET
+        # NAME v`` — a credential-named key followed by the bare
+        # value positional.
+        _rx(
+            r"(?i)\bcredstash[ \t]+(?:put|putsecret)[ \t]+"
+            r"(?:-\w+[ \t=]+\S+[ \t]+)*"
+            + ENV_NAME_PATTERN +
+            r"[ \t]+(\"[^\"\r\n]*\"|'[^'\r\n]*'|\S+)"
+        ),
+        _rx(
+            r"(?i)\bchamber[ \t]+write[ \t]+\S+[ \t]+"
+            + ENV_NAME_PATTERN +
+            r"[ \t]+(\"[^\"\r\n]*\"|'[^'\r\n]*'|\S+)"
+        ),
+        _rx(
+            r"\bredis-cli\b[^\n]*?[ \t]SET[ \t]+"
+            + ENV_NAME_PATTERN +
+            r"[ \t]+(\"[^\"\r\n]*\"|'[^'\r\n]*'|\S+)"
+        ),
+        # ``conjur variable set|values add -i id -v value`` — the
+        # secret rides ``-v``.
+        _rx(
+            r"(?i)\bconjur[ \t]+variable\b[^\n]*?[ \t]-v[ \t=]*"
+            r"(\"[^\"\r\n]*\"|'[^'\r\n]*'|\S+)"
+        ),
+        # ``mc admin user add ALIAS ACCESSKEY SECRETKEY`` — the
+        # secret key is the third positional after ``add``.
+        _rx(
+            r"(?i)\bmc[ \t]+admin[ \t]+user[ \t]+add[ \t]+"
+            r"(?:\S+[ \t]+){2}(\S+)"
+        ),
+        # InfluxDB 1.x single-dash long flag ``-password``.
+        _rx(
+            r"(?i)\binflux\b[^\n]*?[ \t]-password[ \t=]*"
+            r"(\"[^\"\r\n]*\"|'[^'\r\n]*'|\S+)"
+        ),
+        # ``sendemail -xp pass`` — ``-xp`` is the auth password
+        # (``-xu`` is the user).
+        _rx(
+            r"(?i)\bsendemail\b[^\n]*?[ \t]-xp[ \t=]*"
+            r"(\"[^\"\r\n]*\"|'[^'\r\n]*'|\S+)"
+        ),
+        # Capistrano ``set :password, "v"`` — symbol plus comma;
+        # only cred-word symbols count.
+        _rx(
+            r"(?i)\bset[ \t]+:\w*(?:key|secret|token|password"
+            r"|passwd|credential|auth)\w*[ \t]*,[ \t]*"
+            r"(\"[^\"\r\n]*\"|'[^'\r\n]*')"
         ),
         # Ansible vault blob — ``$ANSIBLE_VAULT;1.1;AES256`` plus
         # the hex-only ciphertext lines under it (the body is the

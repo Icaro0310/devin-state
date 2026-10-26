@@ -2198,3 +2198,38 @@ def test_mail_rc_password_directive_gated():
     for src in ("password hunter2", "the password must be rotated"):
         new, findings = redact_text(src, file="notes.txt")
         assert findings == [] and new == src, src
+
+
+def test_registry_login_and_secret_manager_carriers():
+    """Registry ``login -p`` across container tools, influx's
+    single-dash ``-password``, credstash/chamber/redis-cli bare
+    positional values, conjur ``-v``, minio's secret-key
+    positional, sendemail ``-xp``, and Capistrano ``set :sym,``
+    all mask."""
+    for src in (
+        "skopeo login -u admin -p hunter2 reg.io",
+        "helm registry login -u admin -p hunter2 reg.io",
+        "oras login -u admin -p hunter2 reg.io",
+        "crane auth login reg -u admin -p hunter2",
+        "influx -username admin -password hunter2",
+        "credstash put API_KEY hunter2",
+        "credstash put -k mykey API_KEY hunter2",
+        "chamber write myservice api_key hunter2",
+        "conjur variable set -i myvar -v hunter2",
+        "conjur variable values add -i myvar -v hunter2",
+        "mc admin user add myminio admin hunter2",
+        "redis-cli SET password hunter2",
+        'set :password, "hunter2"',
+        "sendemail -xu admin -xp hunter2 -s smtp.x",
+    ):
+        new, findings = redact_text(src, file="s.sh")
+        assert findings and "hunter2" not in new, src
+    # Negatives — non-credential uses of the same tools stay clean.
+    for src in (
+        "docker run -p 8080:80 img",
+        "redis-cli GET password",
+        'set :branch, "main"',
+        "crane manifest img",
+    ):
+        new, findings = redact_text(src, file="s.sh")
+        assert findings == [] and new == src, src
