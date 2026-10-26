@@ -2355,6 +2355,16 @@ def test_review_round_escape_aware_operands():
     new, _ = redact_text(
         "gh secret set API_KEY --body hunter2 | wc", file="s.sh")
     assert "wc" in new
+    # A bare ``;`` ends the secret span instead of being absorbed —
+    # the command boundary must survive redaction.
+    new, findings = redact_text(
+        "security add-generic-password -s x -w hunter2; rm -rf ~",
+        file="s.sh")
+    assert findings and "hunter2" not in new
+    assert "; rm -rf ~" in new
+    new, findings = redact_text(
+        "conjur variable set -i x -v hunter2; rm -rf ~", file="s.sh")
+    assert findings and "; rm" in new
     new, _ = redact_text(
         "rclone config create r s3 secret_access_key hunter2 "
         "--interactive", file="s.sh")

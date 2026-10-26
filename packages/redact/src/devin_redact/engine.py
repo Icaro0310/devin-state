@@ -195,15 +195,16 @@ _FROM_IMPORT_RE = re.compile(
     r"(?m)^\s*from\s+(\.*[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s+import\s+([^#\n(]+)"
 )
 # The parenthesized form may span lines and hold inline comments —
-# each character is either not ``)``/``#`` or a ``#``-to-EOL run, so a
-# ``)`` inside a comment cannot terminate the block early. The inner
-# alternation is per-character (``X`` or ``X*`` inside ``(...)*`` would
-# leave a ``(a+)+``-style partition ambiguity and stall on an unclosed
-# ``import (`` — the ReDoS shape both review and CodeQL flagged). The
-# comment run stops at ``#`` too: ``[^\n]*`` would let a ``#####`` run
-# split across iterations, re-opening the same exponential partition.
+# each character is either not ``)``/``#`` or an atomic ``#``-to-EOL
+# comment run, so a ``)`` inside a comment cannot terminate the block
+# early. The comment is matched via ``(?=(...))\3`` — lookahead plus
+# backreference emulates an atomic group in ``re``: the run commits to
+# the full line and cannot be repartitioned with the ``[^)#]`` branch,
+# which is the exponential shape CodeQL flagged on ``"#`` runs inside
+# an unclosed ``import (``.
 _FROM_IMPORT_PAREN_RE = re.compile(
-    r"(?m)^\s*from\s+(\.*[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s+import\s*\(((?:[^)#]|#[^\n#]*)*)\)"
+    r"(?m)^\s*from\s+(\.*[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s+import\s*"
+    r"\(((?:[^)#]|(?=(#[^\n]*))\3)*)\)"
 )
 _COMMENT_RE = re.compile(r"#[^\n]*")
 _ASSIGN_NAME_RE = re.compile(

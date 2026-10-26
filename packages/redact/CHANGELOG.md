@@ -419,6 +419,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is masked; `pulumi config set --secret ns:name v` matches
   namespaced keys; `redis-cli set` (lowercase) is covered
   (devin-state#92).
+- Bare secret operands in tool-scoped arms now stop at shell
+  separators — `cmd -p hunter2; rm` keeps its `;` boundary instead
+  of absorbing it into the masked span (devin-state#92).
+- The `from x import (` paren-block regex no longer backtracks
+  exponentially on unclosed blocks containing `#…` comment runs —
+  the comment branch is atomic via a lookahead+backreference
+  emulation, closing the CodeQL "inefficient regular expression"
+  alert (devin-state#92).
 
 ## [0.2.5] - 2026-10-23
 
