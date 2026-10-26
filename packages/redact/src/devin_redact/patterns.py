@@ -760,6 +760,39 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
             r"[ \t]+(?!-)"
             r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
         ),
+        # Bare positional tokens — ``snyk auth <key>``,
+        # ``wandb login <key>``, ``ngrok authtoken <t>``,
+        # ``ngrok config add-authtoken <t>``, ``cloudflared
+        # service install <t>``, ``zrok enable <t>``. Value-taking
+        # flags consume their argument so the flag value is not
+        # mistaken for the token; other flags pass bare or
+        # ``=attached``.
+        _rx(
+            r"(?i)\b(?:snyk[ \t]+auth|wandb[ \t]+login"
+            r"|ngrok[ \t]+(?:config[ \t]+add-)?authtoken"
+            r"|cloudflared[ \t]+service[ \t]+install)\b"
+            r"(?:[ \t]+(?:(?:--?(?:host|base-url|url|config|log"
+            r"|log-format|log-level|region|metadata))\b[ \t=]+"
+            r"(?:\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'"
+            r"|(?!-)[^\s|&;]+)"
+            r"|-{1,2}(?!-?(?:host|base-url|url|config|log"
+            r"|log-format|log-level|region|metadata)\b)[\w-]+"
+            r"(?:=[^\s|&;]*)?))*"
+            r"[ \t]+(?!-)"
+            r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
+        ),
+        # ``zrok enable <token>`` — ``-d``/``-i`` take arguments
+        # (description/frontends) and must consume them.
+        _rx(
+            r"(?i)\bzrok[ \t]+enable\b"
+            r"(?:[ \t]+(?:(?:--?(?:description|frontends|d|i))\b[ \t=]+"
+            r"(?:\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'"
+            r"|(?!-)[^\s|&;]+)"
+            r"|-{1,2}(?!-?(?:description|frontends|d|i)\b)[\w-]+"
+            r"(?:=[^\s|&;]*)?))*"
+            r"[ \t]+(?!-)"
+            r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
+        ),
         # ``ssh-keygen -P old -N new`` — old and new passphrases.
         _rx(
             r"\bssh-keygen\b[^\n|&;]*?[ \t]-P[ \t=]*"
@@ -805,6 +838,16 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
         # later ``k=v`` cannot leak.
         _rx(
             r"\b(?:vault|bao|openbao)[ \t]+write\b"
+            r"(?:[ \t]+-[^\s|&;]+)*[ \t]+\S+[ \t]+"
+            r"(\S+?=(?:\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'"
+            r"|(?:\\.|[^\s\\|&;])*)"
+            r"(?:[ \t]+\S+?=(?:\"(?:\\.|[^\"\\\r\n])*\""
+            r"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])*))*)"
+        ),
+        # ``nomad var put <path> k=v`` — same kv-run shape as the
+        # vault write arm; options may sit before the path.
+        _rx(
+            r"(?i)\bnomad[ \t]+var[ \t]+put\b"
             r"(?:[ \t]+-[^\s|&;]+)*[ \t]+\S+[ \t]+"
             r"(\S+?=(?:\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'"
             r"|(?:\\.|[^\s\\|&;])*)"
@@ -1130,6 +1173,62 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
             r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'"
             r"|(?:\\.|[^\s\\|&;'\"])+)"
         ),
+        # ``az login -u u -p p``, ``surreal sql|start -u u -p p``,
+        # ``airflow users create -p p`` — the lowercase ``-p``
+        # password flag, tool-scoped. The gap skips quoted
+        # arguments so ``"a&b"`` cannot stop the scan.
+        _rx(
+            r"(?i)\b(?:az[ \t]+login|surreal(?:db)?[ \t]+"
+            r"(?:sql|start|import|export|backup)"
+            r"|airflow[ \t]+users[ \t]+create)\b"
+            r"(?:\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'"
+            r"|[^\n|&;\"'])*?"
+            r"[ \t]-p[ \t=]*(?!-[-\w])"
+            r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
+        ),
+        # ``swift -A url -U user -K key`` — OpenStack swift's
+        # uppercase ``-K`` carries the account key.
+        _rx(
+            r"\bswift\b[^\n|&;]*?[ \t]-K[ \t=]*(?!-[-\w])"
+            r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
+        ),
+        # Coverage-report upload tokens — ``codecov -t``,
+        # ``codacy-coverage-reporter -t``.
+        _rx(
+            r"(?i)\b(?:codecov|codecov-cli|codacy-coverage-reporter)\b"
+            r"[^\n|&;]*?[ \t]-t[ \t=]*(?!-[-\w])"
+            r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
+        ),
+        # ``cypress run --key``/``browserstack --key`` — the record
+        # key is a credential, unlike ``gem --key`` (a key *name*),
+        # so the arm is tool-scoped.
+        _rx(
+            r"(?i)\b(?:cypress|browserstack(?:-local)?|testingbot)\b"
+            r"[^\n|&;]*?[ \t]--key[ \t=]*(?!-[-\w])"
+            r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
+        ),
+        # ``pulsar-admin --auth-params token:xxx`` — the plugin
+        # parameter value carries the token.
+        _rx(
+            r"(?i)\b(?:pulsar-admin|pulsar-client|pulsar-perf"
+            r"|pulsar)\b[^\n|&;]*?--auth-params[ \t=]*(?!-[-\w])"
+            r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
+        ),
+        # ``atlas|mongocli --privateKey`` — the API private key;
+        # camelCase spelling keeps it outside the generic arm.
+        _rx(
+            r"(?i)\b(?:atlas|mongocli)\b[^\n|&;]*?"
+            r"[ \t]--privatekey[ \t=]*(?!-[-\w])"
+            r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
+        ),
+        # ``confluent api-key store KEY SECRET`` and
+        # ``emqx ctl admins passwd USER PASS`` — the credential is
+        # the *second* bare positional.
+        _rx(
+            r"(?i)\b(?:confluent[ \t]+api-key[ \t]+store"
+            r"|(?:emqx[ \t]+ctl|emqx_ctl)[ \t]+admins[ \t]+passwd)"
+            r"[ \t]+" + _CLITOK + r"[ \t]+(" + _CLITOK + r")"
+        ),
         # ``pulumi config set [--secret] NAME v`` — the value is a
         # bare positional; boolean/value flags may sit between the
         # verb and the credential-shaped name.
@@ -1140,10 +1239,15 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
             r"[ \t]+(" + _CLITOK + r")"
         ),
         # Space-separated env-setters — ``cf set-env APP NAME v``,
-        # ``netlify env:set NAME v``, ``render env:set NAME v``.
+        # ``netlify env:set NAME v``, ``render env:set NAME v``,
+        # ``hardhat vars set NAME v``, ``sst secrets set NAME v``,
+        # ``arc env -e <env> NAME v``.
         _rx(
             r"(?i)\b(?:cf[ \t]+set-env[ \t]+\S+|netlify[ \t]+env:set"
-            r"|render[ \t]+env:set)[ \t]+" + ENV_NAME_PATTERN +
+            r"|render[ \t]+env:set"
+            r"|hardhat[ \t]+vars[ \t]+set"
+            r"|sst[ \t]+secrets?[ \t]+set"
+            r"|arc[ \t]+env[ \t]+-e[ \t]+\S+)[ \t]+" + ENV_NAME_PATTERN +
             r"[ \t]+(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
         ),
         # ``gh secret set NAME --body v``/``-b v`` — secret bodies

@@ -545,6 +545,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `conan remote login … "a&b" -p x` (a quoted `&|`/`;` can no
   longer stop the gap mid-command), and `smbclient` with quoted
   `//share` or options before the share (`-U alice`, `-N`).
+- Bare positional credential tokens (devin-state#92): `snyk auth`,
+  `wandb login`, `ngrok [config add-]authtoken`, `cloudflared
+  service install`, `zrok enable` — value-taking flags
+  (`--host`, `--log-level`, zrok `-d`/`-i`…) consume their
+  argument so the flag value is not mistaken for the token, and
+  flag vocabulary is scoped per tool so an unknown `-d` cannot
+  swallow an ngrok token.
+- Tool-scoped credential flags (devin-state#92): `az login`/
+  `surreal`/`airflow users create` `-p` (lower-case, plus glued
+  `-pX` forms), OpenStack `swift -K`, `codecov -t`, `cypress
+  --key`, `pulsar-admin --auth-params`, `atlas|mongocli
+  --privateKey` — each arm accepts spaced, `=`-attached, glued,
+  and quoted values while a `(?!-[-\w])` lookahead keeps a
+  dangling flag from consuming the next flag.
+- Positional credential pairs (devin-state#92): `confluent
+  api-key store KEY SECRET`, `emqx ctl admins passwd USER PASS`
+  mask only the second operand, leaving the key/user intact.
+- Env-style space-separated setters (devin-state#92): `hardhat
+  vars set`, `sst secrets set`, `arc env -e` join `cf set-env`/
+  `netlify env:set`/`render env:set`.
+- `nomad var put <path> k=v` masks the whole `k=v` run like the
+  `vault write` arm (devin-state#92).
 
 ## [0.2.5] - 2026-10-23
 

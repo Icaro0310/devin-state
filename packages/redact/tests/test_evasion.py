@@ -2796,3 +2796,80 @@ def test_review_round_quoted_option_args_and_shares():
     new, findings = redact_text(
         "smbclient -N //h/s hunter2", file="s.sh")
     assert "hunter2" not in new
+
+
+def test_positional_token_clis_redact() -> None:
+    """Bare positional tokens on CLIs that authenticate."""
+    for cmd in (
+        "snyk auth hunter2",
+        "wandb login hunter2",
+        "wandb login --relogin hunter2",
+        "ngrok authtoken hunter2",
+        "ngrok config add-authtoken hunter2",
+        "cloudflared service install hunter2",
+        "zrok enable hunter2",
+    ):
+        new, _f = redact_text(cmd, file="s.sh")
+        assert "hunter2" not in new, cmd
+    # Flags that carry non-secret values pass through.
+    new, _f = redact_text(
+        "ngrok authtoken --log-level debug hunter2", file="s.sh")
+    assert "hunter2" not in new and "debug" in new
+    # Non-auth subcommands are untouched.
+    assert redact_text("snyk test --severity-threshold high", file="s.sh")[1] == []
+    assert redact_text("ngrok http 8080", file="s.sh")[1] == []
+
+
+def test_tool_scoped_flag_carriers() -> None:
+    """Tool-specific flags confirmed to carry credentials."""
+    for cmd in (
+        "az login -u alice -p hunter2",
+        "az login -phunter2",
+        "surreal sql -u root -p hunter2",
+        "surreal sql -phunter2",
+        "airflow users create -u alice -p hunter2 -r Admin",
+        "swift -A https://x -U alice -K hunter2 stat",
+        "swift -Khunter2 stat",
+        "codecov -t hunter2",
+        "codecov -thunter2",
+        "cypress run --record --key hunter2",
+        "cypress run --key=hunter2",
+        "pulsar-admin --auth-params token:hunter2 tenants list",
+        "atlas --privateKey hunter2 --publicKey u",
+    ):
+        new, _f = redact_text(cmd, file="s.sh")
+        assert "hunter2" not in new, cmd
+    # Neighbouring non-secret flags and operands survive.
+    new, _ = redact_text(
+        "airflow users create -u alice -p hunter2 -r Admin", file="s.sh")
+    assert "-u alice" in new and "-r Admin" in new
+    new, _ = redact_text(
+        "atlas --privateKey hunter2 --publicKey u", file="s.sh")
+    assert "--publicKey u" in new
+    # A dangling flag cannot consume the next flag.
+    assert redact_text("az login -p -u alice", file="s.sh")[1] == []
+    # ``-p`` here is not a secret on other tools' subcommands.
+    assert redact_text("airflow users list -p 8080", file="s.sh")[1] == []
+
+
+def test_positional_pairs_and_kv_setters() -> None:
+    """Credential as second positional or inside a kv-run."""
+    new, _f = redact_text(
+        "confluent api-key store ABCDEF hunter2", file="s.sh")
+    assert "hunter2" not in new and "ABCDEF" in new
+    new, _f = redact_text(
+        "emqx ctl admins passwd admin hunter2", file="s.sh")
+    assert "hunter2" not in new and "admin" in new
+    new, _f = redact_text(
+        "hardhat vars set API_KEY hunter2", file="s.sh")
+    assert "hunter2" not in new and "API_KEY" in new
+    new, _f = redact_text(
+        "sst secrets set API_KEY hunter2", file="s.sh")
+    assert "hunter2" not in new
+    new, _f = redact_text(
+        "nomad var put secret/x k=hunter2", file="s.sh")
+    assert "hunter2" not in new
+    # Multiple kv pairs in one nomad var put all mask.
+    new, _f = redact_text(
+        "nomad var put secret/x a=b k=hunter2", file="s.sh")
+    assert "hunter2" not in new
