@@ -301,6 +301,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   config tuples `{password, "v"}`, and two-argument call forms
   `f("NAME","v")`/`SetEnvironmentVariable("K","v")` mask the
   credential value (devin-state#92).
+- Env subscripts with sigils or braces — `$ENV{KEY}`,
+  `$_ENV['KEY']` — and dotted property-path names in call args
+  (`setProperty("db.password", …)`, `ini_set("session.secret", …)`)
+  flag; `compass`-family words still stay out (devin-state#92).
+- SQL `WITH PASSWORD 'x'`, bare `Authorization: Basic <b64>`
+  headers (a case-insensitive `(?i)` had made the lowercase-word
+  guard also reject base64 of only letters), auth tuples
+  `auth=("u","p")`/`credentials=("u","p")`/`HTTPBasicAuth("u","p")`
+  (second element only, generic cred-name tuples stay code), bare
+  inline-map values `{KEY: v}`, and nginx/Apache header directives
+  (`proxy_set_header`, `add_header`, `set_header`) now mask the
+  credential (devin-state#92).
 
 ## [0.2.5] - 2026-10-23
 

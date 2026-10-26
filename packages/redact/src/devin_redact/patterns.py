@@ -66,6 +66,48 @@ ENV_NAME_PATTERN = (
     r")"
 )
 
+# Dotted property-path names — Java system properties, INI keys,
+# ``ini_set``/``setProperty`` targets: ``db.password``,
+# ``spring.datasource.api-key`` (``-`` allowed inside segments),
+# ``session.secret``. The credential word keeps its boundary rules
+# so ``db.compass`` stays out; the name must still carry a real
+# separator segment or a credential suffix.
+DOTTED_NAME_PATTERN = (
+    r"(?:"
+    r"[A-Za-z_][\w.-]*?"
+    r"(?:KEY|SECRET|TOKEN|PASSWORD|PASSWD|CREDENTIAL)[\w.-]*"
+    r"|"
+    r"(?:[A-Za-z_][\w.-]*?[._-])?"
+    r"(?i:key|secret|token|password|passwd|credential|auth)"
+    r"[0-9]*s?(?:[._-][A-Za-z0-9]+)*"
+    r"|"
+    r"[A-Za-z_][\w.-]*?"
+    r"(?i:key|secret|token|password|passwd|credential|auth)s?"
+    r"|"
+    r"[A-Za-z_][\w.-]*[a-z0-9]"
+    r"(?:Key|Secret|Token|Password|Passwd|Credential|Auth)[\w.-]*"
+    r"|"
+    r"(?:[A-Za-z_][\w.-]*?[._-])?"
+    r"(?i:pass|pwd|passphrase|passcode|userpass)[0-9]*s?"
+    r")"
+)
+
+
+# Credential tuples — ``auth=("user", "pw")`` /
+# ``session.auth = ("u", "p")`` (requests/httpx basic-auth shape):
+# only an auth-declaring name makes the second literal a password —
+# ``_TOKENS = ("a", "b")`` stays a constant. Group 1 keeps its
+# quotes so the tuple still parses. Named at module level so the
+# engine can exempt it from the code-assignment guard (see
+# ``GUARD_EXEMPT_PATTERNS``).
+_CRED_TUPLE_RX = _rx(
+    r"(?<![\w])(?:[A-Za-z_]\w*\.)*\s*"
+    r"(?i:auth|authn|creds?|credentials|userpass)"
+    r"[ \t]*=[ \t]*\(\s*"
+    r"(?:\"(?:\\.|[^\"\\\r\n])*?\"|'(?:\\.|[^'\\\r\n])*?')"
+    r"\s*,\s*"
+    r"(\"(?:\\.|[^\"\\\r\n])*?\"|'(?:\\.|[^'\\\r\n])*?')"
+)
 
 PATTERNS: dict[str, list[re.Pattern[str]]] = {
     # --- secrets -------------------------------------------------------
@@ -114,9 +156,12 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
         # "Authorization: Basic <b64(user:pass)>" — only flagged in the
         # header context, and only when the value is not one plain
         # lowercase word ("basic authentication" prose stays out).
+        # The lowercase-word guard must stay case-sensitive under the
+        # outer (?i), so it is scoped with (?-i:...) — otherwise a
+        # base64 blob of only letters looks like a word and escapes.
         _rx(
             r"(?i)authorization[\s]*:[\s]*basic[\s]+"
-            r"((?![a-z]+\b)[A-Za-z0-9+/=]{8,})"
+            r"((?!(?-i:[a-z]+\b))[A-Za-z0-9+/=]{8,})"
         ),
         # JWTs (header.payload.signature). Payload and signature can be
         # short — alg:none tokens end in a bare '.' — so the floor is
@@ -178,11 +223,14 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
             r"|String|str)"
             r"\s+|(?:-\w+\s+)|(?:[*+-]|#+|//+|<!--|;)\s*)*"
             # The name can hide behind a receiver — ``cfg.api_key``,
-            # ``self.api_key``, ``config["api_key"]``: a hardcoded
-            # secret is the same wherever it is bound.
+            # ``self.api_key``, ``config["api_key"]`` — or an
+            # env-subscript with a sigil or brace —
+            # ``$ENV{API_KEY}``, ``$_ENV["API_KEY"]``,
+            # ``ENV['KEY']``: a hardcoded secret is the same
+            # wherever it is bound.
             r"(?:"
-            r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*\s*\[\s*[\"']?"
-            + ENV_NAME_PATTERN + r"[\"']?\s*\]"
+            r"\$?[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*\s*[\[{]\s*[\"']?"
+            + ENV_NAME_PATTERN + r"[\"']?\s*[\]}]"
             r"|(?:[A-Za-z_]\w*\.)*\s*[\"']?" + ENV_NAME_PATTERN + r"[\"']?"
             r")"
             # A ``\``-continued separator — ``key = \<newline>"v"`` —
@@ -319,7 +367,8 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
         _rx(
             r"(?<!\w)(?:setdefault|get|pop|putenv|setenv|getenv"
             r"|define)\(\s*"
-            r"\\?[\"']" + ENV_NAME_PATTERN + r"\\?[\"']\s*,\s*(?:"
+            r"\\?[\"'](?:" + ENV_NAME_PATTERN + r"|"
+            + DOTTED_NAME_PATTERN + r")\\?[\"']\s*,\s*(?:"
             r"\"\"\"(?:\\.|[^\"\\])*?\"\"\""
             r"|'''(?:\\.|[^'\\])*?'''"
             r"|\"(?:\\.|[^\"\\\r\n])*?\""
@@ -335,7 +384,8 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
         # literal (quotes stay inside so the engine masks inside
         # them).
         _rx(
-            r"[(,]\s*[\"']" + ENV_NAME_PATTERN + r"[\"']\s*,\s*"
+            r"[(,]\s*[\"'](?:" + ENV_NAME_PATTERN + r"|"
+            + DOTTED_NAME_PATTERN + r")[\"']\s*,\s*"
             r"(\"(?:\\.|[^\"\\\r\n])*?\"|'(?:\\.|[^'\\\r\n])*?'"
             r"|`(?:\\.|[^`\\\r\n])*?`)"
         ),
@@ -543,10 +593,12 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
             r"(?im)^[ \t]*(?:requirepass|masterauth)[ \t]+"
             r"(\"[^\"\r\n]*\"|'[^'\r\n]*'|\S+)"
         ),
-        # SQL — ``IDENTIFIED [WITH x] BY [PASSWORD] 'pw'``; quoted
-        # only so prose stays out.
+        # SQL — ``IDENTIFIED [WITH x] BY [PASSWORD] 'pw'`` and
+        # Postgres-style ``WITH PASSWORD 'pw'``; quoted only so
+        # prose stays out.
         _rx(
-            r"(?i)identified[ \t]+(?:with[ \t]+\S+[ \t]+)?by[ \t]+"
+            r"(?i)(?:identified[ \t]+(?:with[ \t]+\S+[ \t]+)?by"
+            r"|with[ \t]+password)[ \t]+"
             r"(?:password[ \t]+)?(\"[^\"\r\n]*\"|'[^'\r\n]*')"
         ),
         # Commented-out secrets — ``# password=x``,
@@ -578,6 +630,37 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
             r"([rRbBuUfF]{0,3}(?:\"(?:\\.|[^\"\\\r\n])*?\""
             r"|'(?:\\.|[^'\\\r\n])*?')"
             r"|[^\s'\"&;,)\]}#]+)"
+        ),
+        _CRED_TUPLE_RX,
+        # Explicit auth constructors — ``HTTPBasicAuth("u", "pw")``:
+        # the class name declares the second positional is the
+        # password.
+        _rx(
+            r"(?i)\b(?:HTTPBasicAuth|HTTPDigestAuth|HTTPProxyAuth"
+            r"|BasicAuth)\(\s*"
+            r"(?:\"(?:\\.|[^\"\\\r\n])*?\"|'(?:\\.|[^'\\\r\n])*?')"
+            r"\s*,\s*"
+            r"(\"(?:\\.|[^\"\\\r\n])*?\"|'(?:\\.|[^'\\\r\n])*?')"
+        ),
+        # Inline-map bare value — ``{api_key: v}`` (YAML flow
+        # mappings): the mid-line ``:`` arm already owns quoted
+        # values, so this bare token must start *off* a quote —
+        # ``{"k": "it's …"}`` would otherwise truncate at the
+        # first space and leak the tail.
+        _rx(
+            r"\{\s*\\?[\"']?" + ENV_NAME_PATTERN +
+            r"[\"']?\s*:\s*[^\s'\"`,}\]]+"
+        ),
+        # nginx/Apache header directives —
+        # ``proxy_set_header Authorization "Bearer t"``,
+        # ``add_header X-Api-Key "k"``: group 1 is the quoted
+        # header value, masked inside its quotes.
+        _rx(
+            r"(?i)\b(?:proxy_set_header|add_header|set_header"
+            r"|more_set_headers|more_set_input_headers)[ \t]+"
+            r"[\w-]*(?:key|token|secret|auth|password|passwd)"
+            r"[\w-]*[ \t]+"
+            r"(\"(?:\\.|[^\"\\\r\n])*?\"|'(?:\\.|[^'\\\r\n])*?')"
         ),
         # Java ``.properties`` whitespace separator — ``api_key hunter2``
         # is a legal properties line but plain prose elsewhere, so this
@@ -639,6 +722,15 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
 FILE_GATED_PATTERNS: dict[re.Pattern[str], tuple[str, ...]] = {
     PATTERNS["env_assignment"][-1]: (".properties", ".props"),
 }
+
+# Arms whose whole match legitimately looks like a code expression to
+# ``_looks_like_code_assignment`` — the capture group declares the
+# sensitive token, so the container-shape heuristic does not apply.
+# (The bare mid-line arm keeps the guard: its group carries the ``(``
+# evidence the heuristic reads.)
+GUARD_EXEMPT_PATTERNS: frozenset[re.Pattern[str]] = frozenset(
+    {_CRED_TUPLE_RX}
+)
 
 SECRET_CATEGORIES = frozenset(
     {

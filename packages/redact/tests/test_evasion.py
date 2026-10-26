@@ -1807,3 +1807,73 @@ def test_windows_and_misc_config_credentials():
     ):
         _, findings = redact_text(src, file="c.txt")
         assert findings == [], src
+
+
+def test_env_subscripts_and_dotted_call_names():
+    """Sigil/brace env subscripts and dotted property-path names in
+    call args flag and keep syntax intact."""
+    for src, f in (
+        ('$ENV{API_KEY} = "hunter2";', "a.pl"),
+        ("$_ENV['API_KEY'] = 'hunter2';", "a.php"),
+        ('System.setProperty("db.password", "hunter2")', "j.java"),
+        ('ini_set("session.secret", "hunter2")', "a.php"),
+    ):
+        new, findings = redact_text(src, file=f)
+        assert "hunter2" not in new, src
+        assert findings, src
+
+
+def test_sql_with_password_and_basic_header():
+    """Postgres ``WITH PASSWORD`` and a bare ``Authorization: Basic``
+    header flag; a lowercase prose word after ``basic`` stays out."""
+    for src in (
+        "CREATE USER u WITH PASSWORD 'hunter2'",
+        "ALTER ROLE u WITH PASSWORD 'hunter2'",
+        "Authorization: Basic aHVudGVyMg==",
+    ):
+        new, findings = redact_text(src, file="c.txt")
+        assert "hunter2" not in new and "aHVudGVyMg" not in new, src
+        assert findings, src
+    # one plain lowercase word is prose, not a credential blob
+    new, findings = redact_text(
+        "authorization: basic hunter2", file="c.txt"
+    )
+    assert "hunter2" in new
+    assert findings == []
+
+
+def test_auth_tuple_and_inline_map():
+    """``auth=("u","p")``-style credential tuples mask only the
+    password element, and bare inline-map values ``{KEY: v}`` flag;
+    generic tuples under cred names stay code."""
+    for src in (
+        'session.auth = ("admin", "hunter2")',
+        'auth=("admin","hunter2")',
+        'credentials = ("u", "hunter2")',
+        'HTTPBasicAuth("u", "hunter2")',
+    ):
+        new, findings = redact_text(src, file="a.py")
+        assert "hunter2" not in new, src
+        assert '"admin"' in new or "'admin'" in new or '"u"' in new, new
+        assert findings, src
+        import ast
+
+        ast.parse(new)
+    new, findings = redact_text("env: {API_KEY: hunter2}", file="d.yml")
+    assert "hunter2" not in new
+    assert "}" in new
+    # tuple-of-literals under a generic cred name is still code
+    for src in ("C_API_KEY = ('a', 'b')", "token = (\"a\", \"hunter2\")"):
+        _, findings = redact_text(src, file="a.py")
+        assert findings == [], src
+
+
+def test_nginx_header_directive():
+    """``proxy_set_header``/``add_header`` mask the quoted value."""
+    for src in (
+        'proxy_set_header Authorization "Bearer hunter2";',
+        'add_header X-Api-Key "hunter2";',
+    ):
+        new, findings = redact_text(src, file="n.conf")
+        assert "hunter2" not in new, src
+        assert findings, src

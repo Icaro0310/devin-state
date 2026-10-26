@@ -33,6 +33,7 @@ from . import __version__
 from .patterns import (
     ENV_NAME_PATTERN,
     FILE_GATED_PATTERNS,
+    GUARD_EXEMPT_PATTERNS,
     PATTERNS,
     SECRET_CATEGORIES,
     pattern_name,
@@ -732,7 +733,10 @@ def _iter_fragment_matches(
         if env:
             if strings and _inside_spans(strings, lo + m.start()):
                 pass  # inside a string literal: no annotation position
-            elif _looks_like_code_assignment(whole, bindings):
+            elif (
+                rx not in GUARD_EXEMPT_PATTERNS
+                and _looks_like_code_assignment(whole, bindings)
+            ):
                 continue
             start, end = lo + m.start(), lo + m.end()
             if not (
@@ -843,9 +847,18 @@ def _iter_matches(
                     tagged_strings, m.start()
                 ):
                     continue
-                if env and not (
-                    strings and _inside_spans(strings, m.start())
-                ) and _looks_like_code_assignment(m.group(0), bindings):
+                if (
+                    env
+                    # Guard-exempt arms declare the sensitive token
+                    # explicitly (``auth=("u","p")``'s second element)
+                    # — the container-shape heuristic would suppress
+                    # it as a call.
+                    and rx not in GUARD_EXEMPT_PATTERNS
+                    and not (
+                        strings and _inside_spans(strings, m.start())
+                    )
+                    and _looks_like_code_assignment(m.group(0), bindings)
+                ):
                     continue
                 yield category, pattern_name(category, index), m
 
