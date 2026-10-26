@@ -215,15 +215,20 @@ def test_report_cli_project_invalid(devin_dir, tmp_path):
 
 
 def test_report_cli_project_negative_exits_2(devin_dir, tmp_path):
-    # "-3d" looks like a flag to argparse → it exits 2 itself, which is
-    # still failing loudly rather than projecting on a bad horizon
-    with pytest.raises(SystemExit) as exc:
-        main([
+    # "-3d" fails loudly either way: on Python <3.14 it looks like a flag
+    # so argparse exits 2 itself; on 3.14+ argparse consumes it as the
+    # value, parse_horizon rejects it and main() returns 2 — same CLI
+    # contract, different mechanism.
+    try:
+        rc = main([
             "report", "--data-dir", str(devin_dir.root),
             "--pending-file", str(tmp_path / "p.json"),
             "--project", "-3d",
         ])
-    assert exc.value.code == 2
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        assert rc == 2
 
 
 def test_report_cli_project_writes_nothing(devin_dir, tmp_path):
