@@ -272,6 +272,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sqlcmd `-P`, keytool `-(store|key)pass`, `twine -p`,
   `poetry|pip|npm|gem|bundle config [set] <name> <value>`,
   `--passphrase` and `--oauth2-bearer` (devin-state#92).
+- Credential values in call arguments and setter/DSL forms mask in
+  place — `config.set("sec", "api_key", "v")`, `os.putenv`,
+  `getenv`/`define`, dict-literal args like `cfg.update({...})`,
+  fluent setters (`e.set_key("v")`), C `#define` quoted values,
+  Emacs Lisp `setq`/`defvar`/`defcustom`, and plist
+  `<key>/<string>` pairs (devin-state#92).
+- fish `set -x`/`set -gx`, csh `setenv` and macOS
+  `launchctl setenv` keep the command and variable name, masking
+  only the value; `set -e -u -o pipefail` and bare option runs
+  stay untouched (devin-state#92).
+- `PASS`/`PWD`/`PASSPHRASE`/`PASSCODE`/`USERPASS` join the
+  credential-name vocabulary as whole names or after an
+  underscore — `DB_PASS=` and `FTP_PWD=` flag like `DB_PASSWORD=`
+  while `compass`, `bypass`, `passport` and `OLDPWD` stay out
+  (devin-state#92).
 
 ## [0.2.5] - 2026-10-23
 

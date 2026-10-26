@@ -976,7 +976,9 @@ def redact_text(
                     )
                 else:
                     env_m = re.match(
-                        r"(?i)(?:env|arg)\s+.*?\s+", whole
+                        r"(?i)(?:env|arg|set|setenv|launchctl[ \t]+"
+                        r"setenv)(?:[ \t]+-[a-zA-Z]+)*[ \t]+\S+[ \t]+",
+                        whole,
                     )
                     replacement = (
                         env_m.group(0) + _tag(value)

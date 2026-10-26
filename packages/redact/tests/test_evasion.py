@@ -1648,3 +1648,109 @@ def test_tool_positional_and_miscl_flags():
     # ``openssl passwd -stdin`` reads interactively — no literal arg
     new, findings = redact_text("openssl passwd -stdin", file="c.txt")
     assert findings == [] and "-stdin" in new
+
+
+def test_call_name_arg_and_setters():
+    """Credential names passed as call arguments — ``config.set``,
+    ``putenv``/``getenv``/``define`` — and fluent setters such as
+    ``e.set_key("v")`` mask only the value argument."""
+    for src in (
+        'config.set("sec", "api_key", "hunter2")',
+        'cfg.update({"api_key": "hunter2"})',
+        'os.putenv("API_KEY", "hunter2")',
+        'os.getenv("API_KEY", "hunter2")',
+        'define("DB_PASS", "hunter2");',
+        'e.set_key("hunter2")',
+        'client.withToken("hunter2")',
+    ):
+        new, findings = redact_text(src, file="a.py")
+        assert "hunter2" not in new, src
+        assert findings, src
+    # name and call shape survive
+    new, _ = redact_text(
+        'config.set("sec", "api_key", "hunter2")', file="a.py"
+    )
+    assert '"api_key"' in new and "config.set" in new
+    import ast
+
+    ast.parse(new)
+    # ordinary calls without credential context stay untouched
+    new, findings = redact_text(
+        'x.get("key", default_val)\nprint("hello")', file="a.py"
+    )
+    assert findings == [] and "default_val" in new
+
+
+def test_shell_env_command_forms():
+    """fish ``set -x``, csh ``setenv`` and macOS ``launchctl setenv``
+    keep the command and name, masking only the value."""
+    for src in (
+        "set -x API_KEY hunter2",
+        "set -gx API_KEY hunter2",
+        "setenv API_KEY hunter2",
+        "launchctl setenv API_KEY hunter2",
+    ):
+        new, findings = redact_text(src, file="rc.txt")
+        assert "hunter2" not in new, src
+        assert findings, src
+        assert "API_KEY" in new, src
+    # shell options without a credential name stay untouched
+    new, findings = redact_text("set -e -u -o pipefail", file="rc.txt")
+    assert findings == [] and new == "set -e -u -o pipefail"
+
+
+def test_define_elisp_and_plist_forms():
+    """``#define API_KEY "v"``, elisp ``setq``/``defvar`` and plist
+    ``<key>/<string>`` pairs mask the literal."""
+    for src in (
+        '#define API_KEY "hunter2"',
+        '(setq api-key "hunter2")',
+        '(defvar api-key "hunter2")',
+        '(defvar *api-key* "hunter2")',
+        '(defcustom smtp-password "hunter2" "doc")',
+        '<key>api_key</key><string>hunter2</string>',
+    ):
+        new, findings = redact_text(src, file="c.txt")
+        assert "hunter2" not in new, src
+        assert findings, src
+    # plist ``<data>`` carries base64, not the literal — assert the
+    # element text itself was masked
+    new, findings = redact_text(
+        "<key>api_secret</key><data>aHVudGVyMg==</data>", file="p.plist"
+    )
+    assert findings and "aHVudGVyMg" not in new
+    assert "<data><REDACTED:" in new
+    # structural and non-secret forms stay untouched
+    for src in (
+        "#define AUTH_TIMEOUT 30",
+        "#define MAX_RETRIES 5",
+        "(setq tab-width 4)",
+        "<key>width</key><integer>42</integer>",
+    ):
+        new, findings = redact_text(src, file="c.txt")
+        assert findings == [], src
+        assert src in new, src
+
+
+def test_pass_pwd_name_vocabulary():
+    """``PASS``/``PWD``/``PASSPHRASE`` bind as credential names at the
+    whole name or after an underscore; ``compass``/``bypass``/
+    ``passport`` stay out."""
+    for src in (
+        "DB_PASS=hunter2",
+        "FTP_PWD=hunter2",
+        "app_passphrase=hunter2",
+        "MY_PASSCODE=hunter2",
+    ):
+        new, findings = redact_text(src, file="e.env")
+        assert "hunter2" not in new, src
+        assert findings, src
+    for src in (
+        "BYPASS=1",
+        "compass=x",
+        "passport=x",
+        "surpass=hunter2",
+        "x_passport=hunter2",
+    ):
+        _, findings = redact_text(src, file="e.env")
+        assert findings == [], src

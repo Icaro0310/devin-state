@@ -57,6 +57,12 @@ ENV_NAME_PATTERN = (
     r"[A-Za-z_][A-Za-z0-9_]*[a-z0-9]"
     r"(?:Key|Secret|Token|Password|Passwd|Credential|Auth)"
     r"[A-Za-z0-9_]*"
+    r"|"
+    # ``PASS``/``PWD``/``PASSPHRASE`` only bind as a whole name or
+    # after an underscore — ``db_pass`` and ``ftp_pwd`` are
+    # credentials but ``compass`` and ``bypass`` are not.
+    r"(?:[A-Za-z_][A-Za-z0-9_]*_)?"
+    r"(?i:pass|pwd|passphrase|passcode|userpass)[0-9]*s?"
     r")"
 )
 
@@ -224,8 +230,13 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
         # Dockerfile ``ENV KEY value`` / ``ARG KEY value`` — the
         # legacy whitespace separator (still parsed by the builder)
         # carries no ``=``, so it needs its own line-anchored arm.
+        # fish ``set -x K v``/``set -gx K v``, csh ``setenv K v``
+        # and ``launchctl setenv K v`` share the shape, with an
+        # optional flag run between the builtin and the name.
         _rx(
-            r"(?mi)^[\s\ufeff]*(?:env|arg)[ \t]+"
+            r"(?mi)^[\s\ufeff]*"
+            r"(?:(?i:env|arg|set|setenv|launchctl[ \t]+setenv))"
+            r"(?:[ \t]+-[a-zA-Z]+)*[ \t]+"
             + ENV_NAME_PATTERN +
             r"(?:[ \t]*=[ \t]*|[ \t]+)(?:"
             r"\"(?:\\.|[^\"\\\r\n])*?\""
@@ -288,7 +299,8 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
         # separator — the rewrite keeps everything through the
         # comma and masks only the value.
         _rx(
-            r"(?<!\w)(?:setdefault|get|pop)\(\s*"
+            r"(?<!\w)(?:setdefault|get|pop|putenv|setenv|getenv"
+            r"|define)\(\s*"
             r"\\?[\"']" + ENV_NAME_PATTERN + r"\\?[\"']\s*,\s*(?:"
             r"\"\"\"(?:\\.|[^\"\\])*?\"\"\""
             r"|'''(?:\\.|[^'\\])*?'''"
@@ -296,6 +308,44 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
             r"|'(?:\\.|[^'\\\r\n])*?'"
             r"|`(?:\\.|[^`\\\r\n])*?`"
             r")"
+        ),
+        # Name-string call arg in any position — a quoted
+        # credential-shaped argument followed by a quoted literal:
+        # ``config.set("sec", "api_key", "v")``. Group 1 is the
+        # value literal (quotes stay inside the group so the engine
+        # masks inside them).
+        _rx(
+            r",\s*[\"']" + ENV_NAME_PATTERN + r"[\"']\s*,\s*"
+            r"(\"(?:\\.|[^\"\\\r\n])*?\"|'(?:\\.|[^'\\\r\n])*?'"
+            r"|`(?:\\.|[^`\\\r\n])*?`)"
+        ),
+        # Single-arg credential setter — ``cfg.set_key("v")``,
+        # ``client.withToken("v")``, ``api.setPassword('v')``: the
+        # method name declares the secret, the literal is the value.
+        _rx(
+            r"(?i)\.(?:set|with|use|add)[\w_]*"
+            r"(?:key|token|secret|password|passwd|credential|auth)"
+            r"[\w_]*\(\s*(\"[^\"\r\n]+\"|'[^'\r\n]+')"
+        ),
+        # C preprocessor — ``#define API_KEY "v"``; quoted only so
+        # constants like ``AUTH_TIMEOUT 30`` stay out.
+        _rx(
+            r"(?im)^[ \t]*#[ \t]*define[ \t]+" + ENV_NAME_PATTERN +
+            r"[ \t]+(\"[^\"\r\n]*\"|'[^'\r\n]*')"
+        ),
+        # Emacs Lisp — ``(setq api-key "v")``; hyphenated names and
+        # the ``*earmuff*`` convention for special variables.
+        _rx(
+            r"(?i)\((?:setq|defvar|defconst|defcustom|setopt)[ \t]+"
+            r"[\w*-]*(?:key|token|secret|password|passwd|credential"
+            r"|auth)[\w*-]*[ \t]+(\"[^\"\r\n]*\"|'[^'\r\n]*')"
+        ),
+        # plist XML pair — ``<key>api_key</key><string>v</string>``
+        # (``<data>`` is the base64 carrier); group 1 is the element
+        # text, non-empty so ``<string/>`` slots stay untouched.
+        _rx(
+            r"(?i)<key>[ \t]*" + ENV_NAME_PATTERN +
+            r"[ \t]*</key>[ \t]*<(?:string|data)>([^<]+)</(?:string|data)>"
         ),
         # URL query secrets — ``?api_key=v``, ``&token=v``,
         # ``;secret=v`` — live mid-line in logged URLs, so no line
