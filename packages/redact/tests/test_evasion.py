@@ -1919,3 +1919,33 @@ def test_travis_secure_blob():
     assert findings
     _, findings = redact_text("secure: true", file="d.yml")
     assert findings == []
+
+
+def test_xml_element_text_and_ldap_rootpw():
+    """XML element text under a cred-named tag masks (``<key>`` name
+    elements stay out so plist pairs survive), and LDAP
+    ``rootpw``/``olcRootPW`` flag."""
+    for src in (
+        "<password>hunter2</password>",
+        "<db.password>hunter2</db.password>",
+        "<api_key>hunter2</api_key>",
+    ):
+        new, findings = redact_text(src, file="c.xml")
+        assert "hunter2" not in new, src
+        assert findings, src
+    for src in (
+        "<key>api_key</key>",
+        "<name>hunter2</name>",
+        "<password></password>",
+    ):
+        _, findings = redact_text(src, file="c.xml")
+        assert findings == [], src
+    for src in (
+        "olcRootPW: hunter2",
+        "olcRootPW={SSHA}aHVudGVyMg==",
+        "rootpw hunter2",
+        "db_pw=hunter2",
+    ):
+        new, findings = redact_text(src, file="s.conf")
+        assert "hunter2" not in new and "aHVudGVy" not in new, src
+        assert findings, src

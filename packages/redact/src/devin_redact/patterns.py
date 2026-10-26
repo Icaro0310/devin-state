@@ -52,17 +52,17 @@ ENV_NAME_PATTERN = (
     r"[0-9]*s?(?:_[A-Za-z0-9]+)*"
     r"|"
     r"[A-Za-z_][A-Za-z0-9_]*?"
-    r"(?i:key|secret|token|password|passwd|credential|auth)s?"
+    r"(?i:key|secret|token|password|passwd|credential|auth|pw)s?"
     r"|"
     r"[A-Za-z_][A-Za-z0-9_]*[a-z0-9]"
     r"(?:Key|Secret|Token|Password|Passwd|Credential|Auth)"
     r"[A-Za-z0-9_]*"
     r"|"
-    # ``PASS``/``PWD``/``PASSPHRASE`` only bind as a whole name or
-    # after an underscore — ``db_pass`` and ``ftp_pwd`` are
+    # ``PASS``/``PWD``/``PW``/``PASSPHRASE`` only bind as a whole
+    # name or after an underscore — ``db_pass`` and ``ftp_pwd`` are
     # credentials but ``compass`` and ``bypass`` are not.
     r"(?:[A-Za-z_][A-Za-z0-9_]*_)?"
-    r"(?i:pass|pwd|passphrase|passcode|userpass)[0-9]*s?"
+    r"(?i:pass|pwd|pw|passphrase|passcode|userpass)[0-9]*s?"
     r")"
 )
 
@@ -107,6 +107,15 @@ _CRED_TUPLE_RX = _rx(
     r"(?:\"(?:\\.|[^\"\\\r\n])*?\"|'(?:\\.|[^'\\\r\n])*?')"
     r"\s*,\s*"
     r"(\"(?:\\.|[^\"\\\r\n])*?\"|'(?:\\.|[^'\\\r\n])*?')"
+)
+
+# LDAP slapd.conf — ``rootpw x``, ``olcRootPW: x`` and
+# ``olcRootPW={SSHA}…``; whitespace, ``:`` and ``=`` all appear in
+# the wild. The ``{SSHA}`` scheme prefix looks like a container to
+# the code guard, so the arm is exempt (``GUARD_EXEMPT_PATTERNS``).
+_LDAP_ROOTPW_RX = _rx(
+    r"(?im)^[ \t]*(?:olcRootPW|rootpw)[ \t:=]+"
+    r"(\"[^\"\r\n]*\"|'[^'\r\n]*'|\S+)"
 )
 
 PATTERNS: dict[str, list[re.Pattern[str]]] = {
@@ -638,6 +647,16 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
             r"(?im)^[ \t]*(?:requirepass|masterauth)[ \t]+"
             r"(\"[^\"\r\n]*\"|'[^'\r\n]*'|\S+)"
         ),
+        _LDAP_ROOTPW_RX,
+        # XML element text — ``<password>hunter2</password>``,
+        # ``<db.password>x</db.password>``: the tag name carries the
+        # credential word; ``<key>`` alone is a plist/config *name*
+        # element so it stays out. Group 1 is the text node.
+        _rx(
+            r"(?i)<(?!key>)[\w.-]*(?:key|secret|token|password"
+            r"|passwd|credential|auth|pw)[\w.-]*>[ \t]*"
+            r"([^<\s][^<\r\n]*?)[ \t]*</"
+        ),
         # SQL — ``IDENTIFIED [WITH x] BY [PASSWORD] 'pw'`` and
         # Postgres-style ``WITH PASSWORD 'pw'``; quoted only so
         # prose stays out.
@@ -774,7 +793,7 @@ FILE_GATED_PATTERNS: dict[re.Pattern[str], tuple[str, ...]] = {
 # (The bare mid-line arm keeps the guard: its group carries the ``(``
 # evidence the heuristic reads.)
 GUARD_EXEMPT_PATTERNS: frozenset[re.Pattern[str]] = frozenset(
-    {_CRED_TUPLE_RX}
+    {_CRED_TUPLE_RX, _LDAP_ROOTPW_RX}
 )
 
 SECRET_CATEGORIES = frozenset(
