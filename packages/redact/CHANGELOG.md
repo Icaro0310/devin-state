@@ -521,6 +521,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `vault`/`bao`/`openbao write` tolerates options before the path
   (`-format=json`) and empty fields (`blank=`) inside the `k=v`
   run, so a later secret pair cannot leak (devin-state#92).
+- Positional secret carriers (devin-state#92):
+  `ansible-vault encrypt_string` (with value-flags like
+  `--name`/`--stdin-name` consuming their argument so the flag
+  value is not mistaken for the secret), `vault`/`bao`/`openbao`
+  `login` tokens (with `-method`/`-path` flag args), `ssh-keygen`
+  `-P`/`-N` passphrases, and `smbclient //share password`.
 
 ## [0.2.5] - 2026-10-23
 

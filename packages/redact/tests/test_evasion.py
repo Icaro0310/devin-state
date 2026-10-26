@@ -2679,3 +2679,38 @@ def test_review_round_conan_vault():
     new, findings = redact_text(
         "vault write secret/x blank= k=hunter2", file="s.sh")
     assert findings and "hunter2" not in new
+
+
+def test_evasion_positional_secret_tools():
+    """Positional secret args: ansible-vault encrypt_string,
+    vault/bao login, ssh-keygen passphrases, smbclient."""
+
+    # ansible-vault encrypt_string carries the secret positionally;
+    # value flags consume their arg, stdin-name leaves it alone.
+    new, findings = redact_text(
+        "ansible-vault encrypt_string hunter2 --name key",
+        file="s.sh")
+    assert findings and "hunter2" not in new
+    new, findings = redact_text(
+        "ansible-vault encrypt_string --stdin-name keyname",
+        file="s.sh")
+    assert "keyname" in new
+
+    # vault/bao login token positional.
+    new, findings = redact_text("vault login hunter2", file="s.sh")
+    assert findings and "hunter2" not in new
+    new, findings = redact_text(
+        "bao login -method=token hunter2", file="s.sh")
+    assert findings and "hunter2" not in new
+
+    # ssh-keygen -P/-N passphrases both mask.
+    new, findings = redact_text(
+        "ssh-keygen -p -P oldhunter -N newhunter -f k", file="s.sh")
+    assert "oldhunter" not in new and "newhunter" not in new
+
+    # smbclient //share password positional, kept out of -U flags.
+    new, findings = redact_text(
+        "smbclient //h/s hunter2 -U u", file="s.sh")
+    assert findings and "hunter2" not in new and "-U u" in new
+    new, findings = redact_text("smbclient //h/s -U u", file="s.sh")
+    assert not findings

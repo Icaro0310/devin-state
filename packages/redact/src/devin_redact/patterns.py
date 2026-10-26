@@ -709,6 +709,53 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
             r"\betcdctl[ \t]+user[ \t]+add[ \t]+\S+?:"
             r"((?:\\.|[^\s\\|&;\"'])+)"
         ),
+        # ``ansible-vault encrypt_string <secret>`` and
+        # ``vault|bao|openbao login <token>`` carry the secret as a
+        # bare positional. Value-taking flags (``--name``,
+        # ``--stdin-name``, ``--vault-id``, ``-method``/``-path``)
+        # consume their argument so the flag value is not mistaken
+        # for the secret.
+        _rx(
+            r"\bansible-vault[ \t]+encrypt_string\b"
+            r"(?:[ \t]+(?:(?:-(?:n|p)|--(?:name|stdin-name|vault-id"
+            r"|encrypt-vault-id|new-vault-id|vault-password-file"
+            r"|vault-ca-cert|vault-ca-path|vault-client-cert"
+            r"|vault-client-key|vault-namespace"
+            r"|vault-tls-server-name|vault-wrap-ttl))\b[ \t=]+"
+            r"(?!-)[^\s|&;]+"
+            r"|-{1,2}(?!-?(?:n|p|name|stdin-name|vault-id"
+            r"|encrypt-vault-id|new-vault-id|vault-password-file"
+            r"|vault-ca-cert|vault-ca-path|vault-client-cert"
+            r"|vault-client-key|vault-namespace"
+            r"|vault-tls-server-name|vault-wrap-ttl)\b)[\w-]+))*"
+            r"[ \t]+(?!-)"
+            r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
+        ),
+        _rx(
+            r"\b(?:vault|bao|openbao)[ \t]+login\b"
+            r"(?:[ \t]+(?:(?:--?(?:method|path))\b[ \t=]+"
+            r"(?!-)[^\s|&;]+"
+            r"|-{1,2}(?!-?(?:method|path)\b)[\w-]+))*"
+            r"[ \t]+(?!-)"
+            r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
+        ),
+        # ``ssh-keygen -P old -N new`` — old and new passphrases.
+        _rx(
+            r"\bssh-keygen\b[^\n|&;]*?[ \t]-P[ \t=]*"
+            r"(?!-[-\w])"
+            r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
+        ),
+        _rx(
+            r"\bssh-keygen\b[^\n|&;]*?[ \t]-N[ \t=]*"
+            r"(?!-[-\w])"
+            r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
+        ),
+        # ``smbclient //share password`` — the password is a bare
+        # positional right after the share path.
+        _rx(
+            r"\bsmbclient[ \t]+//[^\s|&;]+[ \t]+(?!-)"
+            r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
+        ),
         # ``conan remote login``/``conan user`` — ``-p`` is the
         # password (``-pr``/``--profile`` take a profile name). The
         # gap stays inside one shell command so a later ``ssh -p``
