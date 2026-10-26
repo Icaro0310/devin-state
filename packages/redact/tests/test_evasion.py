@@ -2049,3 +2049,33 @@ def test_ansible_vault_blob_masks_body():
     assert "6338646538306164" not in new
     assert "ANSIBLE_VAULT" not in new
     assert "next: plain" in new
+
+
+def test_admin_and_bruteforce_tool_flags():
+    """Remote-exec/brute-force tools whose password rides a
+    tool-scoped flag flag and mask; the list-file/port variants
+    stay out."""
+    for src in (
+        'hydra -l admin -p hunter2 ssh://h',
+        'crackmapexec smb h -u admin -p hunter2',
+        'evil-winrm -i h -u admin -p hunter2',
+        'psexec \\\\h -u admin -p hunter2 cmd',
+        'gh secret set API_KEY --body "hunter2"',
+        'gh variable set DEPLOY_TOKEN --body hunter2',
+        'security add-generic-password -a u -s svc -w hunter2',
+        'eyaml encrypt -s hunter2',
+        'schtasks /create /tn t /ru admin /rp hunter2 /tr x',
+        'rclone config create r s3 secret_access_key hunter2',
+        'ncrack -p 22 --user u --pass hunter2 h',
+    ):
+        new, findings = redact_text(src, file="s.sh")
+        assert findings, src
+        assert "hunter2" not in new, src
+    for src in (
+        'hydra -l admin -P list.txt ssh://h',
+        'gh variable set NAME --body x',
+        'rclone config create r s3 provider AWS',
+        'psexec \\\\h -u admin cmd',
+    ):
+        _, findings = redact_text(src, file="s.sh")
+        assert findings == [], src

@@ -203,6 +203,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--value`/`--secret-string` arguments, `doppler secrets
   set`, and the `$ANSIBLE_VAULT` marker plus its hex
   ciphertext body all flag (devin-state#92).
+- Tool-scoped password flags: `-p` on hydra/medusa/
+  crackmapexec/netexec/evil-winrm/smbmap/enum4linux/psexec
+  (lowercase only — `-P` is a list file or port), `gh
+  secret set --body`/`-b`, `gh variable set` under a
+  credential-shaped name, macOS `security -w`, hiera-eyaml
+  `encrypt -s`, `schtasks /rp`, and `rclone config
+  create|update` credential-key positionals
+  (devin-state#92).
 - Python literal prefixes survive on plain assignments too —
   `api_key = b"v"` (and `rb`/`f`/`u`) re-emits `b"<tag>"`
   instead of an unquoted tag that cannot parse — and YAML

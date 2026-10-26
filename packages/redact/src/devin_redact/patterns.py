@@ -783,6 +783,52 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
             r"(?im)^[ \t]*(?:\w+[ \t]+)?AUTH(?:ENTICATE)?[ \t]+"
             r"PLAIN[ \t]+([A-Za-z0-9+/=]{10,})[ \t]*$"
         ),
+        # Password-argument tools — hydra, medusa, crackmapexec/
+        # netexec, evil-winrm, smbmap, enum4linux, psexec: the
+        # password rides ``-p`` (lowercase; ``-P`` is a list file
+        # or port on most of these tools, and ncrack's ``-p`` is
+        # a port spec — its ``--pass`` is the long-flag arm).
+        _rx(
+            r"\b(?i:hydra|medusa|crackmapexec|cme|nxc|netexec"
+            r"|evil-winrm|smbmap|enum4linux(?:-ng)?|psexec)\b"
+            r"[^\n]*?[ \t]-p[ \t=]*"
+            r"(\"[^\"\r\n]*\"|'[^'\r\n]*'|[^\s|&;]+)"
+        ),
+        # ``gh secret set NAME --body v``/``-b v`` — secret bodies
+        # ride the body flag; ``gh variable set`` only when the
+        # variable name itself is credential-shaped.
+        _rx(
+            r"(?i)\bgh[ \t]+(?:secret[ \t]+set[ \t]+\S+|variable"
+            r"[ \t]+set[ \t]+" + ENV_NAME_PATTERN + r")"
+            r"[ \t]+(?:-b|--body)[ \t=]*"
+            r"(\"[^\"\r\n]*\"|'[^'\r\n]*'|\S+)"
+        ),
+        # macOS ``security add|find-*-password -w`` and hiera-eyaml
+        # ``eyaml encrypt -s`` — the secret is the flag operand.
+        _rx(
+            r"(?i)\bsecurity[ \t]+(?:add|find)-\w+-password\b"
+            r"[^\n]*?[ \t]-w[ \t=]*"
+            r"(\"[^\"\r\n]*\"|'[^'\r\n]*'|\S+)"
+        ),
+        _rx(
+            r"(?i)\beyaml[ \t]+encrypt\b[^\n]*?[ \t]-s[ \t=]*"
+            r"(\"[^\"\r\n]*\"|'[^'\r\n]*'|\S+)"
+        ),
+        # Windows ``schtasks /ru u /rp p`` — ``/rp`` carries the
+        # run-as password; the value stops before the next
+        # ``/flag``.
+        _rx(
+            r"(?i)\bschtasks\b[^\n]*?/rp[ \t:]+"
+            r"(\"[^\"\r\n]*\"|[^/\s][^\s]*)"
+        ),
+        # ``rclone config create|update <remote> <backend>
+        # <credname> <value>`` — the key carries the credential
+        # word.
+        _rx(
+            r"(?i)\brclone[ \t]+config[ \t]+(?:create|update)[ \t]+"
+            r"\S+[ \t]+\S+[ \t]+" + ENV_NAME_PATTERN +
+            r"[ \t]+(\"[^\"\r\n]*\"|'[^'\r\n]*'|\S+)"
+        ),
         # ``.pgpass`` five-field rows ``host:port:db:user:pass`` —
         # a generic colon chain is prose-shaped anywhere else, so
         # this arm is gated to the filename
