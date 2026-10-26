@@ -114,8 +114,10 @@ _CRED_TUPLE_RX = _rx(
 # the wild. The ``{SSHA}`` scheme prefix looks like a container to
 # the code guard, so the arm is exempt (``GUARD_EXEMPT_PATTERNS``).
 _LDAP_ROOTPW_RX = _rx(
+    # Bare value runs to EOL — slapd.conf is not shell, so ``;`` is
+    # literal password content, not a command separator.
     r"(?im)^[ \t]*(?:olcRootPW|rootpw)[ \t:=]+"
-    r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
+    r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|[^\s]+)"
 )
 
 # ``.pgpass`` five-field rows — ``host:port:db:user:password``;
@@ -140,9 +142,12 @@ _CLITOK = (
 # (``FILE_GATED_PATTERNS``). Unanchored: fetchmailrc carries
 # ``poll h user u password "x"`` mid-line.
 _MAILPASS_RX = _rx(
+    # ``#`` still bounds a bare value (rc files use ``#`` comments)
+    # but ``;`` is literal — mail rc files are not shell, so
+    # ``password hunter;2`` keeps ``;2`` inside the mask.
     r"(?i)\bpassword[ \t]+"
     r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'"
-    r"|(?:\\.|[^\s;\\#])+)"
+    r"|(?:\\.|[^\s\\#])+)"
 )
 
 PATTERNS: dict[str, list[re.Pattern[str]]] = {
@@ -663,7 +668,7 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
         _rx(
             r"(?i)\b(?:sqlplus|sqlldr|sqlcl|exp|expdp|imp|impdp"
             r"|rman|tnsping|orapki)\b(?:[ \t]+\S+)*?"
-            r"[ \t]+\S+?/((?:\\.|[^\s\\|&;/@\"'])+)(?=[@\s\"']|$)"
+            r"[ \t]+\S+?/((?:\\.|[^\s\\|&;/@\"'])+)(?=[@\s\"'|&;]|$)"
         ),
         # ``openssl passwd`` takes the plaintext positionally after
         # the algorithm flag — a ``-``-led token is a flag, not the
@@ -698,10 +703,13 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
             r"[\"'][ \t]+value[ \t]*=[ \t]*(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*')"
         ),
         # Redis config — ``requirepass pw`` / ``masterauth pw``;
-        # line-anchored like .netrc.
+        # line-anchored like .netrc. A bare value runs to EOL:
+        # redis.conf is not shell, so ``;``/``|``/``&`` inside the
+        # token are literal password bytes — stopping at them left
+        # the tail of ``requirepass hunter;2`` visible.
         _rx(
             r"(?im)^[ \t]*(?:requirepass|masterauth)[ \t]+"
-            r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
+            r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|[^\s]+)"
         ),
         _LDAP_ROOTPW_RX,
         # XML element text — ``<password>hunter2</password>``,

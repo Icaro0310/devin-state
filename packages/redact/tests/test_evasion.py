@@ -2423,3 +2423,28 @@ def test_review_round_flag_shadowing_and_quote_symmetry():
         'kadmin -w hunter2 -q "addprinc -pw pass2 admin"',
         file="s.sh")
     assert "hunter2" not in new and "pass2" not in new
+
+
+def test_review_round_semicolon_config_vs_shell():
+    """``;`` is a shell separator but literal inside config-file
+    values — oracle credspecs keep the boundary while redis/ldap/
+    mail config arms take the whole token."""
+
+    # Shell boundary: ``;`` ends the password, the lookahead must
+    # accept it or the whole credspec fails to match.
+    new, findings = redact_text(
+        "sqlplus scott/hunter2; echo hi", file="s.sh")
+    assert findings and "hunter2" not in new
+    assert "; echo hi" in new
+
+    # Config files are not shell — ``requirepass hunter;2`` is one
+    # password; masking only ``hunter`` leaves ``;2`` behind.
+    new, findings = redact_text("requirepass hunter;2", file="redis.conf")
+    assert findings and "hunter" not in new
+    new, findings = redact_text(
+        "requirepass hunter;2 # note", file="redis.conf")
+    assert findings and "hunter" not in new and "# note" in new
+    new, findings = redact_text("olcRootPW={SSHA}a;2", file="x.ldif")
+    assert findings and "a;2" not in new
+    new, findings = redact_text("password hunter;2", file=".msmtprc")
+    assert findings and "hunter" not in new

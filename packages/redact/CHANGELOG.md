@@ -447,6 +447,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   — the bare gap alternative excludes quote characters so repeated
   quoted fragments can no longer repartition exponentially on a
   line with no `-b`/`--body` (ReDoS; devin-state#92).
+- `;` boundary fixed both ways (devin-state#92): oracle-style
+  `user/pass@svc` credspecs now accept `;` as a terminator so
+  `sqlplus scott/pw; echo hi` masks the password, while the
+  redis.conf (`requirepass`/`masterauth`), slapd (`rootpw`/
+  `olcRootPW`) and mail-rc (`password pw`) arms treat `;` as
+  literal password content — `requirepass hunter;2` masks `hunter;2`
+  whole instead of leaking the `;2` tail.
 
 ## [0.2.5] - 2026-10-23
 
