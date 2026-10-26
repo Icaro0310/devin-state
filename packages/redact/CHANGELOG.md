@@ -266,6 +266,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `aws configure set <name> <value>`, quoted header values like
   `-H "X-Api-Key: v"`, openssl `-pass pass:v`, and PowerShell
   `ConvertTo-SecureString "v"` (devin-state#92).
+- More credential carriers mask in place — cmdkey `/pass:v`,
+  smbclient `-U user%pass`, lftp `-u user,pass`, Oracle
+  `user/pass[@db]`, `openssl passwd` positionals, PuTTY `-pw`,
+  sqlcmd `-P`, keytool `-(store|key)pass`, `twine -p`,
+  `poetry|pip|npm|gem|bundle config [set] <name> <value>`,
+  `--passphrase` and `--oauth2-bearer` (devin-state#92).
 
 ## [0.2.5] - 2026-10-23
 

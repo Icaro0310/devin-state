@@ -1604,3 +1604,47 @@ def test_powershell_securestring_literal():
     new, findings = redact_text(src, file="s.ps1")
     assert "hunter2" not in new and "-AsPlainText" in new
     assert findings
+
+
+def test_cmdkey_slashflag_and_credential_pairs():
+    """cmdkey ``/pass:v``, smbclient ``-U user%pass``, lftp
+    ``-u user,pass`` and Oracle ``user/pass[@db]`` each mask only
+    the password half of the pair."""
+    for src in (
+        "cmdkey /add:host /user:u /pass:hunter2",
+        "smbclient //srv/share -U admin%hunter2",
+        "lftp -u admin,hunter2 ftp.x",
+        "sqlplus scott/hunter2@db",
+        "sqlplus scott/hunter2",
+        "exp scott/hunter2@orcl",
+    ):
+        new, findings = redact_text(src, file="cmd.txt")
+        assert "hunter2" not in new, src
+        assert findings, src
+    # the user half survives — only the password is masked
+    new, _ = redact_text("smbclient //s -U admin%hunter2", file="c.txt")
+    assert "admin%<REDACTED:" in new
+
+
+def test_tool_positional_and_miscl_flags():
+    """``openssl passwd -6 pw``, ``plink -pw``, ``sqlcmd -P``,
+    ``keytool -storepass``, ``twine -p``, ``poetry config`` and
+    ``--passphrase``/``--oauth2-bearer`` mask the credential."""
+    for src in (
+        "openssl passwd -6 hunter2",
+        "openssl passwd hunter2",
+        "plink -pw hunter2 u@h",
+        "pscp -pw hunter2 f u@h:",
+        "sqlcmd -U sa -P hunter2",
+        "keytool -list -storepass hunter2 -keystore k.jks",
+        "twine upload -p hunter2 dist/*",
+        "poetry config pypi-token.pypi hunter2",
+        "gpg --passphrase hunter2 -c f",
+        "curl --oauth2-bearer hunter2 https://x",
+    ):
+        new, findings = redact_text(src, file="cmd.txt")
+        assert "hunter2" not in new, src
+        assert findings, src
+    # ``openssl passwd -stdin`` reads interactively — no literal arg
+    new, findings = redact_text("openssl passwd -stdin", file="c.txt")
+    assert findings == [] and "-stdin" in new

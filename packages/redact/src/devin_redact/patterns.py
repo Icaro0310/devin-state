@@ -361,9 +361,9 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
         # *end* in the credential word, so ``--password-file f`` and
         # ``--token-type t`` stay out.
         _rx(
-            r"(?i)--[\w-]*(?:password|passwd|pass|secret|token"
-            r"|api[-_]?key|access[-_]?key|client[-_]?secret"
-            r"|auth[-_]?token)[ \t=]+"
+            r"(?i)--[\w-]*(?:password|passwd|passphrase|pass|secret"
+            r"|token|api[-_]?key|access[-_]?key|client[-_]?secret"
+            r"|auth[-_]?token|bearer)[ \t=]+"
             r"(\"[^\"\r\n]*\"|'[^'\r\n]*'|\S+)"
         ),
         # Tool flags where the secret rides a short option or a
@@ -380,6 +380,52 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
             r"(?i)\baws[ \t]+configure[ \t]+set[ \t]+"
             r"\S*(?:key|secret|token)\S*[ \t]+(\S+)"
         ),
+        _rx(
+            r"(?i)\b(?:poetry|pip|npm|gem|bundle)[ \t]+config(?:"
+            r"[ \t]+set)?[ \t]+\S*(?:key|secret|token|pass\w*)"
+            r"\S*[ \t]+(\"[^\"\r\n]*\"|'[^'\r\n]*'|\S+)"
+        ),
+        # PuTTY family ``-pw``, sqlcmd ``-P`` (uppercase — the
+        # password flag), twine ``-p``, keytool ``-(store|key)pass``;
+        # cmdkey-style ``/pass:v``.
+        _rx(
+            r"\b(?:putty|plink|pscp|psftp|pageant)\b[^\n]*?"
+            r"[ \t]-pw[ \t=]*(\"[^\"\r\n]*\"|'[^'\r\n]*'|\S+)"
+        ),
+        _rx(
+            r"\b(?:sqlcmd|bcp|sqlservr)\b[^\n]*?"
+            r"[ \t]-P[ \t=]*(\"[^\"\r\n]*\"|'[^'\r\n]*'|\S+)"
+        ),
+        _rx(
+            r"\b(?:twine|flit)\b[^\n]*?[ \t]-p[ \t=]*"
+            r"(\"[^\"\r\n]*\"|'[^'\r\n]*'|\S+)"
+        ),
+        _rx(
+            r"(?i)-(?:src|dest)?(?:store|key)pass(?:word)?[ \t=]+"
+            r"(\"[^\"\r\n]*\"|'[^'\r\n]*'|\S+)"
+        ),
+        _rx(
+            r"(?i)/(?:pass|password|pwd)[ \t]*:[ \t]*"
+            r"(\"[^\"\r\n]*\"|'[^'\r\n]*'|\S+)"
+        ),
+        # Credential-pair encodings — smbclient ``-U user%pass``,
+        # lftp ``-u user,pass``, Oracle tools ``user/pass[@db]``.
+        _rx(
+            r"(?i)\b(?:smbclient|smbget|smbpasswd|rpcclient|winexe)"
+            r"\b[^\n]*?[ \t]-U[ \t]*\S+%([^\"'\s]+)"
+        ),
+        _rx(
+            r"(?i)\blftp\b[^\n]*?[ \t]-u[ \t]*[\"']?\S+,"
+            r"([^\"',\s]+)"
+        ),
+        _rx(
+            r"(?i)\b(?:sqlplus|sqlldr|exp|expdp|imp|impdp|rman)"
+            r"\s+\S+/(\S+)"
+        ),
+        # ``openssl passwd`` takes the plaintext positionally after
+        # the algorithm flag — a ``-``-led token is a flag, not the
+        # plaintext (``-stdin`` reads interactively).
+        _rx(r"\bopenssl[ \t]+passwd(?:[ \t]+-\w+)*[ \t]+((?!-)\S+)"),
         # Header value inside a quoted argument —
         # ``-H "X-Api-Key: hunter2"``, ``-H "Authorization: Bearer
         # t"``. The credential word can lead the header name
