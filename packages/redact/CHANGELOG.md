@@ -404,6 +404,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `nuget -Password`, glued `rar`/`unrar -pPASS`, `veracrypt -p`,
   `user:pass | chpasswd`/`newusers` pipes, and expect scripts'
   `send` after a password prompt (devin-state#92).
+- `.pgpass` rows of bare backslash escapes no longer trigger
+  exponential backtracking — the field class excludes `\\` so a
+  separator-free row fails fast (devin-state#92).
+- Operand grammar is escape-aware and quote-aware throughout:
+  `\|`/`\;`/`\"` inside a value no longer ends the mask early,
+  quoted options containing `;`/`|` before `gh secret set --body`
+  are skipped correctly, and the rclone tail absorbs
+  non-credential `NAME value` pairs so a later credential pair
+  cannot reopen the mask (devin-state#92).
+- Quoted positionals are honored by `radtest` (both password
+  operands), `mc admin user add`, and mail `password "..."`
+  directives; a second `-pw` inside `kadmin -q "..."` subcommands
+  is masked; `pulumi config set --secret ns:name v` matches
+  namespaced keys; `redis-cli set` (lowercase) is covered
+  (devin-state#92).
 
 ## [0.2.5] - 2026-10-23
 

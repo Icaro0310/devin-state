@@ -2134,7 +2134,14 @@ def test_review_round_gh_rclone_security():
     new, findings = redact_text(src, file="s.sh")
     assert findings
     assert "hunter2" not in new and "abc123" not in new
-    assert "region us" in new
+    # Non-credential pairs between secrets must not reopen the
+    # mask, so the absorbed tail takes ``region us`` along.
+    assert "region us" not in new
+    new, findings = redact_text(
+        "rclone config create r s3 secret_access_key hunter2 "
+        "token abc123 region us secret_key b3trayal",
+        file="s.sh")
+    assert "b3trayal" not in new
 
 
 def test_oracle_credspec_and_positional_tools():
@@ -2267,3 +2274,91 @@ def test_httpie_proxyauth_and_misc_tool_flags():
     ):
         new, findings = redact_text(src, file="s.sh")
         assert findings == [] and new == src, src
+
+
+def test_review_round_escape_aware_operands():
+    import time
+
+    from devin_redact import patterns
+
+    # .pgpass row of bare escapes with too few separators was
+    # exponential; with the backslash excluded from the field class
+    # it must return immediately.
+    row = "\\a" * 60
+    start = time.monotonic()
+    patterns._PGPASS_RX.search(row)
+    assert time.monotonic() - start < 1.0
+
+    # Escaped separators inside a bare value must not end the mask.
+    for src in (
+        "security add-generic-password -s x -w hun\\|ter2",
+        "rclone config create r s3 secret_access_key hun\\|ter2",
+        "eyaml encrypt -s hun\\;ter2",
+    ):
+        new, findings = redact_text(src, file="s.sh")
+        assert findings, src
+        assert "hunter2" not in new and "ter2" not in new, src
+
+    # rclone: a non-credential pair before a later credential pair
+    # must not reopen the mask.
+    new, findings = redact_text(
+        "rclone config create r s3 token abc123 region us "
+        "secret_access_key hunter2", file="s.sh")
+    assert findings and "hunter2" not in new
+    new, _ = redact_text(
+        'rclone config create r s3 secret_access_key hunter2 '
+        'token "abc 123"', file="s.sh")
+    assert '123"' not in new and "abc 123" not in new
+
+    # gh: a quoted option containing a separator before --body.
+    new, findings = redact_text(
+        'gh secret set API_KEY --env "prod;dev" --body hunter2',
+        file="s.sh")
+    assert findings and "hunter2" not in new
+    new, _ = redact_text(
+        'gh secret set API_KEY --env "prod|dev" --body hunter2',
+        file="s.sh")
+    assert "hunter2" not in new
+
+    # kadmin: a second credential operand inside the -q subcommand.
+    new, findings = redact_text(
+        'kadmin -w hunter2 -q "addprinc -pw secret123 admin"',
+        file="s.sh")
+    assert findings
+    assert "hunter2" not in new and "secret123" not in new
+
+    # radtest: quoted positionals are single tokens.
+    new, findings = redact_text(
+        'radtest "user name" "hun ter2" host 0 "shared secret"',
+        file="s.sh")
+    assert findings
+    assert "hun ter2" not in new and "shared secret" not in new
+
+    # Mail config: escaped quote inside a quoted password.
+    new, findings = redact_text(
+        'password "hun\\"ter2"', file=".msmtprc")
+    assert findings and "ter2" not in new
+
+    # pulumi namespaced key / mc quoted secret / redis lowercase.
+    new, findings = redact_text(
+        "pulumi config set --secret service:password hunter2",
+        file="s.sh")
+    assert findings and "hunter2" not in new
+    new, findings = redact_text(
+        'mc admin user add myminio admin "hun ter2"', file="s.sh")
+    assert findings and "hun ter2" not in new
+    new, findings = redact_text(
+        "redis-cli set password hunter2", file="s.sh")
+    assert findings and "hunter2" not in new
+
+    # Negatives: pipes/separators outside quotes still terminate.
+    new, _ = redact_text(
+        "gh secret set API_KEY --body hunter2 | wc", file="s.sh")
+    assert "wc" in new
+    new, _ = redact_text(
+        "rclone config create r s3 secret_access_key hunter2 "
+        "--interactive", file="s.sh")
+    assert "--interactive" in new
+    new, findings = redact_text(
+        "redis-cli get password", file="s.sh")
+    assert findings == [] and "hunter" not in new
