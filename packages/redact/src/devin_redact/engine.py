@@ -32,6 +32,7 @@ from pathlib import Path, PurePosixPath
 from . import __version__
 from .patterns import (
     ENV_NAME_PATTERN,
+    FILE_GATED_PATTERNS,
     PATTERNS,
     SECRET_CATEGORIES,
     pattern_name,
@@ -266,6 +267,37 @@ def _delimiter_string_spans(text: str) -> list[tuple[int, int]]:
             start = None
     if start is not None:
         spans.append((start, len(text)))
+    return spans
+
+
+def _tagged_string_spans(text: str) -> list[tuple[int, int]]:
+    """String-literal spans containing a ``<REDACTED:…>`` tag.
+
+    Unlike ``_string_spans`` this includes *single-line* literals —
+    ``["<REDACTED:x> KEY=v"]`` holds a tag inside a one-line string.
+    The tokenizer gives exact spans for valid source; on failure the
+    triple-quote delimiter scan is the conservative fallback (a missed
+    single-line span then just means the env pattern still flags —
+    the fail-closed direction).
+    """
+    line_starts = [0]
+    for line in text.split("\n"):
+        line_starts.append(line_starts[-1] + len(line) + 1)
+    try:
+        spans = [
+            (
+                line_starts[t.start[0] - 1] + t.start[1],
+                line_starts[t.end[0] - 1] + t.end[1],
+            )
+            for t in tokenize.generate_tokens(io.StringIO(text).readline)
+            if t.type == tokenize.STRING and _REDACTED_TAG in t.string
+        ]
+    except (tokenize.TokenError, IndentationError, SyntaxError,
+            ValueError, RecursionError):
+        spans = [
+            s for s in _delimiter_string_spans(text)
+            if _TAG_RUN.search(text, s[0], s[1])
+        ]
     return spans
 
 
@@ -746,19 +778,30 @@ def _iter_tag_gap(
     )
 
 
-def _iter_matches(text: str, *, python_source: bool | None = None):
+def _iter_matches(
+    text: str,
+    *,
+    python_source: bool | None = None,
+    file: str | None = None,
+):
     """Yield ``(category, pattern_name, match)`` for every pattern hit.
 
     ``python_source`` gates import-alias resolution: ``True`` (a Python
     file) and ``None`` (bare text — pasted code has no filename) map
     aliases; ``False`` treats import-like lines as inert text so a
     credential blob cannot hide a value behind ``import numpy as n``.
+    ``file`` gates extension-scoped arms (``FILE_GATED_PATTERNS``).
     """
     # Inside a triple-quoted string there is no annotation, import or
     # assignment position — ``api_key: ref`` in a docstring is string
     # content and must flag, and an ``import`` line there binds
     # nothing (devin-state#92).
     strings = _string_spans(text) if python_source is not False else []
+    # String spans already carrying a ``<REDACTED:…>`` tag are prior
+    # redaction output — a mid-line env match inside one is decoy
+    # text, not a fresh secret (the tag-gap rescan still handles
+    # secrets after a tag in *unenclosed* fragments).
+    tagged_strings = _tagged_string_spans(text)
     bindings = (
         _import_aliases(text, strings)
         if python_source is not False
@@ -767,6 +810,11 @@ def _iter_matches(text: str, *, python_source: bool | None = None):
     for category, regexes in PATTERNS.items():
         env = category == "env_assignment"
         for index, rx in enumerate(regexes):
+            gate = FILE_GATED_PATTERNS.get(rx)
+            if gate is not None and not (
+                file is not None and file.lower().endswith(gate)
+            ):
+                continue
             for m in rx.finditer(text):
                 if _REDACTED_TAG in m.group(0):
                     # Prior redaction output — re-scan only the tag-free
@@ -776,6 +824,10 @@ def _iter_matches(text: str, *, python_source: bool | None = None):
                         rx, text, m, env, index, bindings, strings
                     ):
                         yield category, pattern_name(category, index), fm
+                    continue
+                if env and tagged_strings and _inside_spans(
+                    tagged_strings, m.start()
+                ):
                     continue
                 if env and not (
                     strings and _inside_spans(strings, m.start())
@@ -791,7 +843,9 @@ def scan_text(text: str, *, file: str, location: str) -> list[Finding]:
     # form it covers. Exact ties keep iteration order, so the
     # first pattern to match identical text keeps its name.
     raw = sorted(
-        _iter_matches(text, python_source=_python_source_file(file)),
+        _iter_matches(
+            text, python_source=_python_source_file(file), file=file
+        ),
         key=lambda t: (t[0], t[2].start(), -t[2].end()),
     )
     findings: list[Finding] = []
@@ -858,7 +912,7 @@ def redact_text(
     python_source = None if file is None else _python_source_file(file)
     candidates: list[tuple[int, int, str, str, str]] = []
     for category, name, m in _iter_matches(
-        text, python_source=python_source
+        text, python_source=python_source, file=file
     ):
         value = sensitive_match(m)
         fp = _fingerprint(value)
@@ -868,11 +922,34 @@ def redact_text(
             if m.lastindex:
                 # The arm captured the sensitive token — group 1 —
                 # inside wider context (``.netrc``'s
-                # ``machine … password p``). Mask only that span so
-                # the line keeps its shape.
+                # ``machine … password p``, a CLI flag's value).
+                # Mask only that span so the line keeps its shape.
+                # A quoted token keeps its quotes, and a bare token
+                # in Python source still gets a quoted tag so the
+                # slot parses.
                 g_start, g_end = m.span(1)
+                gtext = text[g_start:g_end]
+                qm = re.match(r"[rRbBuUfF]*([\"'])", gtext)
+                if (
+                    qm is not None
+                    and len(gtext) > qm.end()
+                    and gtext.endswith(qm.group(1))
+                ):
+                    candidates.append(
+                        (
+                            g_start + qm.end(),
+                            g_end - 1,
+                            _tag(value),
+                            category,
+                            fp,
+                        )
+                    )
+                    continue
+                tag = _tag(value)
+                if file is not None and _python_source_file(file):
+                    tag = f'"{tag}"'
                 candidates.append(
-                    (g_start, g_end, _tag(value), category, fp)
+                    (g_start, g_end, tag, category, fp)
                 )
                 continue
             eq_m = re.search(r"[:=]", whole)

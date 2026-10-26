@@ -329,6 +329,50 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
             r"(?im)^[ \t]*(?:machine\s+\S+|default)\s+login\s+\S+\s+"
             r"(?:password|account)\s+(\S+)"
         ),
+        # Escaped property separators — Java ``.properties`` allows
+        # ``\=``, ``\:``, ``\u003d``; prose never spells
+        # them. Group 1 is the value.
+        _rx(
+            r"(?<!\w)" + ENV_NAME_PATTERN +
+            r"[ \t]*(?:\\u003[daDA]|\\[:=])[ \t]*"
+            r"(\"[^\"\r\n]*\"|'[^'\r\n]*'|\S+)"
+        ),
+        # CLI credential flags — ``sshpass -p``, ``curl -u u:p``,
+        # ``redis-cli -a``, ``ldapsearch -w``, ``mosquitto_* -P``.
+        # Group 1 is the token, quoted or bare.
+        _rx(
+            r"(?i)\b(?:sshpass[ \t]+-p|(?:curl|wget|httpie?|fetch)\S*"
+            r"[ \t]+(?:-u|--user)|redis-cli[ \t]+-a"
+            r"|ldapsearch[ \t]+-w|mosquitto_\w+[ \t]+-P)[ \t=]*"
+            r"(\"[^\"\r\n]*\"|'[^'\r\n]*'|\S+)"
+        ),
+        # mysql family ``-p<pass>`` — the value rides attached and
+        # may follow other flags (``-u root -psecret``). Kept
+        # case-sensitive: ``-P`` is the *port* flag.
+        _rx(
+            r"\b(?:mysql|mysqldump|mariadb|mysqladmin|mysqlcheck)"
+            r"\w*\b[^\n]*?\s-p(\S+)"
+        ),
+        # htpasswd batch mode — ``-b file user pass``.
+        _rx(r"(?i)\bhtpasswd[ \t]+-b\w*[ \t]+\S+[ \t]+\S+[ \t]+(\S+)"),
+        # XML/app.config attribute pairs — the credential name sits
+        # in ``key=``/``name=`` and the secret in ``value=``.
+        _rx(
+            r"(?i)\b(?:key|name)[ \t]*=[ \t]*[\"']" + ENV_NAME_PATTERN +
+            r"[\"'][ \t]+value[ \t]*=[ \t]*(\"[^\"\r\n]*\"|'[^'\r\n]*')"
+        ),
+        # Redis config — ``requirepass pw`` / ``masterauth pw``;
+        # line-anchored like .netrc.
+        _rx(
+            r"(?im)^[ \t]*(?:requirepass|masterauth)[ \t]+"
+            r"(\"[^\"\r\n]*\"|'[^'\r\n]*'|\S+)"
+        ),
+        # SQL — ``IDENTIFIED [WITH x] BY [PASSWORD] 'pw'``; quoted
+        # only so prose stays out.
+        _rx(
+            r"(?i)identified[ \t]+(?:with[ \t]+\S+[ \t]+)?by[ \t]+"
+            r"(?:password[ \t]+)?(\"[^\"\r\n]*\"|'[^'\r\n]*')"
+        ),
         # Commented-out secrets — ``# password=x``,
         # ``// api_key=x``, ``<!-- token=x -->``, ``; secret=x``.
         # A credential parked in a comment still ships, and a
@@ -344,6 +388,28 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
             r"|`(?:\\.|[^`\\\r\n])*?`"
             r"|\S(?:[^\n\\]|\\\r?\n)*"
             r")"
+        ),
+        # Bare mid-line ``name = value`` — a credential-shaped name
+        # claims the next token wherever the pair sits:
+        # ``docker -e KEY=v``, ``--from-literal=key=v``,
+        # ``Cookie: key=v``, ``config:set KEY=v``. Comparisons
+        # (``==``) stay out; the value stops at whitespace,
+        # quotes and closers but keeps openers so the
+        # code-assignment guard still sees ``name(`` calls.
+        # Group 1 is the token.
+        _rx(
+            r"(?<!\w)" + ENV_NAME_PATTERN + r"[ \t]*=(?!=)[ \t]*"
+            r"([rRbBuUfF]{0,3}(?:\"(?:\\.|[^\"\\\r\n])*?\""
+            r"|'(?:\\.|[^'\\\r\n])*?')"
+            r"|[^\s'\"&;,)\]}#]+)"
+        ),
+        # Java ``.properties`` whitespace separator — ``api_key hunter2``
+        # is a legal properties line but plain prose elsewhere, so this
+        # arm only fires under a matching file extension (see
+        # ``FILE_GATED_PATTERNS``). Group 1 is the rest-of-line value.
+        _rx(
+            r"(?im)^[ \t]*" + ENV_NAME_PATTERN + r"[ \t]+"
+            r"([^\s][^\r\n]*?)[ \t]*(?:\r?$|$)"
         ),
     ],
     "connection_uri": [
@@ -388,6 +454,14 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
         # POSIX home paths: /home/<name>/... and macOS /Users/<name>/...
         _rx(r"(?<![\w/.-])/(?:home|Users)/[^\s\"'<>|]+"),
     ],
+}
+
+# Patterns that only fire for matching file names — keyed on the
+# compiled pattern object so inserting arms cannot drift an index.
+# The whitespace-separated ``key value`` form is legal Java
+# ``.properties`` syntax but ordinary prose anywhere else.
+FILE_GATED_PATTERNS: dict[re.Pattern[str], tuple[str, ...]] = {
+    PATTERNS["env_assignment"][-1]: (".properties", ".props"),
 }
 
 SECRET_CATEGORIES = frozenset(

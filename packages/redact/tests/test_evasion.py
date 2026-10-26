@@ -1429,3 +1429,105 @@ def test_ansible_vault_block_scalar():
     assert "ANSIBLE_VAULT" not in new and "6162636465" not in new
     assert "next: v" in new
     assert len(findings) == 1
+
+
+def test_java_properties_separators():
+    """Java ``.properties`` accepts ``=``, ``:``, whitespace and the
+    escaped forms ``\\=``/``\\u003d`` — plus space separators, which
+    only fire under a properties extension (prose elsewhere)."""
+    for src, fn in (
+        ("api_key=hunter2", "config.properties"),
+        ("api_key:hunter2", "config.properties"),
+        ("api_key hunter2", "config.properties"),
+        ("api_key\\=hunter2", "config.properties"),
+        ("api_key\\u003dhunter2", "config.properties"),
+    ):
+        new, findings = redact_text(src, file=fn)
+        assert "hunter2" not in new, (src, fn)
+        assert findings, (src, fn)
+    # the space-separator arm is file-gated: identical text in a
+    # plain-text file is prose, not a properties assignment
+    new, findings = redact_text("api_key hunter2", file="notes.txt")
+    assert findings == [] and new == "api_key hunter2"
+    new, findings = redact_text(
+        "PASSWORD must be rotated quarterly", file="notes.md"
+    )
+    assert findings == []
+
+
+def test_xml_attribute_pair_and_setting():
+    """XML config carries credentials as attribute pairs
+    (``key="api_key" value="hunter2"``) or a direct secret-named
+    attribute — the value is masked inside its quotes."""
+    for src in (
+        '<add key="api_key" value="hunter2" />',
+        '<setting api_key="hunter2"/>',
+    ):
+        new, findings = redact_text(src, file="app.config")
+        assert "hunter2" not in new, src
+        assert findings
+
+
+def test_cli_flag_credentials():
+    """Command-line secret flags — each masks only the secret token
+    and keeps the command line runnable."""
+    for src in (
+        "kubectl create secret generic s --from-literal=api_key=hunter2",
+        "docker run -e API_KEY=hunter2 img",
+        "docker run --env API_KEY=hunter2 img",
+        "curl -u admin:hunter2 https://x",
+        "curl --user admin:hunter2 https://x",
+        "sshpass -p 'hunter2' ssh host",
+        "redis-cli -a hunter2 ping",
+        "mysql -u root -phunter2 db",
+        "mysql -u root -P3306 -phunter2",
+        "htpasswd -b .htpasswd admin hunter2",
+    ):
+        new, findings = redact_text(src, file="runbook.txt")
+        assert "hunter2" not in new, src
+        assert findings, src
+    # mysql's uppercase -P is a port, not a password flag
+    new, findings = redact_text("mysql -u root -P3306 db", file="x.txt")
+    assert findings == [] and "P3306" in new
+    # bare -p with no attached value prompts interactively — no secret
+    new, findings = redact_text("mysql -u root -p db", file="x.txt")
+    assert "hunter2" not in new
+
+
+def test_sql_and_redis_config_secrets():
+    """SQL ``IDENTIFIED ... BY`` and redis ``requirepass``/``masterauth``
+    mask the credential and keep the surrounding statement."""
+    for src in (
+        "CREATE USER u IDENTIFIED BY 'hunter2';",
+        "CREATE USER u IDENTIFIED WITH mysql_native_password BY 'hunter2';",
+    ):
+        new, findings = redact_text(src, file="mig.sql")
+        assert "hunter2" not in new
+        assert "IDENTIFIED" in new and "BY" in new
+    for src in ("requirepass hunter2", "masterauth hunter2"):
+        new, findings = redact_text(src, file="redis.conf")
+        assert "hunter2" not in new
+        assert findings
+
+
+def test_midline_assignment_and_comparison_boundary():
+    """A bare ``NAME=value`` mid-line flags (CLI args, cookies); a
+    comparison (``==``, ``>=``) is not an assignment and stays out."""
+    new, findings = redact_text(
+        "Cookie: api_key=hunter2; other=1", file="hdrs.txt"
+    )
+    assert "hunter2" not in new and "other=1" in new
+    new, findings = redact_text(
+        'if api_key=="x" or token>=5: pass', file="a.py"
+    )
+    assert findings == []
+
+
+def test_env_match_inside_tagged_string_is_decoy():
+    """``["<REDACTED:x> API_KEY=innocent"]`` — a string already carrying
+    a redaction tag is prior output; re-matching the decoy inside it
+    must leave the line untouched."""
+    src = 'TOKEN_KEY = ["<REDACTED:abc> API_KEY=innocent"]\n'
+    new, findings = redact_text(src)
+    assert new == src
+    assert findings == []

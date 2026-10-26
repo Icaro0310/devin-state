@@ -242,6 +242,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `.netrc`/`.authinfo` positional entries (`machine h login u
   password p`, wrapped across lines, `default` entries, `account`
   values) mask only the password (devin-state#92).
+- Command-line and config-format credentials flag in place —
+  `kubectl --from-literal=k=v`, Docker `-e`/`--env`, `curl -u`/
+  `--user`, `sshpass -p`, `redis-cli -a`, `mysql -p`, `htpasswd -b`,
+  SQL `IDENTIFIED ... BY`, redis `requirepass`/`masterauth`, XML
+  `key="name" value="v"` attribute pairs and direct secret-named
+  attributes, Java properties escaped separators (`\=`, `\u003d`),
+  and bare mid-line `name = value` (CLI args, cookies)
+  all mask only the secret token; comparisons (`==`, `>=`) and
+  code-constant RHS (`name(`, `[`, `{`) stay out (devin-state#92).
+- The whitespace-separated `key value` form fires only for
+  `.properties`/`.props` files — legal Java properties syntax there,
+  prose anywhere else — via per-pattern file gating keyed on the
+  compiled pattern object (devin-state#92).
+- An env-shaped match inside a string literal that already carries
+  a `<REDACTED:…>` tag is prior redaction output, not a fresh
+  secret — re-matching a decoy there no longer rewrites the line
+  (devin-state#92).
 
 ## [0.2.5] - 2026-10-23
 
