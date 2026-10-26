@@ -462,6 +462,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `rabbitmqctl add_user` positional; `printf 'NAME=%s' v` (the
   argument, not the format placeholder); and `net use *` with the
   bare-asterisk drive form.
+- Escaped whitespace inside config secrets (devin-state#92): the
+  redis.conf/slapd/mail-rc bare-value arms now consume `\x` escape
+  pairs, so `requirepass hunter\ secret` masks the whole password
+  instead of stopping at the backslash.
+- Quoted oracle credspecs (devin-state#92): `sqlplus "scott/pw;2"@db`
+  now masks the password through the closing quote — inside quotes
+  `;` is literal password content, while the unquoted arm still
+  stops at shell separators.
 
 ## [0.2.5] - 2026-10-23
 

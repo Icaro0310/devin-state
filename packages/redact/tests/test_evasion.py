@@ -2459,8 +2459,8 @@ def test_review_round_single_dash_and_positional_carriers():
     for s, f in [
         ('dsmod user "CN=x" -pwd hunter2', "x.ps1"),
         ('dsadd user "CN=x" -pwd hunter2', "x.ps1"),
-        ("boundary authenticate password -login-name u "
-         "-password hunter2", "x.sh"),
+        (("boundary authenticate password -login-name u "
+          "-password hunter2"), "x.sh"),
         ("vault login -token=hunter2", "x.sh"),
         ("nomad login -token hunter2", "x.sh"),
     ]:
@@ -2499,3 +2499,21 @@ def test_review_round_single_dash_and_positional_carriers():
         "net use * \\\\s\\x hunter2 /user:u", file="x.bat")
     assert findings and "hunter2" not in new
     assert "/user:u" in new
+
+
+def test_review_round_escaped_space_and_quoted_credspec():
+    """Escaped whitespace inside config values and ``;`` inside a
+    quoted oracle credspec are literal password bytes."""
+
+    new, findings = redact_text(
+        "requirepass hunter\\ secret", file="redis.conf")
+    assert findings and "hunter" not in new
+    new, findings = redact_text(
+        'sqlplus "scott/hunter;2"@db', file="s.sh")
+    assert findings and "hunter" not in new
+    new, findings = redact_text(
+        "sqlplus scott/hunter2; echo hi", file="s.sh")
+    assert findings and "hunter2" not in new and "; echo hi" in new
+    new, findings = redact_text(
+        "olcRootPW={SSHA}a\\ b;2", file="x.ldif")
+    assert findings and "b;2" not in new

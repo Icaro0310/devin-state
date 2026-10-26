@@ -117,7 +117,7 @@ _LDAP_ROOTPW_RX = _rx(
     # Bare value runs to EOL — slapd.conf is not shell, so ``;`` is
     # literal password content, not a command separator.
     r"(?im)^[ \t]*(?:olcRootPW|rootpw)[ \t:=]+"
-    r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|[^\s]+)"
+    r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\])+)"
 )
 
 # ``.pgpass`` five-field rows — ``host:port:db:user:password``;
@@ -710,6 +710,14 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
             r"|rman|tnsping|orapki)\b(?:[ \t]+\S+)*?"
             r"[ \t]+\S+?/((?:\\.|[^\s\\|&;/@\"'])+)(?=[@\s\"'|&;]|$)"
         ),
+        # Quoted credspec — ``sqlplus "scott/pw;2"@db``: inside the
+        # quote, ``;``/``|``/``&`` are literal password bytes, so the
+        # value runs to the closing quote, not the separator.
+        _rx(
+            r"(?i)\b(?:sqlplus|sqlldr|sqlcl|exp|expdp|imp|impdp"
+            r"|rman|tnsping|orapki)\b(?:[ \t]+\S+)*?"
+            r"[ \t]+\"[^\s@/\"]*?/((?:\\.|[^\s\\@\"])+)(?=\")"
+        ),
         # ``openssl passwd`` takes the plaintext positionally after
         # the algorithm flag — a ``-``-led token is a flag, not the
         # plaintext (``-stdin`` reads interactively).
@@ -749,7 +757,8 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
         # the tail of ``requirepass hunter;2`` visible.
         _rx(
             r"(?im)^[ \t]*(?:requirepass|masterauth)[ \t]+"
-            r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|[^\s]+)"
+            r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'"
+            r"|(?:\\.|[^\s\\])+)"
         ),
         _LDAP_ROOTPW_RX,
         # XML element text — ``<password>hunter2</password>``,
