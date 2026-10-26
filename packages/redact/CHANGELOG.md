@@ -482,6 +482,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `rabbitmqctl add_user` accepts a quoted username
   (`"first last"`), and the single-dash flag arm covers PowerShell
   `-Credential` (devin-state#92).
+- More tool-scoped carriers (devin-state#92): SNMPv3 `-A`/`-X`
+  passphrases (one anchored arm each so both mask on one line);
+  spaced-or-glued `-p` for mongo/mongosh/beeline/snowsql/cqlsh/
+  cypher-shell/rdesktop; `mosquitto_* -P` (lowercase `-p` stays a
+  port); `openssl enc -k`/`-K`/`-iv`; `influx -t`; and
+  `etcdctl user add u:p`. The `--flag` arm now tolerates dotted
+  names like `arangosh --server.password`.
 
 ## [0.2.5] - 2026-10-23
 

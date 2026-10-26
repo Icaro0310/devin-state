@@ -2554,3 +2554,36 @@ def test_review_round_kubectl_printf_rabbitmq_credential():
     new, findings = redact_text(
         "Get-Thing -Credential hunter2", file="s.ps1")
     assert findings and "hunter2" not in new
+
+
+def test_review_round_snmp_and_tool_scoped_short_flags():
+    """SNMP -A/-X passphrases, mongo-family -p, mosquitto -P,
+    openssl -k/-K/-iv, influx -t, and etcdctl user:pass."""
+
+    new, findings = redact_text(
+        "snmpwalk -v3 -u admin -A hunter2 -X s3cr3t host", file="s.sh")
+    assert "hunter2" not in new and "s3cr3t" not in new
+    new, findings = redact_text(
+        "snmpwalk -v3 -u u -a SHA -x AES h", file="s.sh")
+    assert new == "snmpwalk -v3 -u u -a SHA -x AES h"
+    new, findings = redact_text(
+        'mongosh "mongodb://h" -u u -p hunter2', file="s.sh")
+    assert findings and "hunter2" not in new
+    new, findings = redact_text(
+        "mosquitto_pub -h h -u u -P hunter2 -t t -m m", file="s.sh")
+    assert findings and "hunter2" not in new
+    new, findings = redact_text(
+        "mosquitto_pub -h h -p 8883 -t t -m m", file="s.sh")
+    assert "-p 8883" in new
+    new, findings = redact_text(
+        "openssl enc -aes-256-cbc -k hunter2 -in f", file="s.sh")
+    assert findings and "hunter2" not in new
+    new, findings = redact_text(
+        "influx write -t hunter2 -b b -o o", file="s.sh")
+    assert findings and "hunter2" not in new
+    new, findings = redact_text(
+        "etcdctl user add u:hunter2", file="s.sh")
+    assert findings and "hunter2" not in new
+    new, findings = redact_text(
+        "arangosh --server.password hunter2", file="s.sh")
+    assert findings and "hunter2" not in new

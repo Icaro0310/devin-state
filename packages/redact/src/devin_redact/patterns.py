@@ -540,7 +540,7 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
         # *end* in the credential word, so ``--password-file f`` and
         # ``--token-type t`` stay out.
         _rx(
-            r"(?i)--[\w-]*(?:password|passwd|passphrase|pass|secret"
+            r"(?i)--[\w.-]*(?:password|passwd|passphrase|pass|secret"
             r"|token|api[-_]?key|access[-_]?key|client[-_]?secret"
             r"|auth[-_]?token|bearer)[ \t=]+(?!-[-\w])"
             r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
@@ -630,6 +630,50 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
             r"\bprintf[ \t]+[\"'][^\"'\n=]*" + ENV_NAME_PATTERN +
             r"[ \t]*=[ \t]*%[a-z][^\"'\n]*[\"'][ \t]+"
             r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
+        ),
+        # SNMPv3 auth/privacy passphrases — ``-A``/``-X`` carry
+        # secrets while lowercase ``-a``/``-x`` pick the protocol.
+        # Two anchored arms so both flags mask on one line.
+        _rx(
+            r"\bsnmp\w+\b[^\n]*?[ \t]-A[ \t=]*(?!-[-\w])"
+            r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
+        ),
+        _rx(
+            r"\bsnmp\w+\b[^\n]*?[ \t]-X[ \t=]*(?!-[-\w])"
+            r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
+        ),
+        # Document-store/shell tools whose ``-p`` is a spaced (or
+        # glued) password — mongo/mongosh, beeline, snowsql, cqlsh,
+        # cypher-shell, rdesktop. ``cqlsh`` takes the port
+        # positionally, so ``-p`` here is always the password.
+        _rx(
+            r"\b(?:mongo|mongosh|beeline|snowsql|cqlsh"
+            r"|cypher-shell|rdesktop)\b[^\n]*?[ \t]-p[ \t=]*"
+            r"(?!-[-\w])"
+            r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
+        ),
+        # mosquitto_pub/sub/rr ``-P`` is the password (lowercase
+        # ``-p`` is the port).
+        _rx(
+            r"\bmosquitto_\w+\b[^\n]*?[ \t]-P[ \t=]*(?!-[-\w])"
+            r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
+        ),
+        # ``openssl enc -k``/``-K``/``-iv`` carry passphrase/key/iv
+        # material, spaced or glued.
+        _rx(
+            r"\bopenssl\b[^\n]*?[ \t]-(?:k|K|iv)[ \t=]*"
+            r"(?!-[-\w])"
+            r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
+        ),
+        # ``influx write -t`` carries the API token.
+        _rx(
+            r"\binflux\w*\b[^\n]*?[ \t]-t[ \t=]*(?!-[-\w])"
+            r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
+        ),
+        # ``etcdctl user add u:p`` — the ``user:pass`` positional.
+        _rx(
+            r"\betcdctl[ \t]+user[ \t]+add[ \t]+\S+?:"
+            r"((?:\\.|[^\s\\|&;])+)"
         ),
         # Erlang/Elixir config tuple — ``{password, "v"}`` — the bare
         # atom is the credential name; plain ``key`` is too generic
