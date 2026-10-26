@@ -489,6 +489,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   port); `openssl enc -k`/`-K`/`-iv`; `influx -t`; and
   `etcdctl user add u:p`. The `--flag` arm now tolerates dotted
   names like `arangosh --server.password`.
+- `conan` `-p` password flag (with `-pr`/`--profile` kept out) and
+  `vault`/`bao`/`openbao write` — the whole contiguous `k=v` run
+  after the path is secret material (devin-state#92).
 
 ## [0.2.5] - 2026-10-23
 

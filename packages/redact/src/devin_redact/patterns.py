@@ -675,6 +675,22 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
             r"\betcdctl[ \t]+user[ \t]+add[ \t]+\S+?:"
             r"((?:\\.|[^\s\\|&;])+)"
         ),
+        # ``conan remote login``/``conan user`` — ``-p`` is the
+        # password (``-pr``/``--profile`` take a profile name).
+        _rx(
+            r"\bconan\b[^\n]*?[ \t]-p[ \t=]*(?!-[-\w]|r\b)"
+            r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
+        ),
+        # ``vault|bao|openbao write path k=v`` — everything after the
+        # path is secret material written to the store, so the
+        # capture spans the contiguous ``k=v`` run.
+        _rx(
+            r"\b(?:vault|bao|openbao)[ \t]+write[ \t]+\S+[ \t]+"
+            r"(\S+?=(?:\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'"
+            r"|(?:\\.|[^\s\\|&;])+)"
+            r"(?:[ \t]+\S+?=(?:\"(?:\\.|[^\"\\\r\n])*\""
+            r"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+))*)"
+        ),
         # Erlang/Elixir config tuple — ``{password, "v"}`` — the bare
         # atom is the credential name; plain ``key`` is too generic
         # for tuple pairs so it stays out.

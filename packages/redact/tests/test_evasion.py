@@ -2587,3 +2587,23 @@ def test_review_round_snmp_and_tool_scoped_short_flags():
     new, findings = redact_text(
         "arangosh --server.password hunter2", file="s.sh")
     assert findings and "hunter2" not in new
+
+
+def test_review_round_conan_and_vault_write():
+    """conan ``-p`` and vault/bao/openbao ``write`` kv runs."""
+
+    new, findings = redact_text(
+        "conan remote login r u -p hunter2", file="s.sh")
+    assert findings and "hunter2" not in new
+    new, findings = redact_text(
+        "conan install . -pr default", file="s.sh")
+    assert new == "conan install . -pr default"
+    new, findings = redact_text(
+        "vault write secret/x a=1 k=hunter2 z=9", file="s.sh")
+    assert findings and "hunter2" not in new
+    new, findings = redact_text(
+        "bao write secret/x k=hunter2", file="s.sh")
+    assert findings and "hunter2" not in new
+    new, findings = redact_text(
+        "vault write transit/keys/k", file="s.sh")
+    assert new == "vault write transit/keys/k"
