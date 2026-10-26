@@ -166,8 +166,17 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
             # or comment opener (``#``/``//``/``<!--``/``;``) before
             # the name hides the same bind — docker-compose
             # ``environment:`` lists and commented-out credentials.
-            r"(?:(?i:export|local|readonly|typeset|env|declare|arg|set)"
-            r"\s+(?:-\w+\s+)*|(?:[*+-]|#+|//+|<!--|;)\s*)?"
+            r"(?:(?i:export|local|readonly|typeset|env|declare|arg|set"
+            # Typed-language declaration modifiers — ``const``,
+            # ``let``/``var``/``val``, access/storage keywords and the
+            # common builtin type words in ``const String K = "v"`` —
+            # repeat so ``private static final String`` is one prefix.
+            r"|const|let|var|val|static|final|public|private|protected"
+            r"|internal|dim|my|our|mut|volatile|unsigned|signed|long"
+            r"|short|char|int|float|double|bool|string|auto|def|fun"
+            r"|function|struct|enum|class|interface|type|typename|ref"
+            r"|String|str)"
+            r"\s+|(?:-\w+\s+)|(?:[*+-]|#+|//+|<!--|;)\s*)*"
             # The name can hide behind a receiver — ``cfg.api_key``,
             # ``self.api_key``, ``config["api_key"]``: a hardcoded
             # secret is the same wherever it is bound.
@@ -177,11 +186,18 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
             r"|(?:[A-Za-z_]\w*\.)*\s*[\"']?" + ENV_NAME_PATTERN + r"[\"']?"
             r")"
             # A ``\``-continued separator — ``key = \<newline>"v"`` —
-            # puts the literal on the next physical line.
-            r"\s*[:=][ \t]*(?:\\\r?\n[ \t]*)*\s*(?:"
+            # puts the literal on the next physical line. Makefile
+            # and BSD-make operators join ``=``/``:`` — ``:=``,
+            # ``?=``, ``+=``, ``::=`` — as a single separator so the
+            # operator survives the mask (``KEY := <tag>`` still
+            # parses).
+            r"\s*(?:::|[:+?])?[ \t]*[:=][ \t]*(?:\\\r?\n[ \t]*)*\s*(?:"
             # An annotation head first — ``name: T = value``: the
             # ``T`` and its ``=`` belong to the match so a literal
-            # default on a later line stays inside the span.
+            # default on a later line stays inside the span. Rust
+            # reference types lead with ``&``/lifetimes/``mut``
+            # (``const K: &str = "v"``, ``&'a mut str``).
+            r"(?:(?:&[ \t]*(?:'[A-Za-z_]\w*)?[ \t]*(?:mut[ \t]+)?)+)?"
             r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*"
             r"(?:\s*\|\s*[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)*\s*=\s*)?"
             # A parenthesized literal — ``key = ("x")``, possibly
@@ -235,8 +251,8 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
         # optional flag run between the builtin and the name.
         _rx(
             r"(?mi)^[\s\ufeff]*"
-            r"(?:(?i:env|arg|set|setenv|launchctl[ \t]+setenv))"
-            r"(?:[ \t]+-[a-zA-Z]+)*[ \t]+"
+            r"(?:(?i:env|arg|set|setenv|setx|launchctl[ \t]+setenv))"
+            r"(?:[ \t]+[-/][a-zA-Z]+)*[ \t]+"
             + ENV_NAME_PATTERN +
             r"(?:[ \t]*=[ \t]*|[ \t]+)(?:"
             r"\"(?:\\.|[^\"\\\r\n])*?\""
@@ -255,7 +271,9 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
         # end the match early and leak the value's tail.
         _rx(
             r"(?<![\w'\"])\\?[\"']?" + ENV_NAME_PATTERN +
-            r"\\?[\"']?\s*:\s*(?:"
+            # ``:=`` joins ``:`` here too — Go short-var declarations
+            # (``apiKey := "v"``) carry the same bound literal.
+            r"\\?[\"']?\s*:[ \t]*=?\s*(?:"
             r"\"\"\"(?:\\.|[^\"\\])*?\"\"\""
             r"|'''(?:\\.|[^'\\])*?'''"
             r"|\"(?:\\.|[^\"\\\r\n])*?\""
@@ -311,11 +329,13 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
         ),
         # Name-string call arg in any position — a quoted
         # credential-shaped argument followed by a quoted literal:
-        # ``config.set("sec", "api_key", "v")``. Group 1 is the
-        # value literal (quotes stay inside the group so the engine
-        # masks inside them).
+        # ``config.set("sec", "api_key", "v")`` or the two-arg
+        # ``f("API_KEY", "v")`` / ``SetEnvironmentVariable("K","v")``
+        # where the name opens the call. Group 1 is the value
+        # literal (quotes stay inside so the engine masks inside
+        # them).
         _rx(
-            r",\s*[\"']" + ENV_NAME_PATTERN + r"[\"']\s*,\s*"
+            r"[(,]\s*[\"']" + ENV_NAME_PATTERN + r"[\"']\s*,\s*"
             r"(\"(?:\\.|[^\"\\\r\n])*?\"|'(?:\\.|[^'\\\r\n])*?'"
             r"|`(?:\\.|[^`\\\r\n])*?`)"
         ),
@@ -431,9 +451,25 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
             r"\S*(?:key|secret|token)\S*[ \t]+(\S+)"
         ),
         _rx(
-            r"(?i)\b(?:poetry|pip|npm|gem|bundle)[ \t]+config(?:"
-            r"[ \t]+set)?[ \t]+\S*(?:key|secret|token|pass\w*)"
-            r"\S*[ \t]+(\"[^\"\r\n]*\"|'[^'\r\n]*'|\S+)"
+            r"(?i)\b(?:poetry|pip|npm|gem|bundle|git)[ \t]+config(?:"
+            r"[ \t]+set|(?:[ \t]+--?\w+)*)?[ \t]+"
+            r"\S*(?:key|secret|token|pass\w*)\S*[ \t]+"
+            r"(\"[^\"\r\n]*\"|'[^'\r\n]*'|\S+)"
+        ),
+        # Windows ``net user <name> <password>`` — the password is a
+        # bare positional; ``(?!/)`` keeps ``/add``-style switches
+        # out.
+        _rx(
+            r"(?i)\bnet(?:\.exe)?[ \t]+user[ \t]+\S+[ \t]+"
+            r"(?!/)(\S+)"
+        ),
+        # Erlang/Elixir config tuple — ``{password, "v"}`` — the bare
+        # atom is the credential name; plain ``key`` is too generic
+        # for tuple pairs so it stays out.
+        _rx(
+            r"(?i)\{\s*(?:\w*(?:secret|token|password|passwd"
+            r"|credential|auth)\w*|api[_-]?key)\s*,\s*"
+            r"(\"[^\"\r\n]*\"|'[^'\r\n]*')"
         ),
         # PuTTY family ``-pw``, sqlcmd ``-P`` (uppercase — the
         # password flag), twine ``-p``, keytool ``-(store|key)pass``;

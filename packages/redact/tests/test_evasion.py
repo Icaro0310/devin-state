@@ -1754,3 +1754,56 @@ def test_pass_pwd_name_vocabulary():
     ):
         _, findings = redact_text(src, file="e.env")
         assert findings == [], src
+
+
+def test_declaration_modifiers_and_make_ops():
+    """Typed-language declarations (``const``/``private static
+    final``/``val``), Rust reference annotations (``&str``,
+    ``&'a mut str``) and make-style operators (``:=``/``?=``/
+    ``+=``/``::=``) flag; the operator survives the mask."""
+    for src, f in (
+        ('private static final String API_KEY = "hunter2";', "a.java"),
+        ('val apiKey = "hunter2"', "a.kt"),
+        ('const API_KEY: &str = "hunter2"', "a.rs"),
+        ("const API_KEY: &'static str = \"hunter2\"", "a.rs"),
+        ('apiKey := "hunter2"', "a.go"),
+        ("KEY := hunter2", "Makefile"),
+        ("API_KEY ?= hunter2", "Makefile"),
+        ("TOKEN ::= hunter2", "Makefile"),
+        ("SECRET += hunter2", "Makefile"),
+    ):
+        new, findings = redact_text(src, file=f)
+        assert "hunter2" not in new, src
+        assert findings, src
+    # the make operator is preserved, not eaten
+    for op in (":=", "?=", "::=", "+="):
+        new, _ = redact_text(f"API_KEY {op} hunter2", file="Makefile")
+        assert op in new, (op, new)
+
+
+def test_windows_and_misc_config_credentials():
+    """``setx``, ``net user`` positional, ``git config`` and Erlang
+    config tuples mask the credential value."""
+    for src in (
+        "setx API_KEY hunter2",
+        "setx /M API_KEY hunter2",
+        "net user admin hunter2 /add",
+        "git config --global user.password hunter2",
+        '{password, "hunter2"}.',
+        '{api_key, "hunter2"}.',
+        '{secret, "hunter2"}.',
+        '[Environment]::SetEnvironmentVariable("API_KEY","hunter2")',
+        'f("API_KEY","hunter2")',
+    ):
+        new, findings = redact_text(src, file="c.txt")
+        assert "hunter2" not in new, src
+        assert findings, src
+    # negatives — no credential context
+    for src in (
+        "net user admin /add",
+        '{key, "hunter2"}.',
+        'x == hunter2',
+        'name != "hunter2"',
+    ):
+        _, findings = redact_text(src, file="c.txt")
+        assert findings == [], src

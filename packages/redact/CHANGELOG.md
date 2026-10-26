@@ -287,6 +287,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   underscore — `DB_PASS=` and `FTP_PWD=` flag like `DB_PASSWORD=`
   while `compass`, `bypass`, `passport` and `OLDPWD` stay out
   (devin-state#92).
+- Typed-language declarations flag — `const`/`let`/`var`/`val`,
+  access/storage modifiers (`private static final String …`),
+  builtin type words and Rust reference annotations
+  (`const K: &str = "v"`, `&'a mut str`) — the rewritten line keeps
+  its type head so it still parses (devin-state#92).
+- Make/BSD-make operators (`:=`, `?=`, `+=`, `::=`) and Go
+  short-var `apiKey := "v"` are separators now — the operator
+  survives the mask (`KEY := <tag>`) instead of being eaten by it
+  (devin-state#92).
+- Windows `setx` (with `/M`), `net user <name> <password>`
+  positionals, `git config [--global] name value`, Erlang/Elixir
+  config tuples `{password, "v"}`, and two-argument call forms
+  `f("NAME","v")`/`SetEnvironmentVariable("K","v")` mask the
+  credential value (devin-state#92).
 
 ## [0.2.5] - 2026-10-23
 

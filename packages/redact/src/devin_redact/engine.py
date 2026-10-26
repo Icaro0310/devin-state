@@ -122,6 +122,20 @@ _TYPE_ATOM = (
 _TYPE_EXPR_RE = re.compile(
     _TYPE_ATOM + r"(?:\s*\|\s*" + _TYPE_ATOM + r")*"
 )
+# Rewrite-scope variant: also accepts Rust reference modifiers
+# (``&``, ``'a`` lifetimes, ``mut``) so ``const K: &str = "v"`` keeps
+# its type in the rewritten line. Detection and the annotation
+# suppression gate keep using the stricter ``_TYPE_EXPR_RE``.
+_REWRITE_TYPE_RE = re.compile(
+    r"(?:(?:&\s*(?:'\w+\s*)?|mut\s+)+)?"
+    + _TYPE_ATOM + r"(?:\s*\|\s*" + _TYPE_ATOM + r")*"
+)
+# Separator inside a match — multi-char make operators first so
+# ``:=``/``::=``/``+=``/``?=`` land in ``sep_end`` intact, then bare
+# ``=``, then a lone ``:`` only when it is not the head of ``:=``.
+_SEP_RE = re.compile(
+    r"::[ \t]*=|:[ \t]*=|[+?][ \t]*=|=|:(?![ \t]*=)"
+)
 # Builtin + typing names a bare annotation can resolve to. Lowercase
 # scalars that are not in this set (``hunter2``) stay flagged.
 _TYPE_NAMES = frozenset(
@@ -952,14 +966,21 @@ def redact_text(
                     (g_start, g_end, tag, category, fp)
                 )
                 continue
-            eq_m = re.search(r"[:=]", whole)
+            # Locate the separator — ``=``/``:`` plus the multi-char
+            # make-style operators (``:=``, ``?=``, ``+=``, ``::=``)
+            # so ``eq``/``sep_end`` bracket the whole operator and
+            # the rewrite keeps it (``KEY := <tag>``, not
+            # ``KEY :<tag>``).
+            eq_m = re.search(_SEP_RE, whole)
             eq = None if eq_m is None else eq_m.start()
+            sep_end = None if eq_m is None else eq_m.end()
             if eq == 0 and whole[0] in "?&;#:":
                 # URL/npmrc arm — the match opens with its separator
                 # char (``?api_key=``, ``:_authToken=``); the real
                 # ``=`` sits after the name.
-                eq_m = re.search(r"[:=]", whole[1:])
+                eq_m = re.search(_SEP_RE, whole[1:])
                 eq = None if eq_m is None else eq_m.start() + 1
+                sep_end = None if eq_m is None else eq_m.end() + 1
             if eq is None:
                 # ``setdefault("name", "v")`` call-arg shape — the
                 # credential name is a string argument, so no
@@ -993,10 +1014,10 @@ def redact_text(
             # tag so the line still parses
             # (`api_key: str = "<REDACTED:…>"`, not
             # `api_key:<REDACTED:…>`).
-            rhs = whole[eq + 1 :]
+            rhs = whole[sep_end:]
             ann_head, ann_sep, ann_tail = rhs.partition("=")
             replacement = None
-            if ann_sep and _TYPE_EXPR_RE.fullmatch(ann_head.strip()):
+            if ann_sep and _REWRITE_TYPE_RE.fullmatch(ann_head.strip()):
                 lit = ann_tail.split(" #", 1)[0]
                 if _literal_string_value(lit):
                     lead = len(ann_tail) - len(ann_tail.lstrip())
@@ -1027,7 +1048,7 @@ def redact_text(
                     # carry secrets the single finding already
                     # consumed.
                     replacement = (
-                        whole[: eq + 1] + ann_head + "="
+                        whole[:sep_end] + ann_head + "="
                         + ann_tail[:lead] + body
                     )
             if replacement is None:
@@ -1046,7 +1067,7 @@ def redact_text(
                 )
                 if qm:
                     replacement = (
-                        whole[: eq + 1] + qm.group(0)
+                        whole[:sep_end] + qm.group(0)
                         + _tag(value) + qm.group(2)
                     )
                 elif python_source is True or (
@@ -1059,7 +1080,7 @@ def redact_text(
                     # same care for the ``:`` slot
                     # (annotation/dict), while ``.env`` and
                     # ``KEY=``-style output keep the plain tag.
-                    replacement = f'{whole[: eq + 1]} "{_tag(value)}"'
+                    replacement = f'{whole[:sep_end]} "{_tag(value)}"'
                 else:
                     # ``.env``/YAML-style bare tag. A ``:``-separated
                     # pair keeps its whitespace — ``key: v`` must
@@ -1070,7 +1091,7 @@ def redact_text(
                     if whole[eq] == ":":
                         lead = len(rhs) - len(rhs.lstrip())
                     replacement = (
-                        whole[: eq + 1] + rhs[:lead] + _tag(value)
+                        whole[:sep_end] + rhs[:lead] + _tag(value)
                     )
         else:
             start, end = m.span(1) if m.lastindex else m.span(0)
