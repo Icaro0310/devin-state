@@ -572,6 +572,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   secret-store writes (`fly|flyctl secrets set`, `sst secrets
   set`, `infisical secrets set`, `keybase secret set`) mask the
   value whatever the name's shape.
+- The curl/wget/httpie `-u`/`--user`/`-U`/`--proxy-user` gap is
+  quote-aware and reaches past earlier flags (`curl --cacert x
+  --user u:p`), and more tool-scoped carriers close:
+  `isql|tsql|osql|knife -P`, `fab|fabric -p`, `imapsync
+  --password1|2`, and Perl `DBI->connect(dsn, user, pass)`
+  including `q{…}` quoting (devin-state#92).
 - kubectl literal boundaries (devin-state#92): a
   `--from-literal=` inside a quoted option
   (`--note="--from-literal=x"`) no longer masks mid-quote, an

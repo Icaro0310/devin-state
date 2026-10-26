@@ -2936,3 +2936,26 @@ def test_secret_store_space_separated_setters() -> None:
     # secret carrier.
     assert redact_text("dotenv set foo hunter2", file="s.sh")[1] == []
     assert redact_text("fly secrets list", file="s.sh")[1] == []
+
+
+def test_tool_flag_gap_and_misc_carriers() -> None:
+    """Flags between the tool name and the credential flag do not
+    break the gap; more tool-scoped carriers."""
+    for cmd in (
+        "isql -U sa -P hunter2",
+        "tsql -S srv -U sa -P hunter2",
+        "fab -H h -p hunter2 task",
+        "knife bootstrap h -P hunter2",
+        "curl --cacert x --key y --user u:hunter2 z",
+        "imapsync --password1 hunter2 --password2 other",
+        "perl -MDBI -e 'DBI->connect(q{dbi:Pg:db},q{u},q{hunter2})'",
+        'perl -MDBI -e \'DBI->connect("dbi","u","hunter2")\'',
+    ):
+        new, _f = redact_text(cmd, file="s.sh")
+        assert "hunter2" not in new, cmd
+    # Neighbours survive.
+    new, _f = redact_text(
+        "imapsync --password1 hunter2 --password2 other", file="s.sh")
+    assert "--password2 other" in new
+    # A dangling flag cannot consume the next flag.
+    assert redact_text("fab -H h -p -f x task", file="s.sh")[1] == []

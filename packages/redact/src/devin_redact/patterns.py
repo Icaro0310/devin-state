@@ -552,7 +552,9 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
         # token, quoted or bare.
         _rx(
             r"(?i)\b(?:sshpass[ \t]+-p|(?:curl|wget|httpie?|fetch)\S*"
-            r"[ \t]+(?:-u|--user|-U|--proxy-user)|redis-cli[ \t]+-a"
+            r"(?:\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'"
+            r"|[^\n|&;\"'])*?[ \t](?:-u|--user|-U|--proxy-user)"
+            r"|redis-cli[ \t]+-a"
             r"|ldap\w+\b[^\n]*?[ \t]-w|mosquitto_\w+[ \t]+-P"
             r"|https?[ \t]+(?:GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS"
             r"|get|post)\b[^\n]*?[ \t](?:-a|--auth))(?![\w-])[ \t=]*"
@@ -882,11 +884,11 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
             r"[ \t]-pw[ \t=]*(?!-[-\w])(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
         ),
         _rx(
-            r"\b(?:sqlcmd|bcp|sqlservr)\b[^\n]*?"
+            r"\b(?:sqlcmd|bcp|sqlservr|isql|tsql|osql|knife)\b[^\n]*?"
             r"[ \t]-P[ \t=]*(?!-[-\w])(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
         ),
         _rx(
-            r"\b(?:twine|flit)\b[^\n]*?[ \t]-p[ \t=]*(?!-[-\w])"
+            r"\b(?:twine|flit|fab|fabric)\b[^\n]*?[ \t]-p[ \t=]*(?!-[-\w])"
             r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
         ),
         _rx(
@@ -1240,6 +1242,25 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
             r"(?i)\b(?:confluent[ \t]+api-key[ \t]+store"
             r"|(?:emqx[ \t]+ctl|emqx_ctl)[ \t]+admins[ \t]+passwd)"
             r"[ \t]+" + _CLITOK + r"[ \t]+(" + _CLITOK + r")"
+        ),
+        # ``imapsync --password1``/``--password2`` — numbered flag
+        # names keep them outside the generic ``--password`` arm.
+        _rx(
+            r"(?i)\bimapsync\b[^\n|&;]*?[ \t]--password[12]"
+            r"[ \t=]*(?!-[-\w])"
+            r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
+        ),
+        # Perl ``DBI->connect(dsn, user, pass)`` — the password is
+        # the third call argument; ``q{…}``/``qq{…}`` count as
+        # quoted strings there.
+        _rx(
+            r"\bDBI->connect\(\s*(?:q[qwx]?\{[^}]*\}"
+            r"|\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'"
+            r"|[^,\s()]+)\s*,\s*(?:q[qwx]?\{[^}]*\}"
+            r"|\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'"
+            r"|[^,\s()]+)\s*,\s*"
+            r"(q[qwx]?\{[^}]*\}|\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'"
+            r"|[^,\s()]+)"
         ),
         # ``pulumi config set [--secret] NAME v`` — the value is a
         # bare positional; boolean/value flags may sit between the
