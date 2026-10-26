@@ -2658,3 +2658,24 @@ def test_review_round_kubectl_printf_openssl_etcdctl():
     new, findings = redact_text(
         'etcdctl user add "alice:hunter2"', file="s.sh")
     assert findings and 'add "alice:<REDACTED:' in new and '>"' in new
+
+
+def test_review_round_conan_vault():
+    """Conan ``-p`` stays inside one command; ``vault write``
+    tolerates options before the path and empty kv fields."""
+
+    # The conan bridge cannot cross ``&&`` into another command's
+    # ``-p`` (an SSH port here, not a password).
+    new, findings = redact_text(
+        "conan install . && ssh -p 2222 host", file="s.sh")
+    assert "2222" in new
+
+    # ``vault write`` with an option before the path still masks the
+    # kv run, and an empty ``blank=`` field cannot hide a later
+    # secret pair.
+    new, findings = redact_text(
+        "vault write -format=json secret/x k=hunter2", file="s.sh")
+    assert findings and "hunter2" not in new
+    new, findings = redact_text(
+        "vault write secret/x blank= k=hunter2", file="s.sh")
+    assert findings and "hunter2" not in new

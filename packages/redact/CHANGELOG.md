@@ -515,6 +515,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `etcdctl user add "u:p"` quoted arguments keep their closing
   quote outside the capture so the command still parses
   (devin-state#92).
+- The `conan -p` bridge stays inside one shell command, so
+  `conan install . && ssh -p 2222 host` keeps the SSH port
+  (devin-state#92).
+- `vault`/`bao`/`openbao write` tolerates options before the path
+  (`-format=json`) and empty fields (`blank=`) inside the `k=v`
+  run, so a later secret pair cannot leak (devin-state#92).
 
 ## [0.2.5] - 2026-10-23
 

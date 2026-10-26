@@ -710,20 +710,26 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
             r"((?:\\.|[^\s\\|&;\"'])+)"
         ),
         # ``conan remote login``/``conan user`` — ``-p`` is the
-        # password (``-pr``/``--profile`` take a profile name).
+        # password (``-pr``/``--profile`` take a profile name). The
+        # gap stays inside one shell command so a later ``ssh -p``
+        # after ``&&``/``;`` is not attributed to conan.
         _rx(
-            r"\bconan\b[^\n]*?[ \t]-p[ \t=]*(?!-[-\w]|r\b)"
+            r"\bconan\b[^\n|&;]*?[ \t]-p[ \t=]*(?!-[-\w]|r\b)"
             r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
         ),
         # ``vault|bao|openbao write path k=v`` — everything after the
         # path is secret material written to the store, so the
-        # capture spans the contiguous ``k=v`` run.
+        # capture spans the contiguous ``k=v`` run. Options may sit
+        # between ``write`` and the path (``-format=json``), and an
+        # empty field (``blank=``) no longer breaks the run so a
+        # later ``k=v`` cannot leak.
         _rx(
-            r"\b(?:vault|bao|openbao)[ \t]+write[ \t]+\S+[ \t]+"
+            r"\b(?:vault|bao|openbao)[ \t]+write\b"
+            r"(?:[ \t]+-[^\s|&;]+)*[ \t]+\S+[ \t]+"
             r"(\S+?=(?:\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'"
-            r"|(?:\\.|[^\s\\|&;])+)"
+            r"|(?:\\.|[^\s\\|&;])*)"
             r"(?:[ \t]+\S+?=(?:\"(?:\\.|[^\"\\\r\n])*\""
-            r"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+))*)"
+            r"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])*))*)"
         ),
         # Erlang/Elixir config tuple — ``{password, "v"}`` — the bare
         # atom is the credential name; plain ``key`` is too generic
