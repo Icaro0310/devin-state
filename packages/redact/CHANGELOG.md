@@ -259,6 +259,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a `<REDACTED:…>` tag is prior redaction output, not a fresh
   secret — re-matching a decoy there no longer rewrites the line
   (devin-state#92).
+- Space-separated credential flags mask their argument —
+  `--password`/`--api-key`/`--client-secret` and friends (flags
+  ending in `-file`/`-type` carry names and stay out), tool flags
+  `docker|podman login -p`, `zip|unzip -P`, `7z -p`,
+  `aws configure set <name> <value>`, quoted header values like
+  `-H "X-Api-Key: v"`, openssl `-pass pass:v`, and PowerShell
+  `ConvertTo-SecureString "v"` (devin-state#92).
 
 ## [0.2.5] - 2026-10-23
 

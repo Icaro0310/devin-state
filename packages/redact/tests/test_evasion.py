@@ -1531,3 +1531,76 @@ def test_env_match_inside_tagged_string_is_decoy():
     new, findings = redact_text(src)
     assert new == src
     assert findings == []
+
+
+def test_long_option_secret_arguments():
+    """``--password pw``, ``--api-key k`` and friends mask the next
+    argument; flags ending in ``-file``/``-type`` carry names, not
+    secrets, and stay out."""
+    for src in (
+        "wget --http-password hunter2 https://x",
+        "svn --password hunter2 co repo",
+        "rclone config --password hunter2",
+        "tool --api-key hunter2 run",
+        "tool --client-secret hunter2",
+        "tool --auth-token hunter2",
+    ):
+        new, findings = redact_text(src, file="cmd.txt")
+        assert "hunter2" not in new, src
+        assert findings, src
+    for src in (
+        "--password-file creds.txt",
+        "--token-type bearer",
+        "--key-store /path/ks",
+    ):
+        new, findings = redact_text(src, file="cmd.txt")
+        assert findings == [] and new == src, src
+
+
+def test_tool_specific_short_flags():
+    """``docker login -p``, ``zip -P``, ``7z -p`` and
+    ``aws configure set <name> <value>`` mask only the secret."""
+    for src in (
+        "docker login -u u -p hunter2",
+        "podman login -p hunter2",
+        "zip -P hunter2 a.zip f",
+        "unzip -P hunter2 a.zip",
+        "7z a -p'hunter2' a.7z",
+        "aws configure set aws_secret_access_key hunter2",
+        "aws configure set aws_access_key_id hunter2",
+    ):
+        new, findings = redact_text(src, file="cmd.txt")
+        assert "hunter2" not in new, src
+        assert findings, src
+    for src in ("ssh -p 2222 host", "docker build -t img .", "unzip f.zip"):
+        new, findings = redact_text(src, file="cmd.txt")
+        assert findings == [] and new == src, src
+
+
+def test_quoted_header_and_openssl_pass_scheme():
+    """``-H "X-Api-Key: v"`` masks the header value inside its quotes;
+    non-credential headers stay out. openssl ``-pass pass:v`` masks
+    after the ``pass:`` scheme."""
+    for src in (
+        'curl -H "X-Api-Key: hunter2" https://x',
+        'curl -H "Authorization: Bearer hunter2" https://x',
+        "openssl enc -pass pass:hunter2",
+        "openssl pkcs12 -passin pass:hunter2",
+    ):
+        new, findings = redact_text(src, file="cmd.txt")
+        assert "hunter2" not in new, src
+        assert findings, src
+    for src in (
+        '-H "Content-Type: application/json"',
+        '-H "Access-Control-Allow-Credentials: true"',
+    ):
+        new, findings = redact_text(src, file="cmd.txt")
+        assert findings == [] and new == src, src
+
+
+def test_powershell_securestring_literal():
+    """``ConvertTo-SecureString "pw"`` takes plaintext — mask it."""
+    src = 'ConvertTo-SecureString "hunter2" -AsPlainText -Force'
+    new, findings = redact_text(src, file="s.ps1")
+    assert "hunter2" not in new and "-AsPlainText" in new
+    assert findings

@@ -355,6 +355,50 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
         ),
         # htpasswd batch mode — ``-b file user pass``.
         _rx(r"(?i)\bhtpasswd[ \t]+-b\w*[ \t]+\S+[ \t]+\S+[ \t]+(\S+)"),
+        # Long option carrying the secret as the next argument —
+        # ``--password pw``, ``--http-password pw``, ``--api-key k``,
+        # ``--client-secret s``, ``--auth-token t``. The flag must
+        # *end* in the credential word, so ``--password-file f`` and
+        # ``--token-type t`` stay out.
+        _rx(
+            r"(?i)--[\w-]*(?:password|passwd|pass|secret|token"
+            r"|api[-_]?key|access[-_]?key|client[-_]?secret"
+            r"|auth[-_]?token)[ \t=]+"
+            r"(\"[^\"\r\n]*\"|'[^'\r\n]*'|\S+)"
+        ),
+        # Tool flags where the secret rides a short option or a
+        # named setter — docker/podman ``login -p``, zip/unzip ``-P``
+        # (uppercase, case matters), 7z ``-p``, and
+        # ``aws configure set <name> <value>``.
+        _rx(
+            r"\b(?:docker|podman)[ \t]+login\b[^\n]*?[ \t]-p[ \t=]*"
+            r"(\"[^\"\r\n]*\"|'[^'\r\n]*'|\S+)"
+        ),
+        _rx(r"\b(?:zip|unzip)\b[^\n]*?[ \t]-P[ \t=]*(\S+)"),
+        _rx(r"\b7z[ \t]+\S+[ \t]+-p(\S+)"),
+        _rx(
+            r"(?i)\baws[ \t]+configure[ \t]+set[ \t]+"
+            r"\S*(?:key|secret|token)\S*[ \t]+(\S+)"
+        ),
+        # Header value inside a quoted argument —
+        # ``-H "X-Api-Key: hunter2"``, ``-H "Authorization: Bearer
+        # t"``. The credential word can lead the header name
+        # (``Authorization``), so the run before it can be empty;
+        # group 1 is the header value.
+        _rx(
+            r"(?i)[\"'][\w-]*(?:key|token|secret|auth"
+            r"|password|passwd)[\w-]*[ \t]*:[ \t]*"
+            r"([^\"'\s][^\"'\r\n]*?)[\"']"
+        ),
+        # openssl password arguments use a scheme prefix —
+        # ``-pass pass:pw``, ``-passin pass:pw``.
+        _rx(r"(?i)-pass(?:in|out)?[ \t=]+pass:(\S+)"),
+        # PowerShell ``ConvertTo-SecureString`` takes the plaintext
+        # as a quoted literal — mask it, keep the flags.
+        _rx(
+            r"(?i)convertto-securestring[ \t]+"
+            r"(\"[^\"\r\n]+\"|'[^'\r\n]+')"
+        ),
         # XML/app.config attribute pairs — the credential name sits
         # in ``key=``/``name=`` and the secret in ``value=``.
         _rx(
