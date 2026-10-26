@@ -555,7 +555,7 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
         _rx(
             r"(?i)[ \t]-(?:password|passwd|pwd|passphrase|secret"
             r"|token|api[-_]?key|access[-_]?key|client[-_]?secret"
-            r"|auth[-_]?token|bearer|pass)(?![\w-])[ \t=]+"
+            r"|auth[-_]?token|bearer|pass|credential)(?![\w-])[ \t=]+"
             r"(?!-[-\w])"
             r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
         ),
@@ -590,10 +590,20 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
             r"\S*(?:key|secret|token|pass\w*|auth)\S*[ \t]+"
             r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
         ),
-        # ``kubectl create secret --from-literal=k=v`` — the key
-        # name is arbitrary, the value is always a secret.
+        # ``kubectl create secret --from-literal=k=v`` — every
+        # literal under ``create secret`` is secret material, so the
+        # capture spans the whole contiguous flag run and masks
+        # ``--from-literal=a=x --from-literal=k=v`` in one tag.
+        # Scoped to ``create secret`` (any subtype): ConfigMap
+        # literals like ``--from-literal=REGION=us-east-1`` are
+        # ordinary data, not credentials.
         _rx(
-            r"(?i)--from-literal=[\w.-]+=([^\s\\|&;\"'`]+)"
+            r"(?i)\bkubectl[ \t]+create[ \t]+secret\b[^\n]*?"
+            r"(--from-literal=[\w.-]+=(?:\"(?:\\.|[^\"\\\r\n])*\""
+            r"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
+            r"(?:[ \t]+--from-literal=[\w.-]+="
+            r"(?:\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'"
+            r"|(?:\\.|[^\s\\|&;])+))*)"
         ),
         # Windows ``net user <name> <password>`` — the password is a
         # bare positional; ``(?!/)`` keeps ``/add``-style switches
@@ -602,17 +612,23 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
             r"(?i)\bnet(?:\.exe)?[ \t]+user[ \t]+\S+[ \t]+"
             r"(?!/)((?:\\.|[^\s\\|&;])+)"
         ),
-        # ``rabbitmqctl add_user <name> <password>`` — second bare
-        # positional is the password.
+        # ``rabbitmqctl add_user <name> <password>`` — second
+        # positional is the password; the username may be quoted
+        # (``"first last"``).
         _rx(
-            r"\brabbitmqctl[ \t]+add_user[ \t]+\S+[ \t]+"
+            r"\brabbitmqctl[ \t]+add_user[ \t]+"
+            r"(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|\S+)[ \t]+"
             r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
         ),
         # ``printf 'NAME=%s' value`` — the format names the bind
-        # and the first argument carries the secret.
+        # and the first argument carries the secret; trailing
+        # format text (``'KEY=%s\n'``) is allowed before the
+        # closing quote. The pre-name text excludes ``=`` so a
+        # mixed format (``'x=%s KEY=%s' a b``) does not bind the
+        # secret placeholder to the wrong argument.
         _rx(
-            r"\bprintf[ \t]+[\"'][^\"'\n]*" + ENV_NAME_PATTERN +
-            r"[ \t]*=[ \t]*%[a-z][\"'][ \t]+"
+            r"\bprintf[ \t]+[\"'][^\"'\n=]*" + ENV_NAME_PATTERN +
+            r"[ \t]*=[ \t]*%[a-z][^\"'\n]*[\"'][ \t]+"
             r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
         ),
         # Erlang/Elixir config tuple — ``{password, "v"}`` — the bare

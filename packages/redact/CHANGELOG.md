@@ -470,6 +470,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now masks the password through the closing quote — inside quotes
   `;` is literal password content, while the unquoted arm still
   stops at shell separators.
+- kubectl literal scoping (devin-state#92): the arbitrary-key
+  `--from-literal` arm now requires `kubectl create secret` (any
+  subtype) and captures the whole contiguous flag run including
+  quoted values — ConfigMap literals such as
+  `--from-literal=REGION=us-east-1` are ordinary data again.
+- `printf 'NAME=%s\n' v` masks the argument even when format text
+  follows the conversion specifier, and the pre-name format text
+  excludes `=` so mixed placeholder lists do not bind the wrong
+  argument (devin-state#92).
+- `rabbitmqctl add_user` accepts a quoted username
+  (`"first last"`), and the single-dash flag arm covers PowerShell
+  `-Credential` (devin-state#92).
 
 ## [0.2.5] - 2026-10-23
 

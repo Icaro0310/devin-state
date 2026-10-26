@@ -2517,3 +2517,40 @@ def test_review_round_escaped_space_and_quoted_credspec():
     new, findings = redact_text(
         "olcRootPW={SSHA}a\\ b;2", file="x.ldif")
     assert findings and "b;2" not in new
+
+
+def test_review_round_kubectl_printf_rabbitmq_credential():
+    """kubectl scoping, quoted literals, printf format tails,
+    quoted rabbitmqctl usernames, and PowerShell ``-Credential``."""
+
+    # ``create configmap`` literals are ordinary data.
+    new, findings = redact_text(
+        "kubectl create configmap cm --from-literal=REGION=us-east-1",
+        file="s.sh")
+    assert new == "kubectl create configmap cm " \
+        "--from-literal=REGION=us-east-1"
+
+    # ``create secret`` (any subtype) masks every contiguous literal.
+    new, findings = redact_text(
+        "kubectl create secret generic s "
+        "--from-literal=a=x --from-literal=k=hunter2", file="s.sh")
+    assert findings and "hunter2" not in new
+    new, findings = redact_text(
+        'kubectl create secret s --from-literal=k="hunter2"',
+        file="s.sh")
+    assert findings and "hunter2" not in new
+
+    # Trailing format text before the closing quote.
+    new, findings = redact_text(
+        "printf 'API_KEY=%s\\n' hunter2", file="s.sh")
+    assert findings and "hunter2" not in new
+
+    # Quoted username does not hide the password positional.
+    new, findings = redact_text(
+        'rabbitmqctl add_user "first last" hunter2', file="s.sh")
+    assert findings and "hunter2" not in new
+
+    # PowerShell ``-Credential``.
+    new, findings = redact_text(
+        "Get-Thing -Credential hunter2", file="s.ps1")
+    assert findings and "hunter2" not in new
