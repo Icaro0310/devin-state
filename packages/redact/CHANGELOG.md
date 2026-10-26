@@ -567,6 +567,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `netlify env:set`/`render env:set`.
 - `nomad var put <path> k=v` masks the whole `k=v` run like the
   `vault write` arm (devin-state#92).
+- kubectl literal boundaries (devin-state#92): a
+  `--from-literal=` inside a quoted option
+  (`--note="--from-literal=x"`) no longer masks mid-quote, an
+  unquoted `#` opens a comment so literal text after it stays
+  plain, a prior `<REDACTED:…>` tag inside one literal cannot
+  hide later literals (tag-gap rescan reuses the literal
+  sub-regex once the parent arm proved `create secret`), and a
+  `\`-newline continuation keeps the tail on one command.
 
 ## [0.2.5] - 2026-10-23
 

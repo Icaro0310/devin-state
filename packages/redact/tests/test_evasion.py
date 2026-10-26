@@ -2873,3 +2873,44 @@ def test_positional_pairs_and_kv_setters() -> None:
     new, _f = redact_text(
         "nomad var put secret/x a=b k=hunter2", file="s.sh")
     assert "hunter2" not in new
+
+
+def test_kubectl_literal_boundaries() -> None:
+    """A literal inside a quoted option or a comment is not an
+    argument; a tag inside an earlier literal cannot hide the
+    rest; a ``\\``-newline keeps the tail on one command."""
+
+    # Quoted option carrying the literal text: nothing is an
+    # argument there, so the closing quote must survive.
+    new, _f = redact_text(
+        'kubectl create secret s --from-literal=k=x '
+        '--note="--from-literal=z=bar"', file="s.sh")
+    assert "--from-literal=k=x" not in new
+    assert '--note="--from-literal=z=bar"' in new
+
+    # ``#`` opens a comment — literal text after it is not an
+    # argument and must not mask.
+    new, _f = redact_text(
+        "kubectl create secret s --from-literal=k=x "
+        "# eg --from-literal=z=plain", file="s.sh")
+    assert "--from-literal=k=x" not in new
+    assert "# eg --from-literal=z=plain" in new
+    # A comment before any literal: no secret argument exists.
+    assert redact_text(
+        "kubectl create secret s # c --from-literal=z=plain",
+        file="s.sh")[1] == []
+
+    # A prior redaction tag inside one literal must not hide the
+    # next literal (tag-gap rescan uses the literal sub-regex —
+    # the parent match already proved ``create secret``).
+    new, _f = redact_text(
+        "kubectl create secret s --from-literal=a=<REDACTED:0123> "
+        "--from-literal=b=hunter2", file="s.sh")
+    assert "hunter2" not in new and "<REDACTED:0123>" in new
+
+    # ``\``-newline continuation keeps later literals on the same
+    # command.
+    new, _f = redact_text(
+        "kubectl create secret s \\\n  --from-literal=b=hunter2",
+        file="s.sh")
+    assert "hunter2" not in new

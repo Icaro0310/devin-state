@@ -160,21 +160,33 @@ _SHWORD = (
     r"|[^\s|&;\"'\\])"
 )
 
+# Word separator allowing a backslash-newline continuation
+# (``a \↵ --flag`` is the same shell command).
+_SHSEP = r"(?:[ \t]|\\\r?\n)+"
+
 # ``kubectl create secret … --from-literal=k=v`` — group 1 spans the
 # whole argument tail (secret name, ``--type``, other flags). The
 # engine re-scans that capture with ``_KUBECTL_LITERAL_RX`` and masks
 # only the literal tokens, so an option between two literals
-# (``--dry-run=client``) survives (``SUBMASK_PATTERNS``). The
-# lookahead proves a literal exists inside the same command —
-# ``create configmap`` literals stay ordinary data — and every gap
-# tokenizes as ``[ \t]+`` + word so the arms stay linear.
+# (``--dry-run=client``) survives (``SUBMASK_PATTERNS``). A word may
+# not start with ``#`` — an unquoted ``#`` opens a comment and
+# nothing after it is an argument — and the lookahead proves a
+# literal exists *before* any comment inside the same command, so
+# ``create configmap`` literals stay ordinary data and a literal
+# mentioned in a comment triggers nothing. ``_SHSEP`` lets a
+# ``\``-newline continuation keep the tail on one command.
 _KUBECTL_SECRET_RX = _rx(
-    r"(?i)\bkubectl\b(?:[ \t]+" + _SHWORD + r"+)*?[ \t]+create[ \t]+"
-    r"secret\b(?=[^|&;\n]*--from-literal=)"
-    r"((?:[ \t]+" + _SHWORD + r"+)+)"
+    r"(?i)\bkubectl\b(?:[ \t]+(?!#)" + _SHWORD + r"+)*?[ \t]+"
+    r"create[ \t]+secret\b"
+    r"(?=(?:" + _SHSEP + r"(?!#)" + _SHWORD + r"+)*" + _SHSEP +
+    r"--from-literal=)"
+    r"((?:" + _SHSEP + r"(?!#)" + _SHWORD + r"+)+)"
 )
+# A literal is a standalone shell word: ``(?<!\S)`` keeps a mention
+# inside a quoted option (``--note="--from-literal=x"``) from
+# matching and eating the closing quote.
 _KUBECTL_LITERAL_RX = re.compile(
-    r"--from-literal=[\w.-]+="
+    r"(?<!\S)--from-literal=[\w.-]+="
     r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
 )
 

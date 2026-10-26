@@ -778,10 +778,16 @@ def _iter_tag_gap(
     tags = list(_TAG_RUN.finditer(text, m.start(), m.end()))
     if not tags:
         return
-    # env fragments re-scan with the per-pattern de-anchored variant —
-    # the anchored pattern would miss an assignment that does not lead
-    # the fragment (devin-powerups#223 parity note).
-    scan_rx = _ENV_FRAGMENT_RES.get(index, rx) if env else rx
+    # A run-capture arm (``SUBMASK_PATTERNS``) already proved its
+    # command anchor on the whole match — a tag inside one literal
+    # must not hide the *later* literals, so fragments re-scan with
+    # the sub-regex directly (each yields its own sensitive group).
+    # Other env fragments re-scan with the per-pattern de-anchored
+    # variant — the anchored pattern would miss an assignment that
+    # does not lead the fragment (devin-powerups#223 parity note).
+    scan_rx = SUBMASK_PATTERNS.get(rx)
+    if scan_rx is None:
+        scan_rx = _ENV_FRAGMENT_RES.get(index, rx) if env else rx
     # For env_assignment the enclosure state is measured from the
     # value's first char — the position after the ``=``/``:`` separator
     # (variable names can contain neither).
