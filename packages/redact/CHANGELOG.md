@@ -313,6 +313,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   inline-map values `{KEY: v}`, and nginx/Apache header directives
   (`proxy_set_header`, `add_header`, `set_header`) now mask the
   credential (devin-state#92).
+- More tool-scoped carriers: xfreerdp `/p:v`, VNC `-passwd v`,
+  `mysqladmin password`, `rabbitmqctl change_password`, `ipmitool
+  -P`, `useradd`/`usermod -p`, `snmp* -A`/`-X`, `doctl auth init
+  -t`, `net use` password positionals (both `/user:` orders), and
+  Travis `secure:` blobs with a length floor so `secure: true`
+  stays prose (devin-state#92).
 
 ## [0.2.5] - 2026-10-23
 

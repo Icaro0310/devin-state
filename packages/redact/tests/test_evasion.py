@@ -1877,3 +1877,45 @@ def test_nginx_header_directive():
         new, findings = redact_text(src, file="n.conf")
         assert "hunter2" not in new, src
         assert findings, src
+
+
+def test_tool_scoped_secret_flags():
+    """Tool-specific short flags and password-subcommand positionals
+    mask only the credential token."""
+    for src in (
+        "doctl auth init -t hunter2",
+        "xfreerdp /u:admin /p:hunter2 /v:host",
+        "x11vnc -passwd hunter2",
+        "mysqladmin -u root password hunter2",
+        "rabbitmqctl change_password guest hunter2",
+        "ipmitool -I lanplus -H host -U root -P hunter2 sol",
+        "useradd -m -p hunter2 deploy",
+        "usermod -p hunter2 deploy",
+        "snmpget -v3 -u admin -A hunter2 host",
+        "snmpset -v3 -u admin -X hunter2 host",
+        r"net use z: \\srv\share hunter2 /user:admin",
+        r"net use \\srv\ipc$ /user:admin hunter2",
+    ):
+        new, findings = redact_text(src, file="c.txt")
+        assert "hunter2" not in new, src
+        assert findings, src
+    for src in (
+        r"net use z: \\srv\share",
+        "secure: true",
+        "useradd -m deploy",
+        "ipmitool -I lanplus -H host -U root sol",
+    ):
+        _, findings = redact_text(src, file="c.txt")
+        assert findings == [], src
+
+
+def test_travis_secure_blob():
+    """``secure: <blob>`` is an encrypted Travis var — the length
+    floor keeps ``secure: true`` out."""
+    new, findings = redact_text(
+        "secure: A7V1k2x9zQbN4rT8yU3iO6pL0sD5fG7hJ2kM", file="d.yml"
+    )
+    assert "A7V1k2" not in new
+    assert findings
+    _, findings = redact_text("secure: true", file="d.yml")
+    assert findings == []

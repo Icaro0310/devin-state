@@ -544,6 +544,51 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
             r"(?i)/(?:pass|password|pwd)[ \t]*:[ \t]*"
             r"(\"[^\"\r\n]*\"|'[^'\r\n]*'|\S+)"
         ),
+        # RDP ``/p:v`` (xfreerdp family) and VNC single-dash
+        # ``-passwd v``.
+        _rx(
+            r"(?i)\bxfreerdp\w*\b[^\n]*?/p:"
+            r"(\"[^\"\r\n]*\"|'[^'\r\n]*'|\S+)"
+        ),
+        _rx(
+            r"(?i)\b(?:x11vnc|vncserver|vncpasswd|tightvnc|tigervnc)"
+            r"\b[^\n]*?[ \t]-passwd(?:word)?[ \t=]*"
+            r"(\"[^\"\r\n]*\"|'[^'\r\n]*'|\S+)"
+        ),
+        # Password-subcommand positionals — ``mysqladmin … password
+        # p`` and ``rabbitmqctl change_password u p``.
+        _rx(
+            r"(?i)\bmysqladmin\b[^\n]*?\bpassword[ \t]+"
+            r"(\"[^\"\r\n]*\"|'[^'\r\n]*'|\S+)"
+        ),
+        _rx(
+            r"(?i)\brabbitmqctl[ \t]+change_password[ \t]+\S+[ \t]+"
+            r"(\"[^\"\r\n]*\"|'[^'\r\n]*'|\S+)"
+        ),
+        # Tool-scoped short flags carrying secrets — ``ipmitool
+        # -P``, ``useradd``/``usermod -p`` (the crypted password),
+        # ``snmp* -A``/``-X`` (auth/privacy passphrases), and
+        # ``doctl auth init -t``.
+        _rx(r"\bipmitool\b[^\n]*?[ \t]-P[ \t=]*(\S+)"),
+        _rx(r"\b(?:useradd|usermod)\b[^\n]*?[ \t]-p[ \t=]*(\S+)"),
+        _rx(r"\bsnmp[a-z]*\b[^\n]*?[ \t]-[AX][ \t=]*(\S+)"),
+        _rx(
+            r"\bdoctl[ \t]+auth[ \t]+init\b[^\n]*?[ \t]-t[ \t=]*"
+            r"(\S+)"
+        ),
+        # ``net use`` password positional — either side of the
+        # ``/user:`` flag; a ``/``-led token is another flag.
+        _rx(
+            r"(?i)\bnet[ \t]+use[ \t]+(?:[\w*]:[ \t]+)?\\\\\S+[ \t]+"
+            r"(?:/u(?:ser)?:[^\s]+[ \t]+)?(?!/)"
+            r"(\"[^\"\r\n]*\"|'[^'\r\n]*'|\S+)"
+        ),
+        # Travis CI ``secure:`` var — an encrypted env blob; the
+        # length floor keeps ``secure: true`` prose out.
+        _rx(
+            r"(?im)^[ \t]*secure[ \t]*:[ \t]*"
+            r"([A-Za-z0-9+/=._~-]{16,})"
+        ),
         # Credential-pair encodings — smbclient ``-U user%pass``,
         # lftp ``-u user,pass``, Oracle tools ``user/pass[@db]``.
         _rx(
