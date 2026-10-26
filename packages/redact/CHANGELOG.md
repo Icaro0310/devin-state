@@ -492,6 +492,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `conan` `-p` password flag (with `-pr`/`--profile` kept out) and
   `vault`/`bao`/`openbao write` — the whole contiguous `k=v` run
   after the path is secret material (devin-state#92).
+- kubectl `--from-literal` review round (devin-state#92): the bridge
+  from `create secret` no longer crosses `;`, `|`, or `&`, so a
+  `create configmap` literal on the next command is not attributed
+  to the secret; global flags before `create` (`--context`,
+  `-n/--namespace`) are tolerated; the captured run tolerates
+  ordinary options between literals so a later literal cannot leak;
+  and quoted literal values (`--from-literal=k="v"`) mask while
+  keeping their quotes.
+- `printf` cred binds capture the whole argument run after the
+  format string, so a second credential placeholder (`K=%s K2=%s`)
+  cannot leave its argument visible and a non-credential conversion
+  before the cred bind (`x %s API_KEY=%s`) cannot mask the wrong
+  argument (devin-state#92).
+- `rabbitmqctl add_user` accepts quoted usernames containing spaces
+  and escaped quotes (`"fi\"rst last"`) without mistaking part of
+  the username for the password (devin-state#92).
+- `openssl` secret flags are scoped to `enc` (so
+  `openssl req -new -key` keeps its option) and split into
+  independent `-k`/`-K`/`-iv` arms so every operand on one command
+  masks (devin-state#92).
+- `etcdctl user add "u:p"` quoted arguments keep their closing
+  quote outside the capture so the command still parses
+  (devin-state#92).
 
 ## [0.2.5] - 2026-10-23
 

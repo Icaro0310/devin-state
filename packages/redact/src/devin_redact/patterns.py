@@ -591,17 +591,21 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
             r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
         ),
         # ``kubectl create secret --from-literal=k=v`` — every
-        # literal under ``create secret`` is secret material, so the
-        # capture spans the whole contiguous flag run and masks
-        # ``--from-literal=a=x --from-literal=k=v`` in one tag.
-        # Scoped to ``create secret`` (any subtype): ConfigMap
-        # literals like ``--from-literal=REGION=us-east-1`` are
-        # ordinary data, not credentials.
+        # literal under ``create secret`` is secret material.
+        # Global flags may sit between ``kubectl`` and ``create``
+        # (``kubectl --context=x -n ns create secret``), the gaps
+        # stay inside one shell command (no ``;|&`` crossing into a
+        # later ``configmap``), and the capture spans separated
+        # literals too — ``--from-literal=a=x --type=O
+        # --from-literal=k=v`` masks both literals even though the
+        # intervening flag is absorbed into the tag.
         _rx(
-            r"(?i)\bkubectl[ \t]+create[ \t]+secret\b[^\n]*?"
-            r"(--from-literal=[\w.-]+=(?:\"(?:\\.|[^\"\\\r\n])*\""
-            r"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
-            r"(?:[ \t]+--from-literal=[\w.-]+="
+            r"(?i)\bkubectl\b(?:[ \t]+--?[^\s|&;=]+"
+            r"(?:[ \t=]+(?!-)[^\s|&;]+)?)*?[ \t]+create[ \t]+"
+            r"secret\b[^\n|&;]*?"
+            r"((?:[ \t]+--from-literal=[\w.-]+=(?:\"(?:\\.|[^\"\\\r\n])*\""
+            r"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+))+"
+            r"(?:[^\n|&;]*?--from-literal=[\w.-]+="
             r"(?:\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'"
             r"|(?:\\.|[^\s\\|&;])+))*)"
         ),
@@ -613,23 +617,28 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
             r"(?!/)((?:\\.|[^\s\\|&;])+)"
         ),
         # ``rabbitmqctl add_user <name> <password>`` — second
-        # positional is the password; the username may be quoted
-        # (``"first last"``).
+        # positional is the password; the username may be a quoted
+        # token with escaped quotes (``"fi\"rst last"``).
         _rx(
             r"\brabbitmqctl[ \t]+add_user[ \t]+"
-            r"(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|\S+)[ \t]+"
+            r"(?:\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|\S+)"
+            r"[ \t]+"
             r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
         ),
         # ``printf 'NAME=%s' value`` — the format names the bind
-        # and the first argument carries the secret; trailing
-        # format text (``'KEY=%s\n'``) is allowed before the
-        # closing quote. The pre-name text excludes ``=`` so a
-        # mixed format (``'x=%s KEY=%s' a b``) does not bind the
-        # secret placeholder to the wrong argument.
+        # and the arguments carry the secret. Trailing format text
+        # (``'KEY=%s\n'``) is allowed before the closing quote, and
+        # the whole argument run masks so a second credential
+        # placeholder (``'K1=%s K2=%s' a b``) or an earlier
+        # non-credential conversion (``'x %s KEY=%s' a b``) cannot
+        # leave the secret argument visible.
         _rx(
-            r"\bprintf[ \t]+[\"'][^\"'\n=]*" + ENV_NAME_PATTERN +
+            r"\bprintf[ \t]+[\"'][^\"'\n]*" + ENV_NAME_PATTERN +
             r"[ \t]*=[ \t]*%[a-z][^\"'\n]*[\"'][ \t]+"
-            r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
+            r"((?:\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'"
+            r"|(?:\\.|[^\s\\|&;])+)"
+            r"(?:[ \t]+(?:\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'"
+            r"|(?:\\.|[^\s\\|&;])+))*)"
         ),
         # SNMPv3 auth/privacy passphrases — ``-A``/``-X`` carry
         # secrets while lowercase ``-a``/``-x`` pick the protocol.
@@ -659,9 +668,24 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
             r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
         ),
         # ``openssl enc -k``/``-K``/``-iv`` carry passphrase/key/iv
-        # material, spaced or glued.
+        # material, spaced or glued. One anchored arm per flag so
+        # ``-K`` and ``-iv`` both mask on one line; scoped to the
+        # ``enc`` subcommand (where ``-key`` is not a valid option)
+        # so ``openssl req -new -key private.pem`` keeps ``-key``
+        # intact, and the gap cannot cross ``;`` into another
+        # subcommand.
         _rx(
-            r"\bopenssl\b[^\n]*?[ \t]-(?:k|K|iv)[ \t=]*"
+            r"\bopenssl[ \t]+enc\b[^\n|&;]*?[ \t]-k[ \t=]*"
+            r"(?!-[-\w])"
+            r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
+        ),
+        _rx(
+            r"\bopenssl[ \t]+enc\b[^\n|&;]*?[ \t]-K[ \t=]*"
+            r"(?!-[-\w])"
+            r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
+        ),
+        _rx(
+            r"\bopenssl[ \t]+enc\b[^\n|&;]*?[ \t]-iv[ \t=]*"
             r"(?!-[-\w])"
             r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
         ),
@@ -670,10 +694,20 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
             r"\binflux\w*\b[^\n]*?[ \t]-t[ \t=]*(?!-[-\w])"
             r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
         ),
-        # ``etcdctl user add u:p`` — the ``user:pass`` positional.
+        # ``etcdctl user add u:p`` — the ``user:pass`` positional;
+        # quoted arguments keep their closing quote outside the
+        # capture so the command still parses.
+        _rx(
+            r"\betcdctl[ \t]+user[ \t]+add[ \t]+\"[^\"\r\n]*?:"
+            r"([^\"\r\n]*?)(?=\")"
+        ),
+        _rx(
+            r"\betcdctl[ \t]+user[ \t]+add[ \t]+'[^'\r\n]*?:"
+            r"([^'\r\n]*?)(?=')"
+        ),
         _rx(
             r"\betcdctl[ \t]+user[ \t]+add[ \t]+\S+?:"
-            r"((?:\\.|[^\s\\|&;])+)"
+            r"((?:\\.|[^\s\\|&;\"'])+)"
         ),
         # ``conan remote login``/``conan user`` — ``-p`` is the
         # password (``-pr``/``--profile`` take a profile name).

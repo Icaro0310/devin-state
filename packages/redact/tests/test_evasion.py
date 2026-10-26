@@ -2607,3 +2607,54 @@ def test_review_round_conan_and_vault_write():
     new, findings = redact_text(
         "vault write transit/keys/k", file="s.sh")
     assert new == "vault write transit/keys/k"
+
+
+def test_review_round_kubectl_printf_openssl_etcdctl():
+    """kubectl command bounds, printf multi-arg, openssl enc
+    scoping, and quoted etcdctl user:pass."""
+
+    # The kubectl gap cannot cross ``;`` into a configmap command.
+    new, findings = redact_text(
+        "kubectl create secret generic s; "
+        "kubectl create configmap cm --from-literal=REGION=us-east-1",
+        file="s.sh")
+    assert "--from-literal=REGION=us-east-1" in new
+
+    # Separated literals on a secret line all mask.
+    new, findings = redact_text(
+        "kubectl create secret s --from-literal=a=x --type=Opaque "
+        "--from-literal=k=hunter2", file="s.sh")
+    assert findings and "hunter2" not in new and "=x" not in new
+
+    # Global flags before ``create secret``.
+    new, findings = redact_text(
+        "kubectl --context=prod -n ns create secret s "
+        "--from-literal=k=hunter2", file="s.sh")
+    assert findings and "hunter2" not in new
+
+    # printf: a second credential placeholder's arg masks too, and a
+    # non-credential conversion before the cred bind does not hide it.
+    new, findings = redact_text(
+        "printf 'API_KEY=%s TOKEN=%s' hunter2 s3cr3t", file="s.sh")
+    assert "hunter2" not in new and "s3cr3t" not in new
+    new, findings = redact_text(
+        "printf 'x %s API_KEY=%s' aa hunter2", file="s.sh")
+    assert "hunter2" not in new
+
+    # Escaped quote inside a quoted rabbitmqctl username.
+    new, findings = redact_text(
+        'rabbitmqctl add_user "fi\\"rst last" hunter2', file="s.sh")
+    assert findings and "hunter2" not in new
+
+    # openssl ``enc`` flags mask; ``req -key`` keeps its option.
+    new, findings = redact_text(
+        "openssl enc -K hunter2 -iv s3cr3t -in f -out g", file="s.sh")
+    assert "hunter2" not in new and "s3cr3t" not in new
+    new, findings = redact_text(
+        "openssl req -new -key private.pem", file="s.sh")
+    assert new == "openssl req -new -key private.pem"
+
+    # Quoted etcdctl credentials keep their quotes.
+    new, findings = redact_text(
+        'etcdctl user add "alice:hunter2"', file="s.sh")
+    assert findings and 'add "alice:<REDACTED:' in new and '>"' in new
