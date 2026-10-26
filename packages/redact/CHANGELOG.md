@@ -195,6 +195,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   HAProxy `stats auth user:pass`, `SSHPASS=x` (no underscore
   before `PASS`), and SMTP/IMAP `AUTH PLAIN <b64>`
   (devin-state#92).
+- `.pgpass` five-field rows flag under a filename gate
+  (`host:port:db:user:pass` is prose-shaped elsewhere);
+  `composer config http-basic` pairs, jenkins-cli
+  `-auth u:p`, `cargo login`/`nuget setApiKey` positional
+  tokens, `az keyvault`/`aws ssm`/`secretsmanager`
+  `--value`/`--secret-string` arguments, `doppler secrets
+  set`, and the `$ANSIBLE_VAULT` marker plus its hex
+  ciphertext body all flag (devin-state#92).
 - Python literal prefixes survive on plain assignments too —
   `api_key = b"v"` (and `rb`/`f`/`u`) re-emits `b"<tag>"`
   instead of an unquoted tag that cannot parse — and YAML

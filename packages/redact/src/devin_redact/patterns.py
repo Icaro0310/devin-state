@@ -118,6 +118,14 @@ _LDAP_ROOTPW_RX = _rx(
     r"(\"[^\"\r\n]*\"|'[^'\r\n]*'|\S+)"
 )
 
+# ``.pgpass`` five-field rows — ``host:port:db:user:password``;
+# escaped ``\:`` inside a field is part of the field. Gated to the
+# filename via ``FILE_GATED_PATTERNS`` (the ext check is
+# ``endswith``-based so the dotfile basename matches).
+_PGPASS_RX = _rx(
+    r"(?im)^[ \t]*[^:\r\n]*(?::[^:\r\n]*){3}:([^\s:]+)"
+)
+
 PATTERNS: dict[str, list[re.Pattern[str]]] = {
     # --- secrets -------------------------------------------------------
     "api_key": [
@@ -775,6 +783,53 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
             r"(?im)^[ \t]*(?:\w+[ \t]+)?AUTH(?:ENTICATE)?[ \t]+"
             r"PLAIN[ \t]+([A-Za-z0-9+/=]{10,})[ \t]*$"
         ),
+        # ``.pgpass`` five-field rows ``host:port:db:user:pass`` —
+        # a generic colon chain is prose-shaped anywhere else, so
+        # this arm is gated to the filename
+        # (``FILE_GATED_PATTERNS``). Group 1 is the password field.
+        _PGPASS_RX,
+        # ``composer config http-basic.<host> user pass`` and
+        # jenkins-cli ``-auth user:pass`` — credential pairs as
+        # positionals after a tool-scoped marker.
+        _rx(
+            r"(?i)\bcomposer[ \t]+config[ \t]+http-basic\S*[ \t]+"
+            r"\S+[ \t]+(\S+)"
+        ),
+        _rx(
+            r"(?i)\bjenkins-cli\b[^\n]*?[ \t]-auth(?:entication)?"
+            r"[ \t=]*\S+:(\S+)"
+        ),
+        # Single-positional credential arguments —
+        # ``cargo login <token>``, ``nuget setApiKey <key>``,
+        # ``dotnet nuget push -k``-style bare tails.
+        _rx(
+            r"(?i)\b(?:cargo[ \t]+login|nuget[ \t]+setApiKey)[ \t]+"
+            r"([^\s|&;]+)"
+        ),
+        # Secret-store CLIs — ``az keyvault secret set --value``,
+        # ``aws ssm put-parameter --value``, ``secretsmanager
+        # create-secret --secret-string`` — the secret follows a
+        # scoped ``--value``/``--secret-string`` flag.
+        _rx(
+            r"(?i)\b(?:keyvault[ \t]+secret[ \t]+set|ssm[ \t]+"
+            r"put-parameter|secretsmanager[ \t]+(?:put-secret-value"
+            r"|update-secret|create-secret))\b[^\n]*?[ \t]"
+            r"--(?:value|secret-string)[ \t=]*"
+            r"(\"[^\"\r\n]*\"|'[^'\r\n]*'|\S+)"
+        ),
+        # ``doppler secrets set NAME v`` — the value is a bare
+        # positional after the credential-named key.
+        _rx(
+            r"(?i)\bdoppler[ \t]+secrets[ \t]+set[ \t]+"
+            + ENV_NAME_PATTERN + r"[ \t]+(\S+)"
+        ),
+        # Ansible vault blob — ``$ANSIBLE_VAULT;1.1;AES256`` plus
+        # the hex-only ciphertext lines under it (the body is the
+        # offline-crackable secret).
+        _rx(
+            r"(\$ANSIBLE_VAULT;[0-9.]+;[A-Z0-9_]+"
+            r"(?:[ \t]*\r?\n[ \t]*[0-9a-fA-F]+)*)"
+        ),
         # Java ``.properties`` whitespace separator — ``api_key hunter2``
         # is a legal properties line but plain prose elsewhere, so this
         # arm only fires under a matching file extension (see
@@ -834,6 +889,7 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
 # ``.properties`` syntax but ordinary prose anywhere else.
 FILE_GATED_PATTERNS: dict[re.Pattern[str], tuple[str, ...]] = {
     PATTERNS["env_assignment"][-1]: (".properties", ".props"),
+    _PGPASS_RX: (".pgpass", "pgpass.conf"),
 }
 
 # Arms whose whole match legitimately looks like a code expression to

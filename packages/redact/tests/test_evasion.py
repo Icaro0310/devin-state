@@ -2006,3 +2006,46 @@ def test_sshpass_env_and_smtp_auth_plain():
         new, findings = redact_text(src, file="s.log")
         assert findings, src
         assert "AHVz" not in new, src
+
+
+def test_pgpass_and_secret_store_clis():
+    """``.pgpass`` five-field rows flag under the filename gate;
+    secret-store CLIs mask the ``--value``/``--secret-string``
+    argument."""
+    for src in (
+        'localhost:5432:db:admin:hunter2',
+        '*:*:db:admin:hunter2',
+    ):
+        new, findings = redact_text(src, file=".pgpass")
+        assert findings and "hunter2" not in new, src
+        _, findings = redact_text(src, file="x.txt")
+        assert findings == [], src
+    _, findings = redact_text("a:b:c:d:e", file=".pgpass")
+    assert findings  # five colon fields in .pgpass is a row
+    for src in (
+        'az keyvault secret set --vault-name v --name n --value hunter2',
+        'aws ssm put-parameter --name n --value hunter2 --type SecureString',
+        'aws secretsmanager create-secret --name n --secret-string hunter2',
+        'composer config http-basic.repo admin hunter2',
+        'java -jar jenkins-cli.jar -auth admin:hunter2 build j',
+        'doppler secrets set API_KEY hunter2',
+        'cargo login hunter2abcd',
+        'nuget setApiKey hunter2-abcd',
+    ):
+        new, findings = redact_text(src, file="s.sh")
+        assert findings, src
+        assert "hunter2" not in new, src
+
+
+def test_ansible_vault_blob_masks_body():
+    """The ``$ANSIBLE_VAULT`` marker and its hex ciphertext body
+    mask as one span."""
+    src = (
+        "$ANSIBLE_VAULT;1.1;AES256\n"
+        "6338646538306164\n6634626433316139\nnext: plain"
+    )
+    new, findings = redact_text(src, file="x.yml")
+    assert findings
+    assert "6338646538306164" not in new
+    assert "ANSIBLE_VAULT" not in new
+    assert "next: plain" in new
