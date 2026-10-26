@@ -427,6 +427,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the comment branch is atomic via a lookahead+backreference
   emulation, closing the CodeQL "inefficient regular expression"
   alert (devin-state#92).
+- Flag-operand boundaries (devin-state#92): a value beginning with
+  `-X` after a secret flag is the *next* option, not an operand —
+  every tool-scoped flag arm now rejects a flag-shaped operand, so
+  `ldapadd -w -D cn=admin -w realpw` reaches the real `-w` instead
+  of masking `-D`, and `http --auth-type=basic --auth u:p` no
+  longer matches `--auth` as a prefix of `--auth-type` (the real
+  credential flag still masks).
+- expect/assignment disambiguation (devin-state#92): `expect
+  "Password:" ; send "v"` no longer treats the quoted prompt as a
+  `name: value` pair (quote symmetry around the key is required),
+  so only the sent secret masks and the `; send` structure
+  survives; `send -- "v"` is now accepted as the same carrier.
+- `grep -pw`/`git grep -Pw` false positive closed (devin-state#92):
+  the generic `-pw` arm is scoped to quoted subcommand spans
+  (`kadmin -q "addprinc -pw p u"`), and a second `kadmin -w`
+  anchored arm covers a password flag trailing the `-q` subcommand.
+- `gh secret set`/`gh variable set` option gap is deterministic now
+  — the bare gap alternative excludes quote characters so repeated
+  quoted fragments can no longer repartition exponentially on a
+  line with no `-b`/`--body` (ReDoS; devin-state#92).
 
 ## [0.2.5] - 2026-10-23
 

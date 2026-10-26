@@ -354,10 +354,17 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
         # `\'` inside a `"`-quoted value and `\"` escapes can no longer
         # end the match early and leak the value's tail.
         _rx(
-            r"(?<![\w'\"])\\?[\"']?" + ENV_NAME_PATTERN +
+            # Quote symmetry: a quoted name must close with the same
+            # quote before ``:`` — ``"Password:" ; send`` in expect
+            # scripts is a prompt, not an assignment, and the
+            # lookbehind blocks the bare alternative at the word
+            # itself so only real JSON/dict keys qualify.
+            r"(?<![\w'\"])(?:\\?\"(?:" + ENV_NAME_PATTERN + r")\\?\"|"
+            r"\\?'(?:" + ENV_NAME_PATTERN + r")\\?'|"
+            + ENV_NAME_PATTERN + r")"
             # ``:=`` joins ``:`` here too — Go short-var declarations
             # (``apiKey := "v"``) carry the same bound literal.
-            r"\\?[\"']?\s*:[ \t]*=?\s*(?:"
+            r"\s*:[ \t]*=?\s*(?:"
             r"\"\"\"(?:\\.|[^\"\\])*?\"\"\""
             r"|'''(?:\\.|[^'\\])*?'''"
             r"|\"(?:\\.|[^\"\\\r\n])*?\""
@@ -503,7 +510,8 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
             r"[ \t]+(?:-u|--user|-U|--proxy-user)|redis-cli[ \t]+-a"
             r"|ldap\w+\b[^\n]*?[ \t]-w|mosquitto_\w+[ \t]+-P"
             r"|https?[ \t]+(?:GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS"
-            r"|get|post)\b[^\n]*?[ \t](?:-a|--auth))[ \t=]*"
+            r"|get|post)\b[^\n]*?[ \t](?:-a|--auth))(?![\w-])[ \t=]*"
+            r"(?!-[-\w])"
             r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
         ),
         # mysql family ``-p<pass>`` — the value rides attached and
@@ -529,7 +537,7 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
         _rx(
             r"(?i)--[\w-]*(?:password|passwd|passphrase|pass|secret"
             r"|token|api[-_]?key|access[-_]?key|client[-_]?secret"
-            r"|auth[-_]?token|bearer)[ \t=]+"
+            r"|auth[-_]?token|bearer)[ \t=]+(?!-[-\w])"
             r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
         ),
         # Tool flags where the secret rides a short option or a
@@ -540,10 +548,10 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
             r"\b(?:(?:docker|podman|skopeo|buildah|oras"
             r"|podman-remote)[ \t]+login|crane[ \t]+(?:auth[ \t]+)?"
             r"login|helm[ \t]+registry[ \t]+login)\b"
-            r"[^\n]*?[ \t]-p[ \t=]*"
+            r"[^\n]*?[ \t]-p[ \t=]*(?!-[-\w])"
             r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
         ),
-        _rx(r"\b(?:zip|unzip)\b[^\n]*?[ \t]-P[ \t=]*((?:\\.|[^\s\\|&;])+)"),
+        _rx(r"\b(?:zip|unzip)\b[^\n]*?[ \t]-P[ \t=]*(?!-[-\w])((?:\\.|[^\s\\|&;])+)"),
         _rx(r"\b7z[ \t]+\S+[ \t]+-p((?:\\.|[^\s\\|&;])+)"),
         _rx(
             r"(?i)\baws[ \t]+configure[ \t]+set[ \t]+"
@@ -575,18 +583,18 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
         # cmdkey-style ``/pass:v``.
         _rx(
             r"\b(?:putty|plink|pscp|psftp|pageant)\b[^\n]*?"
-            r"[ \t]-pw[ \t=]*(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
+            r"[ \t]-pw[ \t=]*(?!-[-\w])(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
         ),
         _rx(
             r"\b(?:sqlcmd|bcp|sqlservr)\b[^\n]*?"
-            r"[ \t]-P[ \t=]*(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
+            r"[ \t]-P[ \t=]*(?!-[-\w])(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
         ),
         _rx(
-            r"\b(?:twine|flit)\b[^\n]*?[ \t]-p[ \t=]*"
+            r"\b(?:twine|flit)\b[^\n]*?[ \t]-p[ \t=]*(?!-[-\w])"
             r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
         ),
         _rx(
-            r"(?i)-(?:src|dest)?(?:store|key)pass(?:word)?[ \t=]+"
+            r"(?i)-(?:src|dest)?(?:store|key)pass(?:word)?[ \t=]+(?!-[-\w])"
             r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
         ),
         _rx(
@@ -601,7 +609,7 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
         ),
         _rx(
             r"(?i)\b(?:x11vnc|vncserver|vncpasswd|tightvnc|tigervnc)"
-            r"\b[^\n]*?[ \t]-passwd(?:word)?[ \t=]*"
+            r"\b[^\n]*?[ \t]-passwd(?:word)?[ \t=]*(?!-[-\w])"
             r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
         ),
         # Password-subcommand positionals — ``mysqladmin … password
@@ -618,11 +626,11 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
         # -P``, ``useradd``/``usermod -p`` (the crypted password),
         # ``snmp* -A``/``-X`` (auth/privacy passphrases), and
         # ``doctl auth init -t``.
-        _rx(r"\bipmitool\b[^\n]*?[ \t]-P[ \t=]*((?:\\.|[^\s\\|&;])+)"),
-        _rx(r"\b(?:useradd|usermod)\b[^\n]*?[ \t]-p[ \t=]*((?:\\.|[^\s\\|&;])+)"),
-        _rx(r"\bsnmp[a-z]*\b[^\n]*?[ \t]-[AX][ \t=]*((?:\\.|[^\s\\|&;])+)"),
+        _rx(r"\bipmitool\b[^\n]*?[ \t]-P[ \t=]*(?!-[-\w])((?:\\.|[^\s\\|&;])+)"),
+        _rx(r"\b(?:useradd|usermod)\b[^\n]*?[ \t]-p[ \t=]*(?!-[-\w])((?:\\.|[^\s\\|&;])+)"),
+        _rx(r"\bsnmp[a-z]*\b[^\n]*?[ \t]-[AX][ \t=]*(?!-[-\w])((?:\\.|[^\s\\|&;])+)"),
         _rx(
-            r"\bdoctl[ \t]+auth[ \t]+init\b[^\n]*?[ \t]-t[ \t=]*"
+            r"\bdoctl[ \t]+auth[ \t]+init\b[^\n]*?[ \t]-t[ \t=]*(?!-[-\w])"
             r"((?:\\.|[^\s\\|&;])+)"
         ),
         # ``net use`` password positional — either side of the
@@ -826,7 +834,7 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
             r"\b(?i:hydra|medusa|crackmapexec|cme|nxc|netexec"
             r"|evil-winrm|smbmap|enum4linux(?:-ng)?|psexec"
             r"|racadm|idracadm?)\b"
-            r"[^\n]*?[ \t]-p[ \t=]*"
+            r"[^\n]*?[ \t]-p[ \t=]*(?!-[-\w])"
             r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
         ),
         # ``radtest user pass host port secret`` — arg2 is the user
@@ -842,19 +850,32 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
         ),
         # Kerberos ``kadmin -w pass`` / ``kadmin.local -q
         # "addprinc -pw pass u"`` — ``-w``/``-pw`` carry the
-        # password, including inside the quoted subcommand.
+        # password, including inside the quoted subcommand. Two
+        # anchored arms: the first flag eaten is not always the
+        # last secret — ``kadmin -q "addprinc -pw x u" -w y``
+        # needs a separate pass for the trailing ``-w`` since one
+        # anchored match consumes the ``kadmin`` anchor.
         _rx(
             r"(?i)\bkadmin(?:\.local)?\b[^\n]*?[ \t]"
-            r"-(?:pw|w)[ \t=]*"
+            r"-(?:pw|w)[ \t=]*(?!-[-\w])"
             r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'"
             r"|(?:\\.|[^\s\\\"'|&;])+)"
         ),
-        # A second ``-pw`` in the same command (quoted subcommand
-        # under ``-q``, or a putty line) — lowercase-only so
-        # ``grep -Pw`` stays out.
         _rx(
-            r"[ \t]-pw[ \t=]+"
-            r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
+            r"(?i)\bkadmin(?:\.local)?\b[^\n]*?[ \t]"
+            r"-w[ \t=]*(?!-[-\w])"
+            r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'"
+            r"|(?:\\.|[^\s\\\"'|&;])+)"
+        ),
+        # A second ``-pw`` inside a quoted subcommand —
+        # ``kadmin -q "addprinc -pw pass u"``. Scoped to quoted
+        # spans so ``grep -pw``/``git grep -pw`` (``-p`` +
+        # ``-w`` combined flags) stay clean; unquoted ``-pw``
+        # carriers are covered by the anchored tool arms.
+        _rx(
+            r"[\"'][^\"'\n]*?[ \t]-pw[ \t=]+(?!-[-\w])"
+            r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'"
+            r"|(?:\\.|[^\s\\|&;'\"])+)"
         ),
         # ``pulumi config set [--secret] NAME v`` — the value is a
         # bare positional; boolean/value flags may sit between the
@@ -878,8 +899,14 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
         _rx(
             r"(?i)\bgh[ \t]+(?:secret[ \t]+set[ \t]+\S+|variable"
             r"[ \t]+set[ \t]+" + ENV_NAME_PATTERN + r")"
-            r"(?:[^|&;\n]|\"(?:\\.|[^\"\\\r\n])*\""
+            # The bare alternative excludes quotes so each position
+            # has exactly one way to be consumed — mixing ``"`` into
+            # the bare class makes ``"a" "a" …`` repartitionable and
+            # exponential on a line with no ``--body`` (CodeQL/review
+            # flagged the stall).
+            r"(?:[^|&;\n\"']|\"(?:\\.|[^\"\\\r\n])*\""
             r"|'(?:\\.|[^'\\\r\n])*')*?[ \t](?:-b|--body)[ \t=]*"
+            r"(?!-[-\w])"
             r"(" + _CLITOK + r")"
         ),
         # macOS ``security add-*-password -w`` — ``-w``'s operand is
@@ -888,11 +915,11 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
         # ``|`` pipeline.) hiera-eyaml ``encrypt -s`` same shape.
         _rx(
             r"(?i)\bsecurity[ \t]+add-\w+-password\b"
-            r"[^\n]*?[ \t]-w[ \t=]*"
+            r"[^\n]*?[ \t]-w[ \t=]*(?!-[-\w])"
             r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
         ),
         _rx(
-            r"(?i)\beyaml[ \t]+encrypt\b[^\n]*?[ \t]-s[ \t=]*"
+            r"(?i)\beyaml[ \t]+encrypt\b[^\n]*?[ \t]-s[ \t=]*(?!-[-\w])"
             r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
         ),
         # Windows ``schtasks /ru u /rp p`` — ``/rp`` carries the
@@ -931,7 +958,7 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
         ),
         _rx(
             r"(?i)\bjenkins-cli\b[^\n]*?[ \t]-auth(?:entication)?"
-            r"[ \t=]*(\"(?:\\.|[^\"\\\r\n])+\"|'(?:\\.|[^'\\\r\n])+'|(?:\\.|[^\s\\|&;])+:(?:\\.|[^\s\\|&;])+)"
+            r"[ \t=]*(?!-[-\w])(\"(?:\\.|[^\"\\\r\n])+\"|'(?:\\.|[^'\\\r\n])+'|(?:\\.|[^\s\\|&;])+:(?:\\.|[^\s\\|&;])+)"
         ),
         # Single-positional credential arguments —
         # ``cargo login <token>``, ``nuget setApiKey <key>``,
@@ -948,7 +975,7 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
             r"(?i)\b(?:keyvault[ \t]+secret[ \t]+set|ssm[ \t]+"
             r"put-parameter|secretsmanager[ \t]+(?:put-secret-value"
             r"|update-secret|create-secret))\b[^\n]*?[ \t]"
-            r"--(?:value|secret-string)[ \t=]*"
+            r"--(?:value|secret-string)[ \t=]*(?!-[-\w])"
             r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
         ),
         # ``doppler secrets set NAME v`` — the value is a bare
@@ -981,7 +1008,7 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
         # ``conjur variable set|values add -i id -v value`` — the
         # secret rides ``-v``.
         _rx(
-            r"(?i)\bconjur[ \t]+variable\b[^\n]*?[ \t]-v[ \t=]*"
+            r"(?i)\bconjur[ \t]+variable\b[^\n]*?[ \t]-v[ \t=]*(?!-[-\w])"
             r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
         ),
         # ``mc admin user add ALIAS ACCESSKEY SECRETKEY`` — the
@@ -993,13 +1020,13 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
         ),
         # InfluxDB 1.x single-dash long flag ``-password``.
         _rx(
-            r"(?i)\binflux\b[^\n]*?[ \t]-password[ \t=]*"
+            r"(?i)\binflux\b[^\n]*?[ \t]-password[ \t=]*(?!-[-\w])"
             r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
         ),
         # ``sendemail -xp pass`` — ``-xp`` is the auth password
         # (``-xu`` is the user).
         _rx(
-            r"(?i)\bsendemail\b[^\n]*?[ \t]-xp[ \t=]*"
+            r"(?i)\bsendemail\b[^\n]*?[ \t]-xp[ \t=]*(?!-[-\w])"
             r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
         ),
         # ``signtool sign /f cert.pfx /p pass`` — ``/p`` is the
@@ -1010,14 +1037,14 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
             r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
         ),
         _rx(
-            r"(?i)\bnuget\b[^\n]*?[ \t]-Password[ \t=]*"
+            r"(?i)\bnuget\b[^\n]*?[ \t]-Password[ \t=]*(?!-[-\w])"
             r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
         ),
         # ``rar/unrar -pPASS`` — the archive password is glued to
         # the flag; ``veracrypt -p pass`` is the space form.
         _rx(r"\b(?:rar|unrar)\b[^\n]*?[ \t]-p((?:\\.|[^\s\\|&;])+)"),
         _rx(
-            r"(?i)\bveracrypt\b[^\n]*?[ \t]-p[ \t=]*"
+            r"(?i)\bveracrypt\b[^\n]*?[ \t]-p[ \t=]*(?!-[-\w])"
             r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
         ),
         # ``echo "user:pass" | chpasswd``/``newusers`` — the
@@ -1030,7 +1057,8 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
         # is the credential (``expect "Password:" ; send "x\r"``).
         _rx(
             r"(?i)\bexpect\b[^\n]*?password[^\n]*?[;\n][ \t]*"
-            r"send[ \t]+(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*')"
+            r"send[ \t]+(?:--[ \t]+)?"
+            r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*')"
         ),
         # Capistrano ``set :password, "v"`` — symbol plus comma;
         # only cred-word symbols count.

@@ -2372,3 +2372,54 @@ def test_review_round_escape_aware_operands():
     new, findings = redact_text(
         "redis-cli get password", file="s.sh")
     assert findings == [] and "hunter" not in new
+
+
+def test_review_round_flag_shadowing_and_quote_symmetry():
+    """Earlier flags must not shadow a later password flag, quoted
+    prompt text is not an assignment, ``send --`` is valid expect,
+    and ``grep -pw`` is combined flags, not a secret carrier."""
+
+    # ldap ``-w`` with no operand is a flag, not a value — the lazy
+    # gap must retry at the real ``-w`` instead of masking ``-D``.
+    new, findings = redact_text(
+        "ldapadd -w -D cn=admin -w hunter2", file="s.sh")
+    assert findings and "hunter2" not in new
+    assert "-D cn=admin" in new
+
+    # httpie ``--auth`` must not match the prefix of
+    # ``--auth-type``; the real ``--auth user:pass`` still masks.
+    new, findings = redact_text(
+        "http GET x --auth-type=basic --auth admin:hunter2",
+        file="s.sh")
+    assert findings and "hunter2" not in new
+    assert "--auth-type=basic" in new
+
+    # expect: the ``"Password:"`` prompt is not a JSON-style
+    # assignment; only the sent value is masked and the ``; send``
+    # structure survives. ``send --`` is a valid terminator.
+    src = 'expect "Password:" ; send "hunter2\\r"'
+    new, findings = redact_text(src, file="s.exp")
+    assert findings and "hunter2" not in new
+    assert "; send " in new
+    assert len(scan_text(src, file="s.exp", location="s.exp:1")) == 1
+    new, findings = redact_text(
+        'expect "Password:" ; send -- "hunter2\\r"', file="s.exp")
+    assert findings and "hunter2" not in new
+    assert "send -- " in new
+
+    # ``grep -pw``/``git grep -Pw`` are combined grep flags
+    # (``-p`` + ``-w``), never a password carrier.
+    new, findings = redact_text("grep -pw foo file.txt", file="s.sh")
+    assert findings == [] and new == "grep -pw foo file.txt"
+    new, findings = redact_text("git grep -Pw foo file.txt", file="s.sh")
+    assert findings == [] and new == "git grep -Pw foo file.txt"
+
+    # kadmin can carry two secrets; both mask regardless of order.
+    new, findings = redact_text(
+        'kadmin -q "addprinc -pw secret123 admin" -w hunter2',
+        file="s.sh")
+    assert "secret123" not in new and "hunter2" not in new
+    new, findings = redact_text(
+        'kadmin -w hunter2 -q "addprinc -pw pass2 admin"',
+        file="s.sh")
+    assert "hunter2" not in new and "pass2" not in new
