@@ -545,6 +545,20 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
             r"|auth[-_]?token|bearer)[ \t=]+(?!-[-\w])"
             r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
         ),
+        # Single-dash *long* flags — Go binaries (``boundary
+        # authenticate -password``, ``vault login -token``) and
+        # Windows tools (``dsmod -pwd``, PowerShell ``-Password``)
+        # spell the same credential with one dash. ``(?![\w-])``
+        # keeps bundled flags (``gcc -pass-exit-codes``) and the
+        # ``--`` long form out — the double-dash arm above owns
+        # those.
+        _rx(
+            r"(?i)[ \t]-(?:password|passwd|pwd|passphrase|secret"
+            r"|token|api[-_]?key|access[-_]?key|client[-_]?secret"
+            r"|auth[-_]?token|bearer|pass)(?![\w-])[ \t=]+"
+            r"(?!-[-\w])"
+            r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
+        ),
         # Tool flags where the secret rides a short option or a
         # named setter — docker/podman ``login -p``, zip/unzip ``-P``
         # (uppercase, case matters), 7z ``-p``, and
@@ -565,8 +579,21 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
         _rx(
             r"(?i)\b(?:poetry|pip|npm|gem|bundle|git)[ \t]+config(?:"
             r"[ \t]+set|(?:[ \t]+--?\w+)*)?[ \t]+"
-            r"\S*(?:key|secret|token|pass\w*)\S*[ \t]+"
+            r"\S*(?:key|secret|token|pass\w*|auth)\S*[ \t]+"
             r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
+        ),
+        # ``npm set //host/:_auth v`` — the legacy short form of
+        # ``npm config set`` drops the ``config`` verb; the value
+        # is whatever an auth-shaped property binds.
+        _rx(
+            r"(?i)\bnpm[ \t]+set[ \t]+"
+            r"\S*(?:key|secret|token|pass\w*|auth)\S*[ \t]+"
+            r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
+        ),
+        # ``kubectl create secret --from-literal=k=v`` — the key
+        # name is arbitrary, the value is always a secret.
+        _rx(
+            r"(?i)--from-literal=[\w.-]+=([^\s\\|&;\"'`]+)"
         ),
         # Windows ``net user <name> <password>`` — the password is a
         # bare positional; ``(?!/)`` keeps ``/add``-style switches
@@ -574,6 +601,19 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
         _rx(
             r"(?i)\bnet(?:\.exe)?[ \t]+user[ \t]+\S+[ \t]+"
             r"(?!/)((?:\\.|[^\s\\|&;])+)"
+        ),
+        # ``rabbitmqctl add_user <name> <password>`` — second bare
+        # positional is the password.
+        _rx(
+            r"\brabbitmqctl[ \t]+add_user[ \t]+\S+[ \t]+"
+            r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
+        ),
+        # ``printf 'NAME=%s' value`` — the format names the bind
+        # and the first argument carries the secret.
+        _rx(
+            r"\bprintf[ \t]+[\"'][^\"'\n]*" + ENV_NAME_PATTERN +
+            r"[ \t]*=[ \t]*%[a-z][\"'][ \t]+"
+            r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
         ),
         # Erlang/Elixir config tuple — ``{password, "v"}`` — the bare
         # atom is the credential name; plain ``key`` is too generic
@@ -641,7 +681,7 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
         # ``net use`` password positional — either side of the
         # ``/user:`` flag; a ``/``-led token is another flag.
         _rx(
-            r"(?i)\bnet[ \t]+use[ \t]+(?:[\w*]:[ \t]+)?\\\\\S+[ \t]+"
+            r"(?i)\bnet[ \t]+use[ \t]+(?:[\w*]:?[ \t]+)?\\\\\S+[ \t]+"
             r"(?:/u(?:ser)?:[^\s]+[ \t]+)?(?!/)"
             r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
         ),

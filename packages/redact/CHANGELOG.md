@@ -454,6 +454,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `olcRootPW`) and mail-rc (`password pw`) arms treat `;` as
   literal password content — `requirepass hunter;2` masks `hunter;2`
   whole instead of leaking the `;2` tail.
+- More credential carriers (devin-state#92): single-dash long flags
+  (`boundary -password`, `vault -token`, `dsmod`/`dsadd -pwd`,
+  PowerShell `-Password`) via a `-flag` arm that keeps bundled flags
+  like `gcc -pass-exit-codes` out; `kubectl --from-literal=k=v`
+  with an arbitrary key name; `npm set //host/:_auth` short form;
+  `rabbitmqctl add_user` positional; `printf 'NAME=%s' v` (the
+  argument, not the format placeholder); and `net use *` with the
+  bare-asterisk drive form.
 
 ## [0.2.5] - 2026-10-23
 

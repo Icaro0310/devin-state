@@ -2448,3 +2448,54 @@ def test_review_round_semicolon_config_vs_shell():
     assert findings and "a;2" not in new
     new, findings = redact_text("password hunter;2", file=".msmtprc")
     assert findings and "hunter" not in new
+
+
+def test_review_round_single_dash_and_positional_carriers():
+    """Single-dash long flags (Go/Windows tools), arbitrary-key
+    ``--from-literal``, ``rabbitmqctl add_user`` and printf-arg
+    binds all mask their secrets."""
+
+    # Go-style single-dash long flags + Windows ``-pwd``.
+    for s, f in [
+        ('dsmod user "CN=x" -pwd hunter2', "x.ps1"),
+        ('dsadd user "CN=x" -pwd hunter2', "x.ps1"),
+        ("boundary authenticate password -login-name u "
+         "-password hunter2", "x.sh"),
+        ("vault login -token=hunter2", "x.sh"),
+        ("nomad login -token hunter2", "x.sh"),
+    ]:
+        new, findings = redact_text(s, file=f)
+        assert findings and "hunter2" not in new, s
+
+    # Negatives: bundled flags and non-credential properties.
+    for s, f in [
+        ("gcc -pass-exit-codes -O2 x.c", "x.sh"),
+        ("npm set registry https://x", "x.sh"),
+        ("rabbitmqctl list_users", "x.sh"),
+        ('printf "%s is ok" hello', "x.sh"),
+        ("net use \\\\s\\x /persistent:yes", "x.bat"),
+    ]:
+        new, findings = redact_text(s, file=f)
+        assert findings == [] and new == s, s
+
+    # ``--from-literal=k=v`` — arbitrary key name, always secret.
+    new, findings = redact_text(
+        "kubectl create secret generic s --from-literal=k=hunter2",
+        file="s.sh")
+    assert findings and "hunter2" not in new
+    new, findings = redact_text(
+        "kubectl create secret generic s "
+        "--from-literal=a=x --from-literal=k=hunter2", file="s.sh")
+    assert "hunter2" not in new and "=x" not in new.split("x=")[0]
+
+    # Positional + printf-arg carriers.
+    new, findings = redact_text(
+        "rabbitmqctl add_user admin hunter2", file="s.sh")
+    assert findings and "hunter2" not in new
+    new, findings = redact_text(
+        'printf "API_KEY=%s" hunter2 >> .env', file="s.sh")
+    assert "hunter2" not in new
+    new, findings = redact_text(
+        "net use * \\\\s\\x hunter2 /user:u", file="x.bat")
+    assert findings and "hunter2" not in new
+    assert "/user:u" in new
