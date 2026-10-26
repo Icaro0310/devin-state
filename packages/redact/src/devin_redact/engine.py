@@ -36,6 +36,7 @@ from .patterns import (
     GUARD_EXEMPT_PATTERNS,
     PATTERNS,
     SECRET_CATEGORIES,
+    SUBMASK_PATTERNS,
     pattern_name,
     sensitive_match,
 )
@@ -612,6 +613,10 @@ class _ShiftedMatch:
         self._delta = delta
 
     @property
+    def re(self) -> re.Pattern[str]:
+        return self._m.re
+
+    @property
     def lastindex(self) -> int | None:
         return self._m.lastindex
 
@@ -948,6 +953,29 @@ def redact_text(
             whole = m.group(0)
             start, end = m.span(0)
             if m.lastindex:
+                sub = SUBMASK_PATTERNS.get(m.re)
+                if sub is not None:
+                    # Run-capture arm — group 1 spans the whole
+                    # argument run but only the secret-bearing
+                    # tokens inside it mask. Intervening flags
+                    # (``kubectl --dry-run=client`` between two
+                    # literals) survive untouched.
+                    g_start, g_end = m.span(1)
+                    for sm in sub.finditer(text[g_start:g_end]):
+                        sv = (
+                            sm.group(1) if sm.lastindex
+                            else sm.group(0)
+                        )
+                        candidates.append(
+                            (
+                                g_start + sm.start(),
+                                g_start + sm.end(),
+                                _tag(sv),
+                                category,
+                                _fingerprint(sv),
+                            )
+                        )
+                    continue
                 # The arm captured the sensitive token — group 1 —
                 # inside wider context (``.netrc``'s
                 # ``machine … password p``, a CLI flag's value).

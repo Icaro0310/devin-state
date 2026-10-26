@@ -150,6 +150,34 @@ _MAILPASS_RX = _rx(
     r"|(?:\\.|[^\s\\#])+)"
 )
 
+# One shell word — a run of non-space characters that may embed
+# quoted segments (``k="v w"``) or backslash escapes (``a\ b``).
+# Each branch is disjoint on its first character so a token run
+# (``(?:[ \t]+_SHWORD+)+``) consumes input linearly with no
+# repartitioning — the CodeQL-safe shape for argument tails.
+_SHWORD = (
+    r"(?:\\.|\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'"
+    r"|[^\s|&;\"'\\])"
+)
+
+# ``kubectl create secret … --from-literal=k=v`` — group 1 spans the
+# whole argument tail (secret name, ``--type``, other flags). The
+# engine re-scans that capture with ``_KUBECTL_LITERAL_RX`` and masks
+# only the literal tokens, so an option between two literals
+# (``--dry-run=client``) survives (``SUBMASK_PATTERNS``). The
+# lookahead proves a literal exists inside the same command —
+# ``create configmap`` literals stay ordinary data — and every gap
+# tokenizes as ``[ \t]+`` + word so the arms stay linear.
+_KUBECTL_SECRET_RX = _rx(
+    r"(?i)\bkubectl\b(?:[ \t]+" + _SHWORD + r"+)*?[ \t]+create[ \t]+"
+    r"secret\b(?=[^|&;\n]*--from-literal=)"
+    r"((?:[ \t]+" + _SHWORD + r"+)+)"
+)
+_KUBECTL_LITERAL_RX = re.compile(
+    r"--from-literal=[\w.-]+="
+    r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
+)
+
 PATTERNS: dict[str, list[re.Pattern[str]]] = {
     # --- secrets -------------------------------------------------------
     "api_key": [
@@ -590,25 +618,11 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
             r"\S*(?:key|secret|token|pass\w*|auth)\S*[ \t]+"
             r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
         ),
-        # ``kubectl create secret --from-literal=k=v`` — every
-        # literal under ``create secret`` is secret material.
-        # Global flags may sit between ``kubectl`` and ``create``
-        # (``kubectl --context=x -n ns create secret``), the gaps
-        # stay inside one shell command (no ``;|&`` crossing into a
-        # later ``configmap``), and the capture spans separated
-        # literals too — ``--from-literal=a=x --type=O
-        # --from-literal=k=v`` masks both literals even though the
-        # intervening flag is absorbed into the tag.
-        _rx(
-            r"(?i)\bkubectl\b(?:[ \t]+--?[^\s|&;=]+"
-            r"(?:[ \t=]+(?!-)[^\s|&;]+)?)*?[ \t]+create[ \t]+"
-            r"secret\b[^\n|&;]*?"
-            r"((?:[ \t]+--from-literal=[\w.-]+=(?:\"(?:\\.|[^\"\\\r\n])*\""
-            r"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+))+"
-            r"(?:[^\n|&;]*?--from-literal=[\w.-]+="
-            r"(?:\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'"
-            r"|(?:\\.|[^\s\\|&;])+))*)"
-        ),
+        # ``kubectl create secret --from-literal=k=v`` — module-level
+        # constant; see ``_KUBECTL_SECRET_RX`` for the scoping, the
+        # same-command bounds, and the submask contract that keeps
+        # intervening flags intact.
+        _KUBECTL_SECRET_RX,
         # Windows ``net user <name> <password>`` — the password is a
         # bare positional; ``(?!/)`` keeps ``/add``-style switches
         # out.
@@ -631,14 +645,18 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
         # the whole argument run masks so a second credential
         # placeholder (``'K1=%s K2=%s' a b``) or an earlier
         # non-credential conversion (``'x %s KEY=%s' a b``) cannot
-        # leave the secret argument visible.
+        # leave the secret argument visible. The run stops before
+        # shell redirection and comments — ``>> .env``, ``< in``,
+        # ``2>log`` and ``# note`` are not arguments.
         _rx(
             r"\bprintf[ \t]+[\"'][^\"'\n]*" + ENV_NAME_PATTERN +
             r"[ \t]*=[ \t]*%[a-z][^\"'\n]*[\"'][ \t]+"
-            r"((?:\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'"
-            r"|(?:\\.|[^\s\\|&;])+)"
-            r"(?:[ \t]+(?:\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'"
-            r"|(?:\\.|[^\s\\|&;])+))*)"
+            r"((?![<>#]|\d+>)"
+            r"(?:\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'"
+            r"|(?:\\.|[^\s\\|&;<>])+)"
+            r"(?:[ \t]+(?![<>#]|\d+>)"
+            r"(?:\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'"
+            r"|(?:\\.|[^\s\\|&;<>])+))*)"
         ),
         # SNMPv3 auth/privacy passphrases — ``-A``/``-X`` carry
         # secrets while lowercase ``-a``/``-x`` pick the protocol.
@@ -722,20 +740,23 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
             r"|vault-ca-cert|vault-ca-path|vault-client-cert"
             r"|vault-client-key|vault-namespace"
             r"|vault-tls-server-name|vault-wrap-ttl))\b[ \t=]+"
-            r"(?!-)[^\s|&;]+"
+            r"(?:\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'"
+            r"|(?!-)[^\s|&;]+)"
             r"|-{1,2}(?!-?(?:n|p|name|stdin-name|vault-id"
             r"|encrypt-vault-id|new-vault-id|vault-password-file"
             r"|vault-ca-cert|vault-ca-path|vault-client-cert"
             r"|vault-client-key|vault-namespace"
-            r"|vault-tls-server-name|vault-wrap-ttl)\b)[\w-]+))*"
+            r"|vault-tls-server-name|vault-wrap-ttl)\b)[\w-]+"
+            r"(?:=[^\s|&;]*)?))*"
             r"[ \t]+(?!-)"
             r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
         ),
         _rx(
             r"\b(?:vault|bao|openbao)[ \t]+login\b"
             r"(?:[ \t]+(?:(?:--?(?:method|path))\b[ \t=]+"
-            r"(?!-)[^\s|&;]+"
-            r"|-{1,2}(?!-?(?:method|path)\b)[\w-]+))*"
+            r"(?:\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'"
+            r"|(?!-)[^\s|&;]+)"
+            r"|-{1,2}(?!-?(?:method|path)\b)[\w-]+(?:=[^\s|&;]*)?))*"
             r"[ \t]+(?!-)"
             r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
         ),
@@ -751,17 +772,29 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
             r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
         ),
         # ``smbclient //share password`` — the password is a bare
-        # positional right after the share path.
+        # positional right after the share path. Options may sit
+        # before the share (``-U alice``), each optionally consuming
+        # its argument (a ``//``-prefixed token is never an option
+        # value, so the share cannot be swallowed), and the share
+        # itself may be quoted.
         _rx(
-            r"\bsmbclient[ \t]+//[^\s|&;]+[ \t]+(?!-)"
+            r"\bsmbclient\b"
+            r"(?:[ \t]+-{1,2}[^\s|&;]+"
+            r"(?:[ \t=]+(?:\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'"
+            r"|(?!-|//)[^\s|&;]+))?)*"
+            r"[ \t]+(?:\"//(?:\\.|[^\"\\\r\n])*\"|'//(?:\\.|[^'\\\r\n])*'"
+            r"|//[^\s|&;]+)[ \t]+(?!-)"
             r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
         ),
         # ``conan remote login``/``conan user`` — ``-p`` is the
         # password (``-pr``/``--profile`` take a profile name). The
         # gap stays inside one shell command so a later ``ssh -p``
-        # after ``&&``/``;`` is not attributed to conan.
+        # after ``&&``/``;`` is not attributed to conan, but quoted
+        # arguments may carry those characters inside their spans.
         _rx(
-            r"\bconan\b[^\n|&;]*?[ \t]-p[ \t=]*(?!-[-\w]|r\b)"
+            r"\bconan\b(?:\"(?:\\.|[^\"\\\r\n])*\""
+            r"|'(?:\\.|[^'\\\r\n])*'|[^\n|&;\"'])*?"
+            r"[ \t]-p[ \t=]*(?!-[-\w]|r\b)"
             r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
         ),
         # ``vault|bao|openbao write path k=v`` — everything after the
@@ -1369,6 +1402,14 @@ FILE_GATED_PATTERNS: dict[re.Pattern[str], tuple[str, ...]] = {
 GUARD_EXEMPT_PATTERNS: frozenset[re.Pattern[str]] = frozenset(
     {_CRED_TUPLE_RX, _LDAP_ROOTPW_RX}
 )
+
+# Run-capture arms — group 1 spans a whole argument run where only
+# some tokens carry secrets. ``redact_text`` re-scans the capture
+# with the mapped sub-pattern and masks each sub-match instead of
+# the run, so intervening flags survive (``kubectl --dry-run``).
+SUBMASK_PATTERNS: dict[re.Pattern[str], re.Pattern[str]] = {
+    _KUBECTL_SECRET_RX: _KUBECTL_LITERAL_RX,
+}
 
 SECRET_CATEGORIES = frozenset(
     {

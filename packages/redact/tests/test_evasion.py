@@ -2714,3 +2714,85 @@ def test_evasion_positional_secret_tools():
     assert findings and "hunter2" not in new and "-U u" in new
     new, findings = redact_text("smbclient //h/s -U u", file="s.sh")
     assert not findings
+
+
+def test_review_round_kubectl_submask_and_printf_redirection():
+    """kubectl literals mask individually (flags survive); the
+    printf argument run stops before shell redirection."""
+
+    # An option between two literals survives; both literals mask.
+    new, findings = redact_text(
+        "kubectl create secret s --from-literal=a=x "
+        "--dry-run=client --from-literal=b=hunter2", file="s.sh")
+    assert findings
+    assert "a=x" not in new and "b=hunter2" not in new
+    assert "--dry-run=client" in new and "create secret s" in new
+
+    # Global flags before ``create``, quoted literal value, and
+    # configmap literals stay plain data.
+    new, findings = redact_text(
+        "kubectl --context=prod -n ns create secret s "
+        "--from-literal=k=hunter2", file="s.sh")
+    assert findings and "k=hunter2" not in new
+    new, findings = redact_text(
+        'kubectl create secret s --from-literal=k="hu nter"',
+        file="s.sh")
+    assert findings and "hu nter" not in new
+    new, findings = redact_text(
+        "kubectl create configmap cm --from-literal=REGION=us-east-1",
+        file="s.sh")
+    assert "--from-literal=REGION=us-east-1" in new
+
+    # printf: the run ends at redirection and comments.
+    new, findings = redact_text(
+        "printf 'API_KEY=%s' hunter2 >> .env", file="s.sh")
+    assert "hunter2" not in new and ">> .env" in new
+    new, findings = redact_text(
+        "printf 'API_KEY=%s' hunter2 2>log", file="s.sh")
+    assert "hunter2" not in new and "2>log" in new
+    new, findings = redact_text(
+        "printf 'API_KEY=%s' hunter2 # note", file="s.sh")
+    assert "hunter2" not in new and "# note" in new
+    new, findings = redact_text(
+        "printf 'API_KEY=%s TOKEN=%s' hunter2 s3cr3t >> .env",
+        file="s.sh")
+    assert "hunter2" not in new and "s3cr3t" not in new
+    assert ">> .env" in new
+
+
+def test_review_round_quoted_option_args_and_shares():
+    """Quoted option arguments and ``-flag=value`` forms do not
+    hide positional secrets; the conan gap skips quoted text."""
+
+    # Quoted flag argument keeps its value, positional still masks.
+    new, findings = redact_text(
+        'ansible-vault encrypt_string --name "two words" hunter2',
+        file="s.sh")
+    assert "hunter2" not in new and '"two words"' in new
+    new, findings = redact_text(
+        'vault login -path "a b" hunter2', file="s.sh")
+    assert "hunter2" not in new
+
+    # ``-format=json`` is a flag, not a token.
+    new, findings = redact_text(
+        "vault login -format=json hunter2", file="s.sh")
+    assert findings and "hunter2" not in new
+
+    # conan: quoted argument containing ``&``/``;`` cannot hide -p.
+    new, findings = redact_text(
+        'conan remote login r u "a&b" -p hunter2', file="s.sh")
+    assert "hunter2" not in new
+    new, findings = redact_text(
+        "conan install . && ssh -p 2222 host", file="s.sh")
+    assert "2222" in new
+
+    # smbclient: quoted share, options before the share, ``-N``.
+    new, findings = redact_text(
+        'smbclient "//h/s" hunter2', file="s.sh")
+    assert "hunter2" not in new
+    new, findings = redact_text(
+        "smbclient -U alice //h/s hunter2", file="s.sh")
+    assert "hunter2" not in new and "-U alice" in new
+    new, findings = redact_text(
+        "smbclient -N //h/s hunter2", file="s.sh")
+    assert "hunter2" not in new

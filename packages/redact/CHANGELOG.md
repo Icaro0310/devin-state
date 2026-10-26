@@ -527,6 +527,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   value is not mistaken for the secret), `vault`/`bao`/`openbao`
   `login` tokens (with `-method`/`-path` flag args), `ssh-keygen`
   `-P`/`-N` passphrases, and `smbclient //share password`.
+- `kubectl create secret` literals mask individually through a
+  `SUBMASK_PATTERNS` engine hook (devin-state#92): each
+  `--from-literal=k=v` gets its own tag so intervening flags
+  (`--dry-run=client`, `--type`, `-n ns`) are preserved instead of
+  being absorbed into one redaction span, global flags before
+  `create` no longer break the anchor, and `create configmap`
+  literals stay plain data. The rewritten pattern is linear-time —
+  no atomic groups, so Python 3.10 stays supported.
+- `printf`/`echo`-style argument runs stop before shell
+  redirection (`>`, `>>`, `<`, `2>`…) and `#` comments, so
+  `printf 'K=%s' v >> .env` masks `v` without eating the
+  redirect (devin-state#92).
+- Quoted option arguments and attached `=` forms no longer hide
+  positional secrets (devin-state#92): `ansible-vault --name
+  "two words"`, `vault login -path "a b"` and `-format=json`,
+  `conan remote login … "a&b" -p x` (a quoted `&|`/`;` can no
+  longer stop the gap mid-command), and `smbclient` with quoted
+  `//share` or options before the share (`-U alice`, `-N`).
 
 ## [0.2.5] - 2026-10-23
 
