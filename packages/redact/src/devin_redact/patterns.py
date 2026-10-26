@@ -62,7 +62,7 @@ ENV_NAME_PATTERN = (
     # name or after an underscore — ``db_pass`` and ``ftp_pwd`` are
     # credentials but ``compass`` and ``bypass`` are not.
     r"(?:[A-Za-z_][A-Za-z0-9_]*_)?"
-    r"(?i:pass|pwd|pw|passphrase|passcode|userpass)[0-9]*s?"
+    r"(?i:pass|pwd|pw|sshpass|passphrase|passcode|userpass)[0-9]*s?"
     r")"
 )
 
@@ -482,8 +482,14 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
             r"\b(?:mysql|mysqldump|mariadb|mysqladmin|mysqlcheck)"
             r"\w*\b[^\n]*?\s-p(\S+)"
         ),
-        # htpasswd batch mode — ``-b file user pass``.
-        _rx(r"(?i)\bhtpasswd[ \t]+-b\w*[ \t]+\S+[ \t]+\S+[ \t]+(\S+)"),
+        # htpasswd/mosquitto_passwd batch mode — ``-b file user
+        # pass``, combined flag clusters (``-cb``, ``-mb``) and
+        # display mode (``-nb user pass``); 1–3 positionals follow
+        # the flags, the password is last.
+        _rx(
+            r"(?i)\b(?:htpasswd|mosquitto_passwd)[ \t]+-\w*b\w*"
+            r"(?:[ \t]+\S+){1,3}[ \t]+([^\s|&;]+)"
+        ),
         # Long option carrying the secret as the next argument —
         # ``--password pw``, ``--http-password pw``, ``--api-key k``,
         # ``--client-secret s``, ``--auth-token t``. The flag must
@@ -725,6 +731,49 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
             r"[\w-]*(?:key|token|secret|auth|password|passwd)"
             r"[\w-]*[ \t]+"
             r"(\"(?:\\.|[^\"\\\r\n])*?\"|'(?:\\.|[^'\\\r\n])*?')"
+        ),
+        # HAProxy ``stats auth user:pass``/``stats admin`` — a config
+        # directive whose ``user:pass`` pair is a credential.
+        _rx(
+            r"(?im)^[ \t]*stats[ \t]+(?:auth|admin)[ \t]+\S+:"
+            r"([^\s,;\"']+)"
+        ),
+        # CMS config writers — ``wp config set NAME v``,
+        # ``wp option add|update NAME v``, ``drush config:set`` —
+        # the option name carries the credential word and the value
+        # is a bare positional.
+        _rx(
+            r"(?i)\b(?:wp[ \t]+config[ \t]+set|wp[ \t]+option[ \t]+"
+            r"(?:add|update)|drush[ \t]+(?:config:set|config-set|"
+            r"cset|state:set))[ \t]+" + ENV_NAME_PATTERN +
+            r"[ \t]+(\"[^\"\r\n]*\"|'[^'\r\n]*'|[^\s,;]+)"
+        ),
+        # KV stores — ``consul kv put``, ``vault kv put``,
+        # ``etcdctl put`` — when the key path itself names a
+        # credential (a ``secret/`` mount path counts: its value is
+        # secret by convention).
+        _rx(
+            r"(?i)\b(?:kv[ \t]+put|etcdctl[ \t]+put)[ \t]+"
+            r"\S*(?:key|secret|token|password|passwd|pw|credential"
+            r"|auth)\S*[ \t]+"
+            r"(\"[^\"\r\n]*\"|'[^'\r\n]*'|[^\s,;]+)"
+        ),
+        # Crypt-style password hashes — ``$apr1$``, ``$2y$`` bcrypt,
+        # ``$5$``/``$6$`` sha-crypt, ``{SHA}``/``{SSHA}`` and the
+        # LDAP/dovecot scheme set. The scheme marker is unambiguous
+        # so the token flags wherever it appears. Group 1 only.
+        _rx(
+            r"(\$(?:apr1|1|2a|2b|2x|2y|5|6)\$[A-Za-z0-9./$=,]+"
+            r"|\{(?i:sha|ssha|md5|smd5|crypt|blf-crypt|argon2"
+            r"|pbkdf2|scram|ssha256|ssha512|sha256|sha512)\}"
+            r"[^\s\"'<>\],};)]+)"
+        ),
+        # SMTP/IMAP ``AUTH PLAIN <b64>`` — tagged
+        # ``a1 AUTHENTICATE PLAIN`` too — the blob decodes to
+        # ``\0user\0pass``.
+        _rx(
+            r"(?im)^[ \t]*(?:\w+[ \t]+)?AUTH(?:ENTICATE)?[ \t]+"
+            r"PLAIN[ \t]+([A-Za-z0-9+/=]{10,})[ \t]*$"
         ),
         # Java ``.properties`` whitespace separator — ``api_key hunter2``
         # is a legal properties line but plain prose elsewhere, so this

@@ -1949,3 +1949,60 @@ def test_xml_element_text_and_ldap_rootpw():
         new, findings = redact_text(src, file="s.conf")
         assert "hunter2" not in new and "aHVudGVy" not in new, src
         assert findings, src
+
+
+def test_crypt_hashes_and_authpair_carriers():
+    """Crypt-scheme password hashes (``$apr1$``, ``$6$``, ``$2y$``,
+    ``{SHA}``/``{SSHA}``) flag wherever they appear — in
+    ``.htpasswd`` lines, traefik ``users`` lists, or bare."""
+    for src in (
+        'app:$apr1$H6uskkkW$IgXLP6ewTrSuBkTrqE8vw/',
+        'app:{SHA}fEqNCco3Yq9h5ZUglq3ABZxXVEM=',
+        'root:$6$saltsalt$abcdef1234567890abcdef1234567890ab',
+        'users = ["admin:$apr1$abc$def"]',
+        'user:{SSHA}aGVsbG93b3JsZA==',
+    ):
+        _, findings = redact_text(src, file="x.htpasswd")
+        assert findings, src
+
+
+def test_password_file_tools_and_config_writers():
+    """``htpasswd``/``mosquitto_passwd`` batch mode, CMS config
+    writers and KV stores flag the positional secret."""
+    for src in (
+        'htpasswd -b f.txt admin hunter2',
+        'htpasswd -cb f.txt admin hunter2',
+        'htpasswd -nb admin hunter2',
+        'mosquitto_passwd -b f.txt admin hunter2',
+        'wp config set DB_PASSWORD hunter2',
+        'wp option update admin_password hunter2',
+        'consul kv put config/db_password hunter2',
+        'vault kv put secret/db password=hunter2',
+        'stats auth admin:hunter2',
+    ):
+        new, findings = redact_text(src, file="s.sh")
+        assert findings, src
+        assert "hunter2" not in new, src
+    for src in (
+        'htpasswd -n admin',
+        'wp config set table_prefix wp_',
+        'etcdctl put foo 1',
+        'stats admin if TRUE',
+    ):
+        _, findings = redact_text(src, file="s.sh")
+        assert findings == [], src
+
+
+def test_sshpass_env_and_smtp_auth_plain():
+    """``SSHPASS=x`` (no underscore between SSH and PASS) and
+    SMTP/IMAP ``AUTH PLAIN`` blobs flag."""
+    new, findings = redact_text(
+        "SSHPASS=hunter2 sshpass -e ssh h", file="s.sh")
+    assert findings and "hunter2" not in new
+    for src in (
+        "AUTH PLAIN AHVzZXIAaHVudGVyMg==",
+        "a1 AUTHENTICATE PLAIN AHVzZXIAaHVudGVyMg==",
+    ):
+        new, findings = redact_text(src, file="s.log")
+        assert findings, src
+        assert "AHVz" not in new, src

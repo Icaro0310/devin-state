@@ -183,6 +183,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `<password>x</password>`, `<db.password>x</db.password>` —
   while `<key>` name elements stay out so plist pairs and
   generic markup do not false-positive (devin-state#92).
+- Crypt-scheme password hashes flag wherever they appear —
+  `$apr1$`, `$2y$` bcrypt, `$5$`/`$6$` sha-crypt and
+  `{SHA}`/`{SSHA}`/LDAP-dovecot scheme prefixes — covering
+  `.htpasswd` lines, traefik `users` lists and bare
+  `/etc/shadow`-style rows (devin-state#92).
+- Positional secret carriers: `htpasswd`/`mosquitto_passwd`
+  batch mode (`-b`, `-cb`, `-nb`), `wp config set`/`wp
+  option update`/`drush config:set`, `consul kv put`/`vault
+  kv put`/`etcdctl put` under a credential-named key path,
+  HAProxy `stats auth user:pass`, `SSHPASS=x` (no underscore
+  before `PASS`), and SMTP/IMAP `AUTH PLAIN <b64>`
+  (devin-state#92).
 - Python literal prefixes survive on plain assignments too —
   `api_key = b"v"` (and `rb`/`f`/`u`) re-emits `b"<tag>"`
   instead of an unquoted tag that cannot parse — and YAML
