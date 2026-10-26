@@ -373,6 +373,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   -t`, `net use` password positionals (both `/user:` orders), and
   Travis `secure:` blobs with a length floor so `secure: true`
   stays prose (devin-state#92).
+- Oracle-style `user/password@service` credspecs (`sqlplus`,
+  `sqlldr`, `sqlcl`, `exp`/`imp`/`expdp`/`impdp`, `rman`,
+  `tnsping`, `orapki`) mask the password between the first `/` and
+  the `@` — a greedy tail previously landed on the service name —
+  and intervening positionals (`rman target u/p@h`) still match
+  (devin-state#92).
+- Positional/flagged credential carriers: `cf set-env APP NAME v`,
+  `netlify env:set NAME v`, `render env:set NAME v`, `pulumi
+  config set [--secret] NAME v`, `racadm`/`idracadm -p`,
+  `radtest`'s user-password (arg2) and NAS shared secret (arg5),
+  and kerberos `kadmin -w`/`-pw` including inside a quoted `-q`
+  subcommand (devin-state#92).
+- Mail-client rc files — `password x` / `password "x"` is a
+  directive in `msmtprc`/`esmtprc`/`fetchmailrc` (including
+  fetchmail's mid-line `poll … password "x"`) but prose elsewhere,
+  so the arm is gated to those filenames (devin-state#92).
 
 ## [0.2.5] - 2026-10-23
 

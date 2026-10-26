@@ -2135,3 +2135,66 @@ def test_review_round_gh_rclone_security():
     assert findings
     assert "hunter2" not in new and "abc123" not in new
     assert "region us" in new
+
+
+def test_oracle_credspec_and_positional_tools():
+    """Oracle ``user/pass@service`` masks the password (not the
+    service), quoted credspecs keep their quotes, ``/nolog`` stays
+    clean, and kerberos/radius/racadm positional carriers mask."""
+    for src in (
+        "sqlplus admin/hunter2@dbhost:1521/svc",
+        'sqlplus "admin/hunter2"@db',
+        "rman target admin/hunter2@db",
+        "impdp admin/hunter2@db directory=x",
+        "racadm -r h -u admin -p hunter2",
+        'kadmin.local -q "addprinc -pw hunter2 admin"',
+    ):
+        new, findings = redact_text(src, file="s.sh")
+        assert findings and "hunter2" not in new, src
+    assert "svc" in redact_text(
+        "sqlplus admin/hunter2@dbhost:1521/svc", file="s.sh")[0]
+    assert "@db" in redact_text(
+        'sqlplus "admin/hunter2"@db', file="s.sh")[0]
+    new, findings = redact_text("sqlplus /nolog", file="s.sh")
+    assert findings == [] and "/nolog" in new
+    # radtest: arg2 is the user password, arg5 the NAS secret.
+    new, findings = redact_text(
+        "radtest admin hunter2 localhost 0 sharedsecret",
+        file="s.sh")
+    assert len(findings) == 2
+    assert "hunter2" not in new and "sharedsecret" not in new
+
+
+def test_env_setter_and_pulumi_positional_secrets():
+    """``cf set-env APP NAME v``, ``netlify env:set NAME v`` and
+    ``pulumi config set [--secret] NAME v`` carry the secret as a
+    bare positional after the credential-shaped name."""
+    for src in (
+        "cf set-env myapp API_KEY hunter2",
+        "netlify env:set API_KEY hunter2",
+        'netlify env:set API_KEY "hun ter2"',
+        "pulumi config set api_key hunter2",
+        "pulumi config set --secret api_key hunter2",
+    ):
+        new, findings = redact_text(src, file="s.sh")
+        assert findings, src
+        assert "hunter2" not in new and "hun ter2" not in new, src
+
+
+def test_mail_rc_password_directive_gated():
+    """``password x`` is a mail-client directive in msmtprc,
+    esmtprc and fetchmailrc but plain prose anywhere else, so the
+    arm is file-gated."""
+    for src, fname in (
+        ("password hunter2", ".msmtprc"),
+        ("password hunter2", "msmtprc"),
+        ("password hunter2", ".fetchmailrc"),
+        ('poll h protocol imap user u password "hunter2"',
+         ".fetchmailrc"),
+        ("password hunter2", "esmtprc"),
+    ):
+        new, findings = redact_text(src, file=fname)
+        assert findings and "hunter2" not in new, (src, fname)
+    for src in ("password hunter2", "the password must be rotated"):
+        new, findings = redact_text(src, file="notes.txt")
+        assert findings == [] and new == src, src

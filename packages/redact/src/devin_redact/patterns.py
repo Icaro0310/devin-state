@@ -128,6 +128,16 @@ _PGPASS_RX = _rx(
     r"(?::(?:\\.|[^:\r\n])*){3}:((?:\\.|[^\s:])+)"
 )
 
+# Mail-client rc files — ``password x`` / ``password "x"`` is a
+# directive in msmtprc/esmtprc/fetchmailrc but plain prose
+# elsewhere, so the arm is gated to those filenames
+# (``FILE_GATED_PATTERNS``). Unanchored: fetchmailrc carries
+# ``poll h user u password "x"`` mid-line.
+_MAILPASS_RX = _rx(
+    r"(?i)\bpassword[ \t]+"
+    r"(\"[^\"\r\n]*\"|'[^'\r\n]*'|[^\s;#]+)"
+)
+
 PATTERNS: dict[str, list[re.Pattern[str]]] = {
     # --- secrets -------------------------------------------------------
     "api_key": [
@@ -624,9 +634,14 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
             r"(?i)\blftp\b[^\n]*?[ \t]-u[ \t]*[\"']?\S+,"
             r"([^\"',\s]+)"
         ),
+        # Oracle-style ``tool user/password@service`` — the
+        # password sits between the first ``/`` and the ``@`` (or
+        # whitespace/end); a greedy ``\S+`` would land on the
+        # service name instead.
         _rx(
-            r"(?i)\b(?:sqlplus|sqlldr|exp|expdp|imp|impdp|rman)"
-            r"\s+\S+/(\S+)"
+            r"(?i)\b(?:sqlplus|sqlldr|sqlcl|exp|expdp|imp|impdp"
+            r"|rman|tnsping|orapki)\b(?:[ \t]+\S+)*?"
+            r"[ \t]+\S+?/([^\s/@\"']+)(?=[@\s\"']|$)"
         ),
         # ``openssl passwd`` takes the plaintext positionally after
         # the algorithm flag — a ``-``-led token is a flag, not the
@@ -792,9 +807,38 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
         # a port spec — its ``--pass`` is the long-flag arm).
         _rx(
             r"\b(?i:hydra|medusa|crackmapexec|cme|nxc|netexec"
-            r"|evil-winrm|smbmap|enum4linux(?:-ng)?|psexec)\b"
+            r"|evil-winrm|smbmap|enum4linux(?:-ng)?|psexec"
+            r"|racadm|idracadm?)\b"
             r"[^\n]*?[ \t]-p[ \t=]*"
             r"(\"[^\"\r\n]*\"|'[^'\r\n]*'|[^\s|&;]+)"
+        ),
+        # ``radtest user pass host port secret`` — arg2 is the user
+        # password, arg5 the NAS shared secret; two disjoint arms.
+        _rx(r"\bradtest[ \t]+\S+[ \t]+(\S+)"),
+        _rx(r"\bradtest(?:[ \t]+\S+){4}[ \t]+(\S+)"),
+        # Kerberos ``kadmin -w pass`` / ``kadmin.local -q
+        # "addprinc -pw pass u"`` — ``-w``/``-pw`` carry the
+        # password, including inside the quoted subcommand.
+        _rx(
+            r"(?i)\bkadmin(?:\.local)?\b[^\n]*?[ \t]"
+            r"-(?:pw|w)[ \t=]*"
+            r"(\"[^\"\r\n]*\"|'[^'\r\n]*'|[^\s\"'|&;]+)"
+        ),
+        # ``pulumi config set [--secret] NAME v`` — the value is a
+        # bare positional; boolean/value flags may sit between the
+        # verb and the credential-shaped name.
+        _rx(
+            r"(?i)\bpulumi[ \t]+config[ \t]+set[ \t]+"
+            r"(?:--\w+(?:[ \t=]+\S+)?[ \t]+)*"
+            + ENV_NAME_PATTERN +
+            r"[ \t]+(\"[^\"\r\n]*\"|'[^'\r\n]*'|\S+)"
+        ),
+        # Space-separated env-setters — ``cf set-env APP NAME v``,
+        # ``netlify env:set NAME v``, ``render env:set NAME v``.
+        _rx(
+            r"(?i)\b(?:cf[ \t]+set-env[ \t]+\S+|netlify[ \t]+env:set"
+            r"|render[ \t]+env:set)[ \t]+" + ENV_NAME_PATTERN +
+            r"[ \t]+(\"[^\"\r\n]*\"|'[^'\r\n]*'|\S+)"
         ),
         # ``gh secret set NAME --body v``/``-b v`` — secret bodies
         # ride the body flag; ``gh variable set`` only when the
@@ -886,6 +930,10 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
             r"(\$ANSIBLE_VAULT;[0-9.]+;[A-Z0-9_]+"
             r"(?:(?:[ \t]*\r?\n)+[ \t]*[0-9a-fA-F]+)*)"
         ),
+        # ``password x`` directive in mail-client rc files —
+        # gated to msmtprc/esmtprc/fetchmailrc
+        # (``FILE_GATED_PATTERNS``).
+        _MAILPASS_RX,
         # Java ``.properties`` whitespace separator — ``api_key hunter2``
         # is a legal properties line but plain prose elsewhere, so this
         # arm only fires under a matching file extension (see
@@ -945,6 +993,7 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
 # ``.properties`` syntax but ordinary prose anywhere else.
 FILE_GATED_PATTERNS: dict[re.Pattern[str], tuple[str, ...]] = {
     PATTERNS["env_assignment"][-1]: (".properties", ".props"),
+    _MAILPASS_RX: ("msmtprc", "esmtprc", "fetchmailrc"),
     _PGPASS_RX: (".pgpass", "pgpass.conf"),
 }
 
