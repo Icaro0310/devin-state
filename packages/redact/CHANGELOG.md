@@ -567,6 +567,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `netlify env:set`/`render env:set`.
 - `nomad var put <path> k=v` masks the whole `k=v` run like the
   `vault write` arm (devin-state#92).
+- More space-separated setters (devin-state#92): `dotenv set`,
+  `railway variables set` join the credential-name-gated arm;
+  secret-store writes (`fly|flyctl secrets set`, `sst secrets
+  set`, `infisical secrets set`, `keybase secret set`) mask the
+  value whatever the name's shape.
 - kubectl literal boundaries (devin-state#92): a
   `--from-literal=` inside a quoted option
   (`--note="--from-literal=x"`) no longer masks mid-quote, an

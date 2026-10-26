@@ -1258,9 +1258,23 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
             r"(?i)\b(?:cf[ \t]+set-env[ \t]+\S+|netlify[ \t]+env:set"
             r"|render[ \t]+env:set"
             r"|hardhat[ \t]+vars[ \t]+set"
-            r"|sst[ \t]+secrets?[ \t]+set"
+            r"|dotenv[ \t]+set"
+            r"|railway[ \t]+variables?[ \t]+set"
             r"|arc[ \t]+env[ \t]+-e[ \t]+\S+)[ \t]+" + ENV_NAME_PATTERN +
             r"[ \t]+(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
+        ),
+        # Secret-store writes — every ``NAME value`` pair is secret
+        # material regardless of the name's shape: ``fly secrets
+        # set``, ``flyctl secrets set``, ``sst secrets set``,
+        # ``infisical secrets set``, ``keybase secret set``.
+        _rx(
+            r"(?i)\b(?:fly(?:ctl)?[ \t]+secrets?[ \t]+set"
+            r"|sst[ \t]+secrets?[ \t]+set"
+            r"|infisical[ \t]+secrets?[ \t]+set"
+            r"|keybase[ \t]+secret[ \t]+set)"
+            r"[ \t]+(?:\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'"
+            r"|\S+)[ \t]+"
+            r"(\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|(?:\\.|[^\s\\|&;])+)"
         ),
         # ``gh secret set NAME --body v``/``-b v`` — secret bodies
         # ride the body flag; ``gh variable set`` only when the

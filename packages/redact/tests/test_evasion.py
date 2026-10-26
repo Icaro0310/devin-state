@@ -2914,3 +2914,25 @@ def test_kubectl_literal_boundaries() -> None:
         "kubectl create secret s \\\n  --from-literal=b=hunter2",
         file="s.sh")
     assert "hunter2" not in new
+
+
+def test_secret_store_space_separated_setters() -> None:
+    """Secret-store writes mask the value whatever the name; plain
+    env-var setters still require a credential-shaped name."""
+    for cmd in (
+        "infisical secrets set API_KEY hunter2",
+        "infisical secrets set foo hunter2",
+        "fly secrets set DEBUG hunter2",
+        "flyctl secrets set API_KEY hunter2",
+        "sst secrets set API_KEY hunter2",
+        "keybase secret set K hunter2",
+        "fly secrets set 'MY KEY' hunter2",
+        "dotenv set API_KEY hunter2",
+        "railway variables set API_KEY hunter2",
+    ):
+        new, _f = redact_text(cmd, file="s.sh")
+        assert "hunter2" not in new, cmd
+    # A generic env setter with a non-credential name is not a
+    # secret carrier.
+    assert redact_text("dotenv set foo hunter2", file="s.sh")[1] == []
+    assert redact_text("fly secrets list", file="s.sh")[1] == []
