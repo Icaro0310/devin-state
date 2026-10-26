@@ -119,11 +119,13 @@ _LDAP_ROOTPW_RX = _rx(
 )
 
 # ``.pgpass`` five-field rows — ``host:port:db:user:password``;
-# escaped ``\:`` inside a field is part of the field. Gated to the
+# ``\:`` and ``\\`` escapes are field content, not separators, so
+# each field is a run of escapes-or-non-colons. Gated to the
 # filename via ``FILE_GATED_PATTERNS`` (the ext check is
 # ``endswith``-based so the dotfile basename matches).
 _PGPASS_RX = _rx(
-    r"(?im)^[ \t]*[^:\r\n]*(?::[^:\r\n]*){3}:([^\s:]+)"
+    r"(?im)^[ \t]*(?:\\.|[^:\r\n])*"
+    r"(?::(?:\\.|[^:\r\n])*){3}:((?:\\.|[^\s:])+)"
 )
 
 PATTERNS: dict[str, list[re.Pattern[str]]] = {
@@ -839,18 +841,19 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
         # positionals after a tool-scoped marker.
         _rx(
             r"(?i)\bcomposer[ \t]+config[ \t]+http-basic\S*[ \t]+"
-            r"\S+[ \t]+(\S+)"
+            r"(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|\S+)[ \t]+"
+            r"(\"[^\"\r\n]*\"|'[^'\r\n]*'|\S+)"
         ),
         _rx(
             r"(?i)\bjenkins-cli\b[^\n]*?[ \t]-auth(?:entication)?"
-            r"[ \t=]*\S+:(\S+)"
+            r"[ \t=]*(\"[^\"\r\n]+\"|'[^'\r\n]+'|\S+:\S+)"
         ),
         # Single-positional credential arguments —
         # ``cargo login <token>``, ``nuget setApiKey <key>``,
         # ``dotnet nuget push -k``-style bare tails.
         _rx(
             r"(?i)\b(?:cargo[ \t]+login|nuget[ \t]+setApiKey)[ \t]+"
-            r"([^\s|&;]+)"
+            r"(\"[^\"\r\n]*\"|'[^'\r\n]*'|[^\s|&;]+)"
         ),
         # Secret-store CLIs — ``az keyvault secret set --value``,
         # ``aws ssm put-parameter --value``, ``secretsmanager
@@ -867,14 +870,15 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
         # positional after the credential-named key.
         _rx(
             r"(?i)\bdoppler[ \t]+secrets[ \t]+set[ \t]+"
-            + ENV_NAME_PATTERN + r"[ \t]+(\S+)"
+            + ENV_NAME_PATTERN +
+            r"[ \t]+(\"[^\"\r\n]*\"|'[^'\r\n]*'|\S+)"
         ),
         # Ansible vault blob — ``$ANSIBLE_VAULT;1.1;AES256`` plus
         # the hex-only ciphertext lines under it (the body is the
         # offline-crackable secret).
         _rx(
             r"(\$ANSIBLE_VAULT;[0-9.]+;[A-Z0-9_]+"
-            r"(?:[ \t]*\r?\n[ \t]*[0-9a-fA-F]+)*)"
+            r"(?:(?:[ \t]*\r?\n)+[ \t]*[0-9a-fA-F]+)*)"
         ),
         # Java ``.properties`` whitespace separator — ``api_key hunter2``
         # is a legal properties line but plain prose elsewhere, so this

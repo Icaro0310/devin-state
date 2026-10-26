@@ -2079,3 +2079,32 @@ def test_admin_and_bruteforce_tool_flags():
     ):
         _, findings = redact_text(src, file="s.sh")
         assert findings == [], src
+
+
+def test_review_round_setx_pgpass_quoted_vault():
+    """Review fixes: ``setx`` keeps its command/name, ``.pgpass``
+    escaped colons stay inside fields, quoted CLI credentials with
+    spaces mask whole, and a blank line inside a vault blob does
+    not unmask the tail."""
+    new, _ = redact_text("setx API_KEY hunter2", file="s.bat")
+    assert new.startswith("setx API_KEY ") and "hunter2" not in new
+    new, _ = redact_text("setx /M API_KEY hunter2", file="s.bat")
+    assert new.startswith("setx /M API_KEY ") and "hunter2" not in new
+    for src in (
+        "localhost:54\\:32:db:admin:hunter2",
+        "lo\\:cal:5432:db:admin:hunter\\:2",
+    ):
+        new, findings = redact_text(src, file=".pgpass")
+        assert findings and "hunter2" not in new and "hunter\\:2" not in new
+    for src in (
+        'composer config http-basic.repo admin "hun ter2"',
+        'cargo login "hun ter2"',
+        'doppler secrets set API_KEY "hun ter2"',
+        'java -jar jenkins-cli.jar -auth "admin:hun ter2" build j',
+    ):
+        new, findings = redact_text(src, file="s.sh")
+        assert findings, src
+        assert "hun ter2" not in new and "ter2" not in new, src
+    src = "$ANSIBLE_VAULT;1.1;AES256\n633864\n\n6634ff\nnext: plain"
+    new, findings = redact_text(src, file="x.yml")
+    assert findings and "6634ff" not in new and "next: plain" in new

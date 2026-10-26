@@ -211,6 +211,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `encrypt -s`, `schtasks /rp`, and `rclone config
   create|update` credential-key positionals
   (devin-state#92).
+- `setx` whitespace-separated matches keep the command,
+  optional `/M` flag and variable name instead of
+  collapsing to a bare tag; `.pgpass` rows treat `\:` as
+  field content so escaped colons cannot shift the
+  password field; quoted credential arguments with spaces
+  (`composer http-basic`, `jenkins-cli -auth`, `cargo
+  login`, `doppler secrets set`) mask whole instead of
+  splitting at the first word; and blank lines inside a
+  `$ANSIBLE_VAULT` ciphertext body no longer expose the
+  remaining lines (devin-state#92).
 - Python literal prefixes survive on plain assignments too —
   `api_key = b"v"` (and `rb`/`f`/`u`) re-emits `b"<tag>"`
   instead of an unquoted tag that cannot parse — and YAML

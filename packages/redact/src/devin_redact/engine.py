@@ -1010,8 +1010,8 @@ def redact_text(
                     )
                 else:
                     env_m = re.match(
-                        r"(?i)(?:env|arg|set|setenv|launchctl[ \t]+"
-                        r"setenv)(?:[ \t]+-[a-zA-Z]+)*[ \t]+\S+[ \t]+",
+                        r"(?i)(?:env|arg|set|setenv|setx|launchctl[ \t]+"
+                        r"setenv)(?:[ \t]+[-/][a-zA-Z]+)*[ \t]+\S+[ \t]+",
                         whole,
                     )
                     replacement = (
