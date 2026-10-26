@@ -2108,3 +2108,30 @@ def test_review_round_setx_pgpass_quoted_vault():
     src = "$ANSIBLE_VAULT;1.1;AES256\n633864\n\n6634ff\nnext: plain"
     new, findings = redact_text(src, file="x.yml")
     assert findings and "6634ff" not in new and "next: plain" in new
+
+
+def test_review_round_gh_rclone_security():
+    """Review fixes: ``security find-`` pipelines keep their ``|``,
+    ``gh secret set`` tolerates options before ``--body``, and
+    ``rclone config`` update form plus multi-credential tails
+    mask."""
+    new, findings = redact_text(
+        "security find-generic-password -s svc -w | pbcopy",
+        file="s.sh")
+    assert findings == [] and "| pbcopy" in new
+    for src in (
+        "gh secret set API_KEY --env prod --body hunter2",
+        'gh secret set API_KEY --body "hun ter2" --env prod',
+        "rclone config update r secret_access_key hunter2",
+    ):
+        new, findings = redact_text(src, file="s.sh")
+        assert findings, src
+        assert "hunter2" not in new and "hun ter2" not in new, src
+    src = (
+        "rclone config create r s3 secret_access_key hunter2 "
+        "token abc123 region us"
+    )
+    new, findings = redact_text(src, file="s.sh")
+    assert findings
+    assert "hunter2" not in new and "abc123" not in new
+    assert "region us" in new

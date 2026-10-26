@@ -221,6 +221,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   splitting at the first word; and blank lines inside a
   `$ANSIBLE_VAULT` ciphertext body no longer expose the
   remaining lines (devin-state#92).
+- `security find-*-password -w` no longer eats a shell
+  pipeline — only `security add-*-password` takes a `-w`
+  operand; `gh secret set`/`gh variable set` tolerate
+  options before `--body`; `rclone config update` (no
+  backend positional) and multi-credential `config create`
+  tails mask every keyed value (devin-state#92).
 - Python literal prefixes survive on plain assignments too —
   `api_key = b"v"` (and `rb`/`f`/`u`) re-emits `b"<tag>"`
   instead of an unquoted tag that cannot parse — and YAML

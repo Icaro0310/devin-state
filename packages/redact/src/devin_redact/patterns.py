@@ -802,15 +802,17 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
         _rx(
             r"(?i)\bgh[ \t]+(?:secret[ \t]+set[ \t]+\S+|variable"
             r"[ \t]+set[ \t]+" + ENV_NAME_PATTERN + r")"
-            r"[ \t]+(?:-b|--body)[ \t=]*"
+            r"[^|&;\n]*?[ \t](?:-b|--body)[ \t=]*"
             r"(\"[^\"\r\n]*\"|'[^'\r\n]*'|\S+)"
         ),
-        # macOS ``security add|find-*-password -w`` and hiera-eyaml
-        # ``eyaml encrypt -s`` — the secret is the flag operand.
+        # macOS ``security add-*-password -w`` — ``-w``'s operand is
+        # the password being stored. (``find-*-password -w`` prints
+        # instead; treating the next token as a secret would eat a
+        # ``|`` pipeline.) hiera-eyaml ``encrypt -s`` same shape.
         _rx(
-            r"(?i)\bsecurity[ \t]+(?:add|find)-\w+-password\b"
+            r"(?i)\bsecurity[ \t]+add-\w+-password\b"
             r"[^\n]*?[ \t]-w[ \t=]*"
-            r"(\"[^\"\r\n]*\"|'[^'\r\n]*'|\S+)"
+            r"(\"[^\"\r\n]*\"|'[^'\r\n]*'|[^\s|&;]+)"
         ),
         _rx(
             r"(?i)\beyaml[ \t]+encrypt\b[^\n]*?[ \t]-s[ \t=]*"
@@ -823,13 +825,17 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
             r"(?i)\bschtasks\b[^\n]*?/rp[ \t:]+"
             r"(\"[^\"\r\n]*\"|[^/\s][^\s]*)"
         ),
-        # ``rclone config create|update <remote> <backend>
-        # <credname> <value>`` — the key carries the credential
-        # word.
+        # ``rclone config create <remote> <backend> <credname>
+        # <value>`` / ``update <remote> <credname> <value>`` — one
+        # or two positionals before the credential-keyed pairs;
+        # the value group absorbs further ``NAME value`` pairs so
+        # a multi-credential command masks all of them.
         _rx(
             r"(?i)\brclone[ \t]+config[ \t]+(?:create|update)[ \t]+"
-            r"\S+[ \t]+\S+[ \t]+" + ENV_NAME_PATTERN +
-            r"[ \t]+(\"[^\"\r\n]*\"|'[^'\r\n]*'|\S+)"
+            r"(?:\S+[ \t]+){1,2}" + ENV_NAME_PATTERN +
+            r"[ \t]+(\"[^\"\r\n]*\"|'[^'\r\n]*'|"
+            r"[^\s|&;]+(?:[ \t]+" + ENV_NAME_PATTERN +
+            r"[ \t]+[^\s|&;]+)*)"
         ),
         # ``.pgpass`` five-field rows ``host:port:db:user:pass`` —
         # a generic colon chain is prose-shaped anywhere else, so
