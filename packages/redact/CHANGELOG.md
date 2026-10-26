@@ -398,6 +398,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   add` secret-key positional, influx 1.x single-dash `-password`,
   `sendemail -xp`, and Capistrano `set :password, "v"` all mask
   the credential (devin-state#92).
+- httpie `http METHOD url -a u:p`/`--auth` (method-scoped so the
+  bare word "http" stays prose), curl `-U`/`--proxy-user`, all
+  `ldap*` tools' `-w` (flag gaps now tolerated), `signtool /p`,
+  `nuget -Password`, glued `rar`/`unrar -pPASS`, `veracrypt -p`,
+  `user:pass | chpasswd`/`newusers` pipes, and expect scripts'
+  `send` after a password prompt (devin-state#92).
 
 ## [0.2.5] - 2026-10-23
 

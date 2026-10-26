@@ -2233,3 +2233,37 @@ def test_registry_login_and_secret_manager_carriers():
     ):
         new, findings = redact_text(src, file="s.sh")
         assert findings == [] and new == src, src
+
+
+def test_httpie_proxyauth_and_misc_tool_flags():
+    """httpie ``-a``/``--auth`` (method-scoped so the word "http"
+    stays prose), curl ``-U``/``--proxy-user``, any ``ldap* -w``,
+    signtool ``/p``, nuget ``-Password``, glued ``rar -p``,
+    ``veracrypt -p``, ``user:pass | chpasswd`` pipes, and expect
+    ``send`` after a password prompt all mask."""
+    for src in (
+        "http GET api.example.com -a admin:hunter2",
+        "http POST x.io/api -a admin:hunter2",
+        "https POST x.io --auth admin:hunter2",
+        "curl --proxy-user admin:hunter2 url",
+        "curl -U admin:hunter2 url",
+        "ldapadd -x -D cn=admin -w hunter2 -f x.ldif",
+        "ldapmodify -w hunter2",
+        "signtool sign /f c.pfx /p hunter2 app.exe",
+        "nuget sources Add -Name x -UserName admin -Password hunter2",
+        "rar a -phunter2 arc.rar dir/",
+        "veracrypt -p hunter2 vol.tc",
+        'echo "admin:hunter2" | chpasswd',
+        'echo "admin:hunter2" | newusers',
+        'expect "Password:" ; send "hunter2\\r"',
+    ):
+        new, findings = redact_text(src, file="s.sh")
+        assert findings and "hunter2" not in new, src
+    for src in (
+        "the http response was fine",
+        "curl -o file url",
+        "rar a arc.rar dir/",
+        "ldapadd -x -D cn=x",
+    ):
+        new, findings = redact_text(src, file="s.sh")
+        assert findings == [] and new == src, src

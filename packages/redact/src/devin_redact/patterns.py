@@ -486,13 +486,17 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
             r"[ \t]*(?:\\u003[daDA]|\\[:=])[ \t]*"
             r"(\"[^\"\r\n]*\"|'[^'\r\n]*'|\S+)"
         ),
-        # CLI credential flags — ``sshpass -p``, ``curl -u u:p``,
-        # ``redis-cli -a``, ``ldapsearch -w``, ``mosquitto_* -P``.
-        # Group 1 is the token, quoted or bare.
+        # CLI credential flags — ``sshpass -p``, ``curl -u u:p`` /
+        # ``--proxy-user``, ``redis-cli -a``, ``ldap* -w``,
+        # ``mosquitto_* -P``; httpie's ``http METHOD url -a u:p``
+        # needs a method gap before the flag. Group 1 is the
+        # token, quoted or bare.
         _rx(
             r"(?i)\b(?:sshpass[ \t]+-p|(?:curl|wget|httpie?|fetch)\S*"
-            r"[ \t]+(?:-u|--user)|redis-cli[ \t]+-a"
-            r"|ldapsearch[ \t]+-w|mosquitto_\w+[ \t]+-P)[ \t=]*"
+            r"[ \t]+(?:-u|--user|-U|--proxy-user)|redis-cli[ \t]+-a"
+            r"|ldap\w+\b[^\n]*?[ \t]-w|mosquitto_\w+[ \t]+-P"
+            r"|https?[ \t]+(?:GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS"
+            r"|get|post)\b[^\n]*?[ \t](?:-a|--auth))[ \t=]*"
             r"(\"[^\"\r\n]*\"|'[^'\r\n]*'|\S+)"
         ),
         # mysql family ``-p<pass>`` — the value rides attached and
@@ -968,6 +972,36 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
         _rx(
             r"(?i)\bsendemail\b[^\n]*?[ \t]-xp[ \t=]*"
             r"(\"[^\"\r\n]*\"|'[^'\r\n]*'|\S+)"
+        ),
+        # ``signtool sign /f cert.pfx /p pass`` — ``/p`` is the
+        # cert password; ``nuget -Password`` is the same shape in
+        # single-dash form.
+        _rx(
+            r"(?i)\bsigntool\b[^\n]*?/p[ \t]+"
+            r"(\"[^\"\r\n]*\"|'[^'\r\n]*'|\S+)"
+        ),
+        _rx(
+            r"(?i)\bnuget\b[^\n]*?[ \t]-Password[ \t=]*"
+            r"(\"[^\"\r\n]*\"|'[^'\r\n]*'|\S+)"
+        ),
+        # ``rar/unrar -pPASS`` — the archive password is glued to
+        # the flag; ``veracrypt -p pass`` is the space form.
+        _rx(r"\b(?:rar|unrar)\b[^\n]*?[ \t]-p(\S+)"),
+        _rx(
+            r"(?i)\bveracrypt\b[^\n]*?[ \t]-p[ \t=]*"
+            r"(\"[^\"\r\n]*\"|'[^'\r\n]*'|\S+)"
+        ),
+        # ``echo "user:pass" | chpasswd``/``newusers`` — the
+        # credential pair is the last token before the pipe.
+        _rx(
+            r"[\"']?([\w.-]+:[^\s\"'|]+)[\"']?[ \t]*"
+            r"\|[ \t]*(?:sudo[ \t]+)?(?:chpasswd|newusers)\b"
+        ),
+        # Tcl/expect — the sent string after a ``password`` prompt
+        # is the credential (``expect "Password:" ; send "x\r"``).
+        _rx(
+            r"(?i)\bexpect\b[^\n]*?password[^\n]*?[;\n][ \t]*"
+            r"send[ \t]+(\"[^\"\r\n]*\"|'[^'\r\n]*')"
         ),
         # Capistrano ``set :password, "v"`` — symbol plus comma;
         # only cred-word symbols count.
