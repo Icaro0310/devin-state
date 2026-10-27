@@ -65,7 +65,8 @@ jobs:
     # A 1.5B model answers a single prompt in well under a minute; an
     # unbounded job means a stuck tailnet/reviewer pins the coverage
     # gate for the platform default (6h). Bounded, like the _gh retry.
-    timeout-minutes: 10
+    # 20min covers the full 300s×3 retry budget plus setup.
+    timeout-minutes: 20
     permissions:
       contents: read
       pull-requests: write
@@ -156,9 +157,9 @@ jobs:
     runs-on: ubuntu-latest
     # The action retries an unreachable endpoint internally and has no
     # bound of its own — PR #238 hung 55min issuing periodic probes with
-    # zero completions. 15min is generous for a 1.5B model; beyond that
-    # it is unavailability, not slowness.
-    timeout-minutes: 15
+    # zero completions. 20min covers the full 300s×3 retry budget plus
+    # setup; beyond that it is unavailability, not slowness.
+    timeout-minutes: 20
     permissions:
       contents: read
       pull-requests: write
