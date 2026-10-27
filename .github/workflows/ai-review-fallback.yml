@@ -66,7 +66,7 @@ jobs:
     # unbounded job means a stuck tailnet/reviewer pins the coverage
     # gate for the platform default (6h). Bounded, like the _gh retry.
     # 20min covers the full 300s×3 retry budget plus setup.
-    timeout-minutes: 20
+    timeout-minutes: 25
     permissions:
       contents: read
       pull-requests: write
@@ -128,7 +128,7 @@ jobs:
           ai-primary-retries: "2"
           ai-primary-retry-delay-sec: "10"
           ai-max-tokens: "1024"
-          ai-request-timeout-sec: "300"
+          ai-request-timeout-sec: "600"
           # The 1.5B completes fine but drops the required verdict key
           # (missing_verdict_key, 794 chars/280 tokens, stop) — append-mode
           # steering keeps the bundled prompt and adds the contract;
@@ -173,7 +173,7 @@ jobs:
     # bound of its own — PR #238 hung 55min issuing periodic probes with
     # zero completions. 20min covers the full 300s×3 retry budget plus
     # setup; beyond that it is unavailability, not slowness.
-    timeout-minutes: 20
+    timeout-minutes: 25
     permissions:
       contents: read
       pull-requests: write
@@ -256,7 +256,7 @@ jobs:
           ai-primary-retries: "2"
           ai-primary-retry-delay-sec: "10"
           ai-max-tokens: "1024"
-          ai-request-timeout-sec: "300"
+          ai-request-timeout-sec: "600"
           # The 1.5B completes fine but drops the required verdict key
           # (missing_verdict_key, 794 chars/280 tokens, stop) — append-mode
           # steering keeps the bundled prompt and adds the contract;
