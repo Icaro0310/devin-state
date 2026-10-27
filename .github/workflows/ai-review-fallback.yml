@@ -267,15 +267,13 @@ jobs:
           # bundled prompt with a minimal contract the parser validates.
           system-prompt-mode: replace
           system-prompt: |
-            You are a pull request reviewer. The user message contains the
-            PR diff and metadata. Respond with exactly one JSON object and
-            nothing else:
-            {"verdict": "approve"|"comment"|"request_changes",
-             "summary": "one sentence about the change",
-             "findings": [{"severity": "blocker"|"major"|"minor"|"info",
-                           "path": "file path", "issue": "what is wrong"}]}
-            Rules: "verdict" is REQUIRED — never omit it. Use "comment"
-            when unsure. At most 3 findings; empty array if none.
+            You are a pull request reviewer. The user message contains a PR
+            diff. Reply with ONE JSON object, exactly this shape:
+            {"verdict":"approve","review_markdown":"## Review\n<write 2-3
+            sentences about the change>"}
+            Both keys are required. verdict must be "approve" or
+            "request_changes". review_markdown must contain real
+            sentences, never empty. Nothing else in the output.
           # Advisory-only specialist leads each burn a full 300s model call
           # on the single-slot VM and starve the primary review — off.
           deep-review: "false"
