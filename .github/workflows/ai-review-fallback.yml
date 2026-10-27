@@ -241,14 +241,19 @@ jobs:
           # Tolerant contract, not strict JSON: the 1.5B writes raw quotes
           # and newlines inside JSON strings (Unterminated string at
           # char ~4.7k). Plain "VERDICT:" + prose parses every time.
-          body = {"model": os.environ["MODEL"], "max_tokens": 768,
-                  "messages": [{"role": "system", "content":
-                      "You are a pull request reviewer. Reply in this exact format:\n"
+          # Few-shot completion, not instruction-following: a 1.5B code
+          # model ignores reviewer instructions but reliably continues a
+          # document that ends at "VERDICT:" (validated 3/3 live).
+          user_msg = ("### Example review\nDIFF:\n```diff\n"
+                      "+def add(a, b):\n+    return a + b\n```\n"
                       "VERDICT: approve\n"
-                      "REVIEW:\n"
-                      "## Review\n<2-3 sentences about what the change does and any risk>\n\n"
-                      "VERDICT must be approve or request_changes. Nothing else before VERDICT."},
-                  {"role": "user", "content": "# Pull Request Diff\n```diff\n" + diff + "\n```"}]}
+                      "REVIEW: Adds a helper. No risk found.\n\n"
+                      "### Your task\nDIFF:\n```diff\n" + diff +
+                      "\n```\nVERDICT:")
+          body = {"model": os.environ["MODEL"], "max_tokens": 512, "temperature": 0.1,
+                  "messages": [{"role": "system", "content":
+                      "You complete pull request review documents."},
+                  {"role": "user", "content": user_msg}]}
           last = ""
           for attempt in (1, 2, 3):
               try:
