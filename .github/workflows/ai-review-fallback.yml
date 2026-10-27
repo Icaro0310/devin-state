@@ -248,6 +248,10 @@ jobs:
                       "+def add(a, b):\n+    return a + b\n```\n"
                       "VERDICT: approve\n"
                       "REVIEW: Adds a helper. No risk found.\n\n"
+                      "### Example review 2\nDIFF:\n```diff\n"
+                      "+# Changelog\n+## v2 - added setup section\n```\n"
+                      "VERDICT: approve\n"
+                      "REVIEW: Documentation gains a section. No risk.\n\n"
                       "### Your task\nDIFF:\n```diff\n" + diff +
                       "\n```\nVERDICT:")
           body = {"model": os.environ["MODEL"], "max_tokens": 512, "temperature": 0.1,
