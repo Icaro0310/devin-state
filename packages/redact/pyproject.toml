@@ -13,7 +13,8 @@ authors = [{ name = "Icaro0310" }]
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "atheris>=2.3; sys_platform == 'linux'"]
+dev = ["pytest>=8", "pytest-timeout>=2.3",
+       "atheris>=2.3; sys_platform == 'linux'"]
 mcp = ["mcp>=1.2"]
 
 [project.scripts]
@@ -25,3 +26,6 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# per-test ceiling — a pathological regex stalls a run for ~20min
+# (env_assignment[19] ReDoS, audit/redact-adversarial, 2026-10-27)
+timeout = 120
