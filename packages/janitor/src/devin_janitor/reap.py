@@ -451,7 +451,10 @@ def scan(
     map is persisted in ``state["pidmap"]`` keyed by ``pid:starttime``
     so a process orphaned AFTER its owner died keeps its attribution.
     """
-    uid = os.getuid() if uid is None else uid
+    if uid is None:
+        # platforms without getuid get the impossible uid — every
+        # process mismatches and nothing is ever eligible (fail-safe)
+        uid = os.getuid() if hasattr(os, "getuid") else -1
     now = time.time() if now is None else now
     keep = DEFAULT_KEEP_COMM | set(keep_comm or ())
     res = ReapResult()
@@ -553,8 +556,10 @@ def reap(
     would be killed by association. Surviving children simply orphan on
     the next sweep and face the same gates.
     """
-    uid = os.getuid() if uid is None else uid
-    if os.geteuid() == 0:
+    if uid is None:
+        uid = os.getuid() if hasattr(os, "getuid") else -1
+    geteuid = getattr(os, "geteuid", None)
+    if geteuid is not None and geteuid() == 0:
         raise RuntimeError("reap refuses to run as root")
     kill = os.kill if kill_sig is None else kill_sig
     res = ReapResult(candidates=list(candidates))
@@ -649,6 +654,12 @@ def _redact(text: str, timeout: float = REDACT_TIMEOUT) -> str:
     """
     global _redact_broken
     if _redact_broken or not _engine_available():
+        return _redact_fallback(text)
+    if not hasattr(os, "fork"):
+        # no fork → no killable timeout sandbox (a stuck thread can't
+        # be signalled); treat the engine as broken and stay hash-only —
+        # the reaper is Linux-only anyway
+        _redact_broken = True
         return _redact_fallback(text)
     import select
     rfd, wfd = os.pipe()

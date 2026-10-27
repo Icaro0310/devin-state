@@ -401,6 +401,8 @@ class TestLedger:
         ])
         assert len(f.read_text().splitlines()) == 2
 
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="Windows does not honor POSIX file modes")
     def test_file_mode_is_0600(self, tmp_path):
         f = tmp_path / "ledger.jsonl"
         append_ledger(f, [{"ts": 1, "decision": "killed", "pid": 1}])
@@ -531,12 +533,28 @@ def test_e2e_orphaned_busy_child_becomes_candidate(tmp_path):
         res2 = scan(table, pid_map={}, **kw)
         assert child_pid in {p.pid for p, _ in res2.skipped}, \
             "orphaned child vanished between sweeps"
-        # sweep 3 — grace (0) already met by first_seen: candidate
+        # sweep 3 — grace (0) already met by first_seen: candidate.
+        # Hosted CI runners execute the job under a systemd *.service
+        # unit (actions.runner.*.service); the child inherits that
+        # cgroup — reparenting does NOT change cgroup membership — so
+        # the managed-unit gate correctly keeps it out of candidacy.
+        # The orphan-detection + attribution path above is still fully
+        # exercised; on a session-scope cgroup the candidacy assert runs.
         res3 = scan(table, pid_map={}, **kw)
-        pids = [c.proc.pid for c in res3.candidates]
-        assert pids == [child_pid], \
-            f"expected exactly the orphaned child, got {pids}"
-        assert res3.candidates[0].session_slug == "fake-session"
+        cgroup_file = Path("/proc") / str(child_pid) / "cgroup"
+        managed = cgroup_file.is_file() and _managed_by_unit(
+            cgroup_file.read_text(encoding="utf-8", errors="replace"))
+        if managed:
+            reasons = {p.pid: why for p, why in res3.skipped}
+            assert "managed" in reasons.get(child_pid, ""), \
+                f"expected managed-unit skip, got {reasons.get(child_pid)}"
+            assert res3.attributed >= 1 and not res3.candidates
+        else:
+            pids = [c.proc.pid for c in res3.candidates]
+            assert pids == [child_pid], \
+                f"expected exactly the orphaned child, got {pids} " \
+                f"(skipped: {res3.skipped})"
+            assert res3.candidates[0].session_slug == "fake-session"
     finally:
         # kill the busy child directly — never left running
         try:
