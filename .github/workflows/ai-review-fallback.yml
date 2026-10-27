@@ -137,8 +137,12 @@ jobs:
           echo "reviewer A: $r (findings=${{ steps.rev.outputs.findings_count || '?' }}, critical=${{ steps.rev.outputs.critical_count || '?' }})"
 
   review-b:
-    needs: classify
-    if: needs.classify.outputs.state != 'EXECUTED'
+    # Serialized after A: the tailnet Ollama serves one request at a time
+    # (-np 1), so parallel A+B meant one held the model while the other
+    # queued into its request timeout (PR #100: b timed out at 9min).
+    # always() so B reports its own outcome even when A failed.
+    needs: [classify, review-a]
+    if: always() && needs.classify.outputs.state != 'EXECUTED'
     runs-on: ubuntu-latest
     # The action retries an unreachable endpoint internally and has no
     # bound of its own — PR #238 hung 55min issuing periodic probes with
