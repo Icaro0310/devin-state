@@ -30,7 +30,9 @@ on:
     types: [opened, synchronize, reopened]
 
 concurrency:
-  group: ai-review-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+  # Repo-wide: the Ollama reviewer backend is a single-slot service, so
+  # fallback runs for different PRs must queue rather than contend.
+  group: ai-review-fallback
   cancel-in-progress: false
 
 permissions:
