@@ -66,3 +66,4 @@ Per-package guides live under `packages/<name>/`.
 
 > **Unofficial community project.** Not affiliated with, endorsed by, or
 > sponsored by Cognition AI. "Devin" is a trademark of Cognition AI.
+<!-- pipeline e2e smoke test -->
