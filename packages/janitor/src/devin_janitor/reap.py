@@ -32,9 +32,22 @@ Kill-path hardening, per the review spec:
 - cmdlines pass through ``devin_redact`` before any output or log —
   a crashed agent's argv may embed tokens.
 
+Coverage limit (documented, fail-safe): attribution requires the
+process to have been SEEN as a session descendant while the session
+lock was alive. A process spawned and orphaned entirely between two
+sweeps has no ``pidmap`` entry and is never eligible — the blind spot
+shrinks with sweep interval, never into a false kill.
+
+Audit trail: ``would_kill``/``killed`` decisions go to a dedicated
+append-only ledger (``--ledger-file``, ≥30-day retention) — the
+two-week calibration review is the evalset; the capped shared log
+keeps only sweep summaries so rotation cannot eat the evidence.
+
 Dry-run is the default; ``--apply`` performs SIGTERM → ``term_wait`` →
 SIGKILL. Intended scheduling is a systemd ``oneshot`` user timer every
 few minutes (installed manually — never via ``install --daily``).
+Kill-switch: a ``reap.disabled`` file next to the state file makes
+every sweep a no-op before any /proc work.
 """
 
 from __future__ import annotations
@@ -317,6 +330,45 @@ def save_reap_state(path: str | Path, state: dict) -> None:
 
 def _key(pid: int, starttime: int) -> str:
     return f"{pid}:{starttime}"
+
+
+# ------------------------------------------------------------- ledger ----
+
+DEFAULT_LEDGER_RETAIN_DAYS = 30
+
+
+def append_ledger(
+    path: str | Path,
+    entries: list[dict],
+    *,
+    retain_days: int = DEFAULT_LEDGER_RETAIN_DAYS,
+    now: float | None = None,
+) -> None:
+    """Append-only ``would_kill``/``killed`` decision ledger.
+
+    Unlike the capped shared log, this file IS the calibration
+    evalset — entries older than ``retain_days`` are pruned on write,
+    nothing else is ever dropped. Each entry should carry ``ts`` plus
+    the decision fields (pid, session, cpu, cmdline fingerprint).
+    """
+    if not entries:
+        return
+    now = time.time() if now is None else now
+    cutoff = now - retain_days * 86400
+    p = Path(path)
+    kept: list[str] = []
+    try:
+        for line in p.read_text(encoding="utf-8").splitlines():
+            try:
+                if json.loads(line).get("ts", 0) >= cutoff:
+                    kept.append(line)
+            except json.JSONDecodeError:
+                continue  # corrupt lines are dropped, never kept raw
+    except OSError:
+        pass  # no ledger yet — start fresh
+    p.parent.mkdir(parents=True, exist_ok=True)
+    kept.extend(json.dumps(e, ensure_ascii=False) for e in entries)
+    p.write_text("\n".join(kept) + "\n", encoding="utf-8")
 
 
 # --------------------------------------------------------------- scan ----

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -20,6 +21,7 @@ from devin_janitor.reap import (
     _managed_by_unit,
     _parse_stat,
     _redact,
+    append_ledger,
     load_reap_state,
     reap,
     save_reap_state,
@@ -321,6 +323,60 @@ def test_redact_fallback_never_emits_raw(monkeypatch):
     assert "--token" not in out and "--other" not in out
 
 
+# ------------------------------------------------------------ ledger ----
+
+
+class TestLedger:
+    def test_append_creates_jsonl(self, tmp_path):
+        f = tmp_path / "ledger.jsonl"
+        append_ledger(f, [{"ts": 100, "decision": "would_kill", "pid": 5}])
+        import json as _json
+        rows = [_json.loads(l) for l in f.read_text().splitlines()]
+        assert rows == [{"ts": 100, "decision": "would_kill", "pid": 5}]
+
+    def test_retention_prunes_old_entries(self, tmp_path):
+        f = tmp_path / "ledger.jsonl"
+        now = 1_800_000_000.0
+        f.write_text(
+            '{"ts": %d, "decision": "would_kill", "pid": 1}\n'
+            '{"ts": %d, "decision": "killed", "pid": 2}\n'
+            % (now - 31 * 86400, now - 10 * 86400),
+            encoding="utf-8")
+        append_ledger(f, [{"ts": now, "decision": "would_kill", "pid": 3}],
+                      retain_days=30, now=now)
+        import json as _json
+        pids = [_json.loads(l)["pid"] for l in f.read_text().splitlines()]
+        assert 1 not in pids and 2 in pids and 3 in pids
+
+    def test_empty_is_noop(self, tmp_path):
+        f = tmp_path / "ledger.jsonl"
+        append_ledger(f, [])
+        assert not f.exists()
+
+    def test_corrupt_lines_dropped_on_rewrite(self, tmp_path):
+        f = tmp_path / "ledger.jsonl"
+        f.write_text('{"ts": 1}\n{corrupt\n', encoding="utf-8")
+        append_ledger(f, [{"ts": 2, "decision": "survivor", "pid": 9}],
+                      retain_days=30, now=2)
+        assert "{corrupt" not in f.read_text()
+
+
+# --------------------------------------------------------- kill-switch ----
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"),
+                    reason="Linux-only feature")
+def test_disable_file_skips_sweep(tmp_path, capsys):
+    """reap.disabled next to the state file → no-op before any /proc work."""
+    from devin_janitor.cli import main
+    state = tmp_path / "state.json"
+    (tmp_path / "reap.disabled").touch()
+    rc = main(["reap", "--state-file", str(state)])
+    assert rc == 0
+    assert "disabled" in capsys.readouterr().out
+    assert not state.exists()  # nothing was written
+
+
 # ----------------------------------------------------- live integration ----
 
 
@@ -355,3 +411,63 @@ def test_reap_kills_real_spawned_child():
     finally:
         if proc.poll() is None:
             proc.kill()
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(not sys.platform.startswith("linux"),
+                    reason="Linux-only feature")
+def test_e2e_orphaned_busy_child_becomes_candidate(tmp_path):
+    """Sandbox e2e over the REAL /proc: a fake session's busy child
+    outlives its parent → reparented to a subreaper → after the grace
+    window the reaper flags exactly that PID as would_kill.
+
+    Session attribution is injected ({child_pid: slug}) — the office
+    procmap mapping itself is exercised elsewhere; everything else is
+    real: adopter detection, /proc stat reads, CPU sampling. The child
+    is SIGKILLed in teardown so no busy-loop survives the test.
+    """
+    import subprocess
+
+    from devin_janitor.reap import ProcFsTable
+
+    # the "session": a parent that spawns a CPU-burning child, prints
+    # the child's pid, then sleeps — killing it orphans the child
+    parent = subprocess.Popen(
+        [sys.executable, "-c",
+         "import subprocess,sys,time\n"
+         "c=subprocess.Popen([sys.executable,'-c','while True: pass'])\n"
+         "print(c.pid,flush=True)\n"
+         "time.sleep(120)"],
+        stdout=subprocess.PIPE, text=True)
+    child_pid = int(parent.stdout.readline().strip())
+    table = ProcFsTable()
+    state = {"first_seen": {}, "pidmap": {}}
+    try:
+        kw = dict(locks_dir=tmp_path, sessions_db=tmp_path / "none.db",
+                  state=state, grace_min=0, sample_sec=0.05)
+        # sweep 1 — session alive: child recorded as its descendant
+        scan(table, pid_map={child_pid: "fake-session"}, **kw)
+        assert state["pidmap"], "child was not attributed on live sweep"
+
+        parent.kill()
+        parent.wait()
+        time.sleep(0.2)  # reparenting is synchronous; settle anyway
+
+        # sweep 2 — session dead: child is now a seen orphan
+        res2 = scan(table, pid_map={}, **kw)
+        assert child_pid in {p.pid for p, _ in res2.skipped}, \
+            "orphaned child vanished between sweeps"
+        # sweep 3 — grace (0) already met by first_seen: candidate
+        res3 = scan(table, pid_map={}, **kw)
+        pids = [c.proc.pid for c in res3.candidates]
+        assert pids == [child_pid], \
+            f"expected exactly the orphaned child, got {pids}"
+        assert res3.candidates[0].session_slug == "fake-session"
+    finally:
+        # kill the busy child directly — never left running
+        try:
+            os.kill(child_pid, 9)
+        except (ProcessLookupError, PermissionError):
+            pass
+        if parent.poll() is None:
+            parent.kill()
