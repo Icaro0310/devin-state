@@ -129,6 +129,17 @@ jobs:
           ai-primary-retry-delay-sec: "10"
           ai-max-tokens: "1024"
           ai-request-timeout-sec: "300"
+          # The 1.5B completes fine but drops the required verdict key
+          # (missing_verdict_key, 794 chars/280 tokens, stop) — append-mode
+          # steering keeps the bundled prompt and adds the contract;
+          # concise caps the output drift on this small model.
+          system-prompt-mode: append
+          review-verbosity: concise
+          system-prompt: |
+            OUTPUT CONTRACT (highest priority): respond with a single JSON
+            object that ALWAYS contains a top-level "verdict" key with one
+            of these exact values: "approve", "comment", "request_changes".
+            Never omit "verdict". When in doubt use "comment".
         continue-on-error: true
 
       - name: Record outcome
@@ -243,6 +254,17 @@ jobs:
           ai-primary-retry-delay-sec: "10"
           ai-max-tokens: "1024"
           ai-request-timeout-sec: "300"
+          # The 1.5B completes fine but drops the required verdict key
+          # (missing_verdict_key, 794 chars/280 tokens, stop) — append-mode
+          # steering keeps the bundled prompt and adds the contract;
+          # concise caps the output drift on this small model.
+          system-prompt-mode: append
+          review-verbosity: concise
+          system-prompt: |
+            OUTPUT CONTRACT (highest priority): respond with a single JSON
+            object that ALWAYS contains a top-level "verdict" key with one
+            of these exact values: "approve", "comment", "request_changes".
+            Never omit "verdict". When in doubt use "comment".
         continue-on-error: true
 
       - name: Record outcome
