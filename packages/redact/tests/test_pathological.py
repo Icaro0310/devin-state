@@ -39,6 +39,14 @@ PATHOLOGICAL_INPUTS = [
     "mariadb " + "-v " * 250,
     # Repeated carrier restarts on one line.
     " ".join(["mysql://u:p@h/d"] * 40),
+    # vault write / nomad var put: the option tail (``[ \t]+-X(ARG)?``*)
+    # overlaps the mandatory path ``\S+`` — CodeQL py/redos flags the
+    # theoretical repartitioning. Path now requires ``(?!-)``; these
+    # inputs pin the measured cost of the flagged arms.
+    "vault write " + "-a " * 300 + "k=v",
+    "vault write " + '-fmt=json ' * 100 + "secret/p " + "k=v " * 50,
+    "nomad var put " + "-x " * 300 + "p k=v",
+    "vault write " + "-x " * 200,
 ]
 
 
