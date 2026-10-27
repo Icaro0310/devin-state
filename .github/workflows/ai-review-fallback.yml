@@ -237,52 +237,48 @@ jobs:
           python3 <<'PYE'
           import json, os, subprocess, sys, urllib.request
           import re
-          diff = open("/tmp/pr.diff").read()[:24000]
-          # Tolerant contract, not strict JSON: the 1.5B writes raw quotes
-          # and newlines inside JSON strings (Unterminated string at
-          # char ~4.7k). Plain "VERDICT:" + prose parses every time.
-          # Few-shot completion, not instruction-following: a 1.5B code
-          # model ignores reviewer instructions but reliably continues a
-          # document that ends at "VERDICT:" (validated 3/3 live).
-          user_msg = ("### Example review\nDIFF:\n```diff\n"
-                      "+def add(a, b):\n+    return a + b\n```\n"
-                      "VERDICT: approve\n"
-                      "REVIEW: Adds a helper. No risk found.\n\n"
-                      "### Example review 2\nDIFF:\n```diff\n"
-                      "+# Changelog\n+## v2 - added setup section\n```\n"
-                      "VERDICT: approve\n"
-                      "REVIEW: Documentation gains a section. No risk.\n\n"
-                      "### Your task\nDIFF:\n```diff\n" + diff +
-                      "\n```\nVERDICT:")
-          body = {"model": os.environ["MODEL"], "max_tokens": 512, "temperature": 0.1,
-                  "messages": [{"role": "system", "content":
-                      "You complete pull request review documents."},
-                  {"role": "user", "content": user_msg}]}
+          diff = open("/tmp/pr.diff").read()[:16000]
           def call(msgs, max_tok):
-              b = dict(body); b["messages"] = msgs; b["max_tokens"] = max_tok
+              b = {"model": os.environ["MODEL"], "max_tokens": max_tok,
+                   "temperature": 0.1, "messages": msgs}
               req = urllib.request.Request(os.environ["OLLAMA_CHAT"], data=json.dumps(b).encode(), headers={"Content-Type": "application/json"})
               return json.load(urllib.request.urlopen(req, timeout=600))["choices"][0]["message"]["content"]
-          # Verdict first with 6 output tokens — the few-shot prefix makes
-          # approve/request_changes the dominant continuation, and the
-          # cap makes prose impossible. Review body second (prose is the
-          # model's strength; it wrote coherent reviews every run).
+          # Call 1 — free-form review. Prose is the model's strength; it
+          # produced coherent reviews on every prior run. Call 2 classifies
+          # the model's OWN review as a/b — a tiny context where the
+          # completion bias is strong. If classification fails, the comment
+          # is still published, honestly labeled undetermined.
+          rmsg = [{"role": "user", "content":
+                   "Write a short pull request review for this diff. "
+                   "2-4 sentences on what it does and any risk.\n\n"
+                   "```diff\n" + diff + "\n```"}]
           last = ""
+          markdown = ""
           for attempt in (1, 2, 3):
               try:
-                  vtext = call(body["messages"], 6)
-                  m = re.search(r"(approve|request)", vtext, re.I)
-                  assert m, "no verdict word in: " + vtext[:80]
-                  # 6-token cap may truncate "request_changes" mid-word.
-                  verdict = "approve" if m.group(1).lower() == "approve" else "request_changes"
-                  rtext = call(body["messages"] + [{"role": "assistant", "content": verdict + "\nREVIEW:"}], 400)
-                  markdown = re.sub(r"^REVIEW:\s*", "", rtext).strip()
-                  assert len(markdown) > 10, "empty review body"
+                  markdown = call(rmsg, 400).strip()
+                  assert len(markdown) > 20, "empty review"
                   break
               except Exception as e:
                   last = str(e) or repr(e)
-          else:
-              print(f"::error::model unusable after 3 attempts: {last}")
+          if not markdown:
+              print(f"::error::model produced no review after 3 attempts: {last}")
               sys.exit(1)
+          verdict = "undetermined"
+          for attempt in (1, 2, 3):
+              try:
+                  cmsg = [{"role": "user", "content":
+                           "A reviewer wrote about this pull request:\n\n" + markdown[:1200] +
+                           "\n\nDid they approve it? Answer with one letter:\n(a) approve\n(b) request changes\nAnswer: ("}]
+                  vtext = call(cmsg, 8)
+                  m = re.search(r"[\(]?\s*(a|b)\b", vtext, re.I)
+                  assert m, "no letter in: " + vtext[:60]
+                  verdict = "approve" if m.group(1).lower() == "a" else "request_changes"
+                  break
+              except Exception as e:
+                  last = str(e) or repr(e)
+          if verdict == "undetermined":
+              print("::warning::verdict classification failed; publishing undetermined")
           subprocess.run(["gh", "pr", "comment", os.environ["PR_NUM"], "--body", "**Reviewer B (local model `" + os.environ["MODEL"] + "`) — verdict: `" + verdict + "`**\n\n" + markdown], check=True)
           print(f"reviewer B verdict: {verdict}")
           PYE
