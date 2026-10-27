@@ -118,6 +118,14 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           fail_on: none
           incremental: "false"
+          # Same bounds as reviewer B: a single-slot Ollama queues
+          # requests server-side, so the client timeout must outlast the
+          # worst queue depth (cross-repo contention, ~4 x 60-90s gen).
+          ai-response-format: json_object
+          ai-primary-retries: "2"
+          ai-primary-retry-delay-sec: "10"
+          ai-max-tokens: "1024"
+          ai-request-timeout-sec: "300"
         continue-on-error: true
 
       - name: Record outcome
@@ -137,8 +145,12 @@ jobs:
           echo "reviewer A: $r (findings=${{ steps.rev.outputs.findings_count || '?' }}, critical=${{ steps.rev.outputs.critical_count || '?' }})"
 
   review-b:
-    needs: classify
-    if: needs.classify.outputs.state != 'EXECUTED'
+    # Serialized after A: the tailnet Ollama serves one request at a time
+    # (-np 1), so parallel A+B meant one held the model while the other
+    # queued into its request timeout (PR #100: b timed out at 9min).
+    # always() so B reports its own outcome even when A failed.
+    needs: [classify, review-a]
+    if: always() && needs.classify.outputs.state != 'EXECUTED'
     runs-on: ubuntu-latest
     # The action retries an unreachable endpoint internally and has no
     # bound of its own — PR #238 hung 55min issuing periodic probes with
@@ -220,12 +232,14 @@ jobs:
           # json_object lets the 1.5B hit the verdict contract instead
           # of emitting free text that fails the parse -> retry cycle;
           # the token cap bounds generation time on the CPU-only VM.
-          # Worst case is now ~7min of honest FAILED, not a hang.
+          # The 300s request budget covers server-side queueing on the
+          # single-slot Ollama (cross-repo contention observed on #100
+          # and #101, where a queued request died at the 120s mark).
           ai-response-format: json_object
           ai-primary-retries: "2"
           ai-primary-retry-delay-sec: "10"
           ai-max-tokens: "1024"
-          ai-request-timeout-sec: "120"
+          ai-request-timeout-sec: "300"
         continue-on-error: true
 
       - name: Record outcome
