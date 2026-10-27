@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `preflight` subcommand + `devin_backup.preflight`: per-check readiness
+  report before a `create` run — `data-root`, `config-root` (when in
+  scope), `stores-found` (with `--exclude`/`--exclude-secrets` applied),
+  `dest-writable` (real write probe), `free-space` (≥ summed store
+  size), `tool-sqlite3`, `no-inflight-snapshot` (timestamp dir without
+  manifest = running or crashed create), `latest-snapshot` manifest
+  readability, plus `remote-dest`/`tool-rsync` under `--remote`.
+  Exit 0 = all pass, 1 = any FAIL or UNKNOWN (fail-closed — an
+  unevaluable check never silently passes), 2 = usage/spec error;
+  `--json` supported.
 - `create --remote <dest>` + `devin_backup.remote` (BK-3): offload the
   freshly created snapshot after re-verifying it. An ssh-style
   `[user@]host:path` goes through the system `rsync -a --protect-args`
