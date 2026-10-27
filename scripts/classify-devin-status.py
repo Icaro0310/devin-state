@@ -64,9 +64,7 @@ def _is_devin_status(status: dict) -> bool:
         return False
     if DEVIN_APP_MARKER not in (status.get("avatar_url") or ""):
         return False
-    if DEVIN_URL_HOST not in (status.get("target_url") or ""):
-        return False
-    return True
+    return DEVIN_URL_HOST in (status.get("target_url") or "")
 
 
 def classify_statuses(statuses: list[dict]) -> tuple[str, dict | None]:
@@ -101,7 +99,7 @@ def fetch_statuses(repo: str, sha: str) -> list[dict] | None:
     try:
         proc = subprocess.run(
             ["gh", "api", f"repos/{repo}/commits/{sha}/status"],
-            capture_output=True, text=True, env=env, timeout=60,
+            check=False, capture_output=True, text=True, env=env, timeout=60,
         )
     except (OSError, subprocess.TimeoutExpired):
         return None

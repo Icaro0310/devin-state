@@ -58,7 +58,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import subprocess
 import sys
@@ -94,8 +93,8 @@ def compute_verdict(devin: str, a: str, b: str,
         return "success", f"covered — {desc_core}{suffix}", "COVERED"
     if ran:
         return ("action_required",
-                f"DEGRADED {ran[0]}-only — {desc_core} — "
-                f"partial coverage, requires human review{suffix}",
+                (f"DEGRADED {ran[0]}-only — {desc_core} — "
+                 f"partial coverage, requires human review{suffix}"),
                 "DEGRADED")
     return "failure", f"no review executed — {desc_core}", "FAILURE"
 
@@ -111,8 +110,9 @@ def _gh(args: list[str]) -> bool:
     if "GH_TOKEN" not in env and env.get("GITHUB_TOKEN"):
         env["GH_TOKEN"] = env["GITHUB_TOKEN"]
     try:
-        proc = subprocess.run(["gh", "api", *args], capture_output=True,
-                              text=True, env=env, timeout=60)
+        proc = subprocess.run(["gh", "api", *args], check=False,
+                              capture_output=True, text=True, env=env,
+                              timeout=60)
     except (OSError, subprocess.TimeoutExpired):
         return False
     return proc.returncode == 0
