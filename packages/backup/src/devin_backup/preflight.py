@@ -330,7 +330,7 @@ def run_preflight(
     try:
         stores = _kept_stores(
             data_dir, config, out_dir, exclude, exclude_secrets)
-    except Exception as exc:  # discovery failure → unknown, not silent
+    except Exception as exc:  # noqa: BLE001 - discovery failure → unknown, not silent
         discovery_err = exc
     if stores is None:
         checks.append(_result(
