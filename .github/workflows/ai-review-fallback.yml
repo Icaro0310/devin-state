@@ -118,6 +118,14 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           fail_on: none
           incremental: "false"
+          # Same bounds as reviewer B: a single-slot Ollama queues
+          # requests server-side, so the client timeout must outlast the
+          # worst queue depth (cross-repo contention, ~4 x 60-90s gen).
+          ai-response-format: json_object
+          ai-primary-retries: "2"
+          ai-primary-retry-delay-sec: "10"
+          ai-max-tokens: "2048"
+          ai-request-timeout-sec: "300"
         continue-on-error: true
 
       - name: Record outcome
@@ -224,12 +232,14 @@ jobs:
           # json_object lets the 1.5B hit the verdict contract instead
           # of emitting free text that fails the parse -> retry cycle;
           # the token cap bounds generation time on the CPU-only VM.
-          # Worst case is now ~7min of honest FAILED, not a hang.
+          # The 300s request budget covers server-side queueing on the
+          # single-slot Ollama (cross-repo contention observed on #100
+          # and #101, where a queued request died at the 120s mark).
           ai-response-format: json_object
           ai-primary-retries: "2"
           ai-primary-retry-delay-sec: "10"
           ai-max-tokens: "2048"
-          ai-request-timeout-sec: "120"
+          ai-request-timeout-sec: "300"
         continue-on-error: true
 
       - name: Record outcome
