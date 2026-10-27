@@ -2953,9 +2953,56 @@ def test_tool_flag_gap_and_misc_carriers() -> None:
     ):
         new, _f = redact_text(cmd, file="s.sh")
         assert "hunter2" not in new, cmd
-    # Neighbours survive.
+    # ``--password2`` is itself a credential flag — both values mask.
     new, _f = redact_text(
         "imapsync --password1 hunter2 --password2 other", file="s.sh")
-    assert "--password2 other" in new
+    assert "other" not in new
     # A dangling flag cannot consume the next flag.
     assert redact_text("fab -H h -p -f x task", file="s.sh")[1] == []
+
+
+def test_flag_run_quoted_gap_and_repeated_flags() -> None:
+    """A quoted option containing ``&``/``|``/``;`` cannot stop the
+    scan, and a repeated credential flag masks every occurrence —
+    not just the first."""
+    for cmd in (
+        'cypress run --env "a;b" --key hunter2',
+        'codecov --flags "u|v" -t hunter2',
+        'swift -A https://x -U alice --os-auth-token "x;y" '
+        "-K hunter2 stat",
+        'pulsar-admin --params "a;b" --auth-params token:hunter2 '
+        "tenants list",
+        'atlas --note "x&y" --privateKey hunter2 --publicKey u',
+        "az login -p first -p hunter2",
+        "surreal sql -p first -p hunter2",
+        "docker login -u alice -p first -p hunter2",
+        "hydra -l u -p first -p hunter2 host",
+        "conan remote login r -p first -p hunter2",
+    ):
+        new, _f = redact_text(cmd, file="s.sh")
+        assert "hunter2" not in new, cmd
+        assert "first" not in new, cmd
+    # Intervening non-secret flags still survive inside the run.
+    new, _f = redact_text(
+        'cypress run --env "a;b" --key hunter2 --spec s.js',
+        file="s.sh")
+    assert "--spec s.js" in new
+    # A flag that only *looks* related does not mask.
+    new, _f = redact_text(
+        "atlas --privateKey hunter2 --publicKey u", file="s.sh")
+    assert "--publicKey u" in new
+
+
+def test_secret_store_option_with_value_before_path() -> None:
+    """``vault write``/``nomad var put`` options may carry a
+    space-separated or ``=``-joined value (``-namespace ns``) —
+    the option must not be mistaken for the var path."""
+    for cmd in (
+        "nomad var put -namespace dev secret/x k=hunter2",
+        "nomad var put -namespace=dev secret/x k=hunter2",
+        "vault write -namespace ns secret/x k=hunter2",
+        "vault write -format=json secret/x k=hunter2",
+    ):
+        new, _f = redact_text(cmd, file="s.sh")
+        assert "hunter2" not in new, cmd
+        assert "secret/x" in new, cmd
