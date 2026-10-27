@@ -1,0 +1,209 @@
+name: auto-merge
+
+# Merges trusted PRs autonomously, but only after review evidence exists
+# and a calibrated judge has allowed the merge action itself.
+#
+# The chain that must all be true before `gh pr merge --auto` is set:
+#
+#   1. Trusted author — OWNER/MEMBER/COLLABORATOR, dependabot[bot],
+#      github-actions[bot] (same trust set as pr-approve).
+#   2. Approved — an APPROVED review on the current head SHA. The
+#      pr-approve reusable only approves after review evidence:
+#      Devin Review clean, or the ai-review-fallback Review Coverage
+#      check, with zero unresolved blocking threads. We do not
+#      re-implement that evidence check here — approval is its output.
+#   3. Required checks green — every check context required by branch
+#      protection reports success on the head SHA.
+#   4. Judge — poordjaevin (devin-judge-action, offline `nli` backend)
+#      scores the *merge action* text: PR title, sensitive paths touched,
+#      coverage verdict. `block` → no merge, explanatory comment.
+#
+# `gh pr merge --auto` (native GitHub auto-merge) is the merge mechanism:
+# the actual merge only fires when branch protection is satisfied —
+# required checks + approving review — so a Judge approval cannot skip
+# protection. Fail-closed everywhere: an API error, a Judge backend
+# error, or an ambiguous state means no merge.
+#
+# pull_request_target on purpose: this file and every checked-out byte
+# come from the base branch; a PR cannot alter its own merge pipeline.
+# Nothing from the PR is checked out or executed — file lists and
+# reviews are read via the GitHub API only.
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+  pull_request_review:
+    types: [submitted]
+  check_suite:
+    types: [completed]
+  status: {}
+
+concurrency:
+  group: auto-merge-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Status events fire for every check context on every repo push —
+    # only Review Coverage and Devin Review can move a PR toward merge.
+    if: >-
+      github.event_name != 'status' ||
+      ((github.event.context == 'Review Coverage' ||
+        github.event.context == 'Devin Review') &&
+       github.event.state == 'success')
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Resolve candidate PR and gate conditions
+        id: gate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_SHA: ${{ github.event.pull_request.head.sha || github.event.check_suite.head_sha || github.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          python3 - <<'PY'
+          import json, os, subprocess, sys
+
+          env = os.environ
+          repo, event_sha = env["REPO"], env["EVENT_SHA"]
+
+          def gh(*args):
+              p = subprocess.run(["gh", "api", *args], capture_output=True,
+                                 text=True, timeout=60)
+              if p.returncode != 0:
+                  print(f"::warning::gh api {' '.join(args)} -> {p.stderr.strip()[:200]}")
+                  return None
+              try:
+                  return json.loads(p.stdout)
+              except json.JSONDecodeError:
+                  return None
+
+          def out(**kv):
+              with open(env["GITHUB_OUTPUT"], "a") as fh:
+                  for k, v in kv.items():
+                      fh.write(f"{k}={v}\n")
+
+          def bail(reason):
+              print(reason)
+              out(candidate="false")
+
+          # 1. Find the open PR owning this head SHA.
+          prs = gh(f"repos/{repo}/commits/{event_sha}/pulls")
+          if not prs:
+              bail(f"no PR found for {event_sha[:12]}")
+              sys.exit(0)
+          open_prs = [p for p in prs if p.get("state") == "open"
+                      and (p.get("head") or {}).get("sha") == event_sha]
+          if not open_prs:
+              bail(f"no open PR on head {event_sha[:12]}")
+              sys.exit(0)
+          if len(open_prs) > 1:
+              bail(f"{len(open_prs)} open PRs share head {event_sha[:12]} — "
+                   "cannot attribute merge to one diff")
+              sys.exit(0)
+          pr = open_prs[0]
+          n = pr["number"]
+
+          # 2. Mechanical gates — each a hard precondition.
+          if pr.get("draft"):
+              bail(f"PR #{n} is draft — not mergeable by policy")
+              sys.exit(0)
+
+          assoc = pr.get("author_association", "")
+          login = (pr.get("user") or {}).get("login", "")
+          trusted = assoc in {"OWNER", "MEMBER", "COLLABORATOR"} or \
+                    login in {"dependabot[bot]", "github-actions[bot]"}
+          if not trusted:
+              bail(f"PR #{n} author {login} ({assoc}) not in trusted set")
+              sys.exit(0)
+
+          head_sha = (pr.get("head") or {}).get("sha", "")
+          reviews = gh(f"repos/{repo}/pulls/{n}/reviews") or []
+          approved = any(r.get("state") == "APPROVED" and
+                         r.get("commit_id") == head_sha
+                         for r in reviews)
+          if not approved:
+              bail(f"PR #{n} has no APPROVED review on head {head_sha[:12]} "
+                   "— pr-approve has not cleared it")
+              sys.exit(0)
+
+          # Required checks from branch protection must all be green.
+          prot = gh(f"repos/{repo}/branches/{(pr.get('base') or {}).get('ref','main')}/protection") or {}
+          contexts = [c["context"] for c in
+                      (prot.get("required_status_checks") or {}).get("checks", [])]
+          checks = gh(f"repos/{repo}/commits/{head_sha}/check-runs?per_page=100") or {}
+          runs = {r["name"]: r for r in checks.get("check_runs", [])}
+          combined = gh(f"repos/{repo}/commits/{head_sha}/status") or {}
+          statuses = {s["context"]: s for s in combined.get("statuses", [])}
+          for ctx in contexts:
+              run, st = runs.get(ctx), statuses.get(ctx)
+              ok = (run and run.get("conclusion") == "success") or \
+                   (st and st.get("state") == "success")
+              if not ok:
+                  bail(f"PR #{n}: required check '{ctx}' not green")
+                  sys.exit(0)
+
+          # 3. Build the Judge action text: what merging this PR does.
+          files = gh(f"repos/{repo}/pulls/{n}/files?per_page=100") or []
+          names = [f.get("filename", "") for f in files]
+          danger = [f for f in names if any(k in f.lower() for k in
+                    ("reap", "kill", "secret", "credential", "billing",
+                     "delete", ".github/workflows", "install"))]
+          cov = statuses.get("Review Coverage") or {}
+          cov_desc = (cov.get("description") or "absent")[:200]
+          title = (pr.get("title") or "").replace('"', "'")[:140]
+          action = (
+              f"Merge PR #{n} \"{title}\" by {login} into "
+              f"{(pr.get('base') or {}).get('ref','main')} of {repo}. "
+              f"Changes {len(names)} file(s). "
+              f"Review coverage: {cov_desc}. "
+              + (f"Sensitive paths: {', '.join(danger[:8])}. "
+                 if danger else "No sensitive paths flagged. ")
+              + "Judge whether this merge action is safe to execute "
+                "autonomously, or should require explicit confirmation."
+          )
+          with open("judge-action.txt", "w") as fh:
+              fh.write(action)
+          out(candidate="true", pr=n, danger=len(danger))
+          print(f"PR #{n} cleared mechanical gates; judge text: {action[:160]}")
+          PY
+
+
+      - name: Judge the merge action
+        id: judge
+        if: steps.gate.outputs.candidate == 'true'
+        uses: Icaro0310/devin-judge-action@v0.1.0
+        with:
+          action-file: judge-action.txt
+          backend: nli
+
+      - name: Mark auto-merge
+        if: steps.gate.outputs.candidate == 'true' && steps.judge.outputs.block != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr merge "${{ steps.gate.outputs.pr }}" \
+            --repo "${{ github.repository }}" --auto --squash \
+            && echo "auto-merge armed for PR #${{ steps.gate.outputs.pr }}"
+
+      - name: Comment when the Judge holds the merge
+        if: steps.gate.outputs.candidate == 'true' && steps.judge.outputs.block == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr comment "${{ steps.gate.outputs.pr }}" \
+            --repo "${{ github.repository }}" --body "$(cat <<'EOF'
+          Auto-merge held: the judge gate returned a block verdict for this
+          merge action (sensitive surface or unverifiable state). A human
+          can still merge manually after reviewing. Verdict detail is in the
+          auto-merge run log.
+          EOF
+          )"
