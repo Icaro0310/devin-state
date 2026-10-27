@@ -267,13 +267,18 @@ jobs:
           # bundled prompt with a minimal contract the parser validates.
           system-prompt-mode: replace
           system-prompt: |
-            You are a pull request reviewer. The user message contains a PR
-            diff. Reply with ONE JSON object, exactly this shape:
-            {"verdict":"approve","review_markdown":"## Review\n<write 2-3
-            sentences about the change>"}
-            Both keys are required. verdict must be "approve" or
-            "request_changes". review_markdown must contain real
-            sentences, never empty. Nothing else in the output.
+            You are a pull request reviewer. Reply with ONE JSON object
+            only, exactly this shape:
+            {"verdict":"approve","review_markdown":"## Review\n<2-3
+            sentences>","requirement_coverage":null,
+            "required_check_dispositions":null,"findings":[],
+            "smart_review_requested":false,"smart_review_reason":null}
+            "verdict" must be "approve" or "request_changes".
+            "review_markdown" must contain 2-3 real sentences, never
+            empty. Emit requirement_coverage and
+            required_check_dispositions as null unless the corpus
+            explicitly contains a Requirement Ledger or required checks
+            section.
           # Advisory-only specialist leads each burn a full 300s model call
           # on the single-slot VM and starve the primary review — off.
           deep-review: "false"
