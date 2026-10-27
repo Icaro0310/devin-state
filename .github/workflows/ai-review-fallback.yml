@@ -140,6 +140,9 @@ jobs:
             object that ALWAYS contains a top-level "verdict" key with one
             of these exact values: "approve", "comment", "request_changes".
             Never omit "verdict". When in doubt use "comment".
+          # Advisory-only specialist leads each burn a full 300s model call
+          # on the single-slot VM and starve the primary review — off.
+          deep-review: "false"
         continue-on-error: true
 
       - name: Record outcome
@@ -265,6 +268,9 @@ jobs:
             object that ALWAYS contains a top-level "verdict" key with one
             of these exact values: "approve", "comment", "request_changes".
             Never omit "verdict". When in doubt use "comment".
+          # Advisory-only specialist leads each burn a full 300s model call
+          # on the single-slot VM and starve the primary review — off.
+          deep-review: "false"
         continue-on-error: true
 
       - name: Record outcome
