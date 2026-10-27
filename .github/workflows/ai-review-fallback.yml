@@ -224,7 +224,7 @@ jobs:
           ai-response-format: json_object
           ai-primary-retries: "2"
           ai-primary-retry-delay-sec: "10"
-          ai-max-tokens: "2048"
+          ai-max-tokens: "1024"
           ai-request-timeout-sec: "120"
         continue-on-error: true
 
