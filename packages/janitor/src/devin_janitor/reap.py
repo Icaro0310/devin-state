@@ -337,6 +337,31 @@ def _key(pid: int, starttime: int) -> str:
 DEFAULT_LEDGER_RETAIN_DAYS = 30
 
 
+def reap_build_info() -> dict:
+    """Build identity stamped on every ledger entry — calibration
+    labels must never mix events from different rules builds.
+
+    ``reap_rules`` is a content hash of this file: it moves when the
+    decision logic does, even without a version bump. ``devin-redact``
+    records which engine produced each redacted cmdline — pinning a
+    published release vs the audit branch is exactly the kind of drift
+    the labeler needs to see."""
+    import hashlib
+    import importlib.metadata
+    info: dict[str, str] = {}
+    for pkg in ("devin-janitor", "devin-redact"):
+        try:
+            info[pkg] = importlib.metadata.version(pkg)
+        except importlib.metadata.PackageNotFoundError:
+            info[pkg] = "absent"
+    try:
+        info["reap_rules"] = "sha256:" + hashlib.sha256(
+            Path(__file__).read_bytes()).hexdigest()[:12]
+    except OSError:
+        info["reap_rules"] = "unknown"
+    return info
+
+
 def _ledger_key(entry: dict) -> str:
     """Dedup identity: decision + ``pid:starttime`` — a stuck process
     reported every 3 min is ONE calibration event, not 480."""
@@ -453,8 +478,8 @@ def scan(
         if slug is not None:
             res.attributed += 1
 
-        def skip(reason: str) -> None:
-            res.skipped.append((proc, reason))
+        def skip(reason: str, p: ProcInfo = proc) -> None:
+            res.skipped.append((p, reason))
 
         if proc.state == "Z":
             skip("zombie — init reaps it")
@@ -635,7 +660,7 @@ def _redact(text: str, timeout: float = REDACT_TIMEOUT) -> str:
             out = redact_text(text)[0] or ""
             os.write(wfd, out.encode("utf-8", "replace"))
         except BaseException:  # noqa: BLE001 — child failure = fingerprint
-            pass
+            os._exit(1)
         os._exit(0)
     os.close(wfd)
     deadline = time.monotonic() + timeout
@@ -683,8 +708,8 @@ def render(res: ReapResult, apply: bool) -> str:
     """Human-readable listing — every cmdline is pre-redacted."""
     mode = "REAP" if apply else "DRY-RUN"
     lines = [
-        f"reap [{mode}]: {res.scanned} procs · {res.orphans} orphaned · "
-        f"{res.attributed} attributed · {len(res.candidates)} eligible"
+        (f"reap [{mode}]: {res.scanned} procs · {res.orphans} orphaned · "
+         f"{res.attributed} attributed · {len(res.candidates)} eligible")
     ]
     if not res.attribution_ok:
         lines.append(

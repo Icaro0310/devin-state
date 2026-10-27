@@ -50,7 +50,15 @@ jq -c 'select(.decision=="would_kill")' \
 
 Each event is one **distinct identity** (`decision` + `pid` +
 `starttime`) with `ts_first`, `ts_last`, `count`, `session`,
-`cpu_pct` (max), `comm`, redacted `cmdline`.
+`cpu_pct` (max), `comm`, redacted `cmdline`, and a `build` stamp
+(`devin-janitor` version, `devin-redact` version, and `reap_rules` —
+a content hash of `reap.py`). Labels must be compared within the same
+`reap_rules` build: a rules change resets what "the same event" means.
+
+**The 14-day clock starts at the final build** — the timer run whose
+binary carries the `devin-redact==0.2.5` pin, bounded redaction, and
+version-stamped ledger. Events from earlier builds are evidence, but
+they do not count toward the enable criteria.
 
 Labels (per identity):
 

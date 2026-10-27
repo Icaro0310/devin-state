@@ -13,14 +13,12 @@ import time
 from pathlib import Path
 
 import pytest
-
 from devin_janitor.reap import (
     ProcInfo,
     ReapCandidate,
     _key,
     _managed_by_unit,
     _parse_stat,
-    _redact,
     append_ledger,
     load_reap_state,
     reap,
@@ -43,10 +41,10 @@ def mkproc(pid, ppid=1, *, uid=UID, comm="python3",
 class FakeTable:
     """In-memory ProcTable — drives scan/reap without /proc."""
 
-    def __init__(self, procs, cpu_map=None, adopters={1}):
+    def __init__(self, procs, cpu_map=None, adopters=None):
         self.procs = {p.pid: p for p in procs}
         self.cpu_map = cpu_map or {}
-        self._adopters = set(adopters)
+        self._adopters = set(adopters) if adopters is not None else {1}
 
     def adopter_pids(self, uid):
         return set(self._adopters)
@@ -327,6 +325,7 @@ def test_redact_timeout_falls_back_and_marks_broken(monkeypatch):
     """A hanging engine (ReDoS lives in C code — signal.alarm can't
     reach it) is SIGKILLed in a forked child; the run goes hash-only."""
     import types
+
     import devin_janitor.reap as mod
 
     fake = types.ModuleType("devin_redact.engine")
@@ -400,7 +399,6 @@ class TestLedger:
             {"ts": 100, "decision": "would_kill", "pid": 5,
              "starttime": 9},
         ])
-        import json as _json
         assert len(f.read_text().splitlines()) == 2
 
     def test_file_mode_is_0600(self, tmp_path):
@@ -412,9 +410,10 @@ class TestLedger:
         f = tmp_path / "ledger.jsonl"
         now = 1_800_000_000.0
         f.write_text(
-            '{"ts": %d, "decision": "would_kill", "pid": 1}\n'
-            '{"ts_first": %d, "decision": "killed", "pid": 2}\n'
-            % (now - 31 * 86400, now - 10 * 86400),
+            f'{{"ts": {now - 31 * 86400:.0f}, "decision": "would_kill",'
+            f' "pid": 1}}\n'
+            f'{{"ts_first": {now - 10 * 86400:.0f}, "decision": "killed",'
+            f' "pid": 2}}\n',
             encoding="utf-8")
         append_ledger(f, [{"ts": now, "decision": "would_kill", "pid": 3}],
                       retain_days=30, now=now)
@@ -509,17 +508,17 @@ def test_e2e_orphaned_busy_child_becomes_candidate(tmp_path):
     # the child's pid, then sleeps — killing it orphans the child
     parent = subprocess.Popen(
         [sys.executable, "-c",
-         "import subprocess,sys,time\n"
-         "c=subprocess.Popen([sys.executable,'-c','while True: pass'])\n"
-         "print(c.pid,flush=True)\n"
-         "time.sleep(120)"],
+         ("import subprocess,sys,time\n"
+          "c=subprocess.Popen([sys.executable,'-c','while True: pass'])\n"
+          "print(c.pid,flush=True)\n"
+          "time.sleep(120)")],
         stdout=subprocess.PIPE, text=True)
     child_pid = int(parent.stdout.readline().strip())
     table = ProcFsTable()
     state = {"first_seen": {}, "pidmap": {}}
     try:
-        kw = dict(locks_dir=tmp_path, sessions_db=tmp_path / "none.db",
-                  state=state, grace_min=0, sample_sec=0.05)
+        kw = {"locks_dir": tmp_path, "sessions_db": tmp_path / "none.db",
+              "state": state, "grace_min": 0, "sample_sec": 0.05}
         # sweep 1 — session alive: child recorded as its descendant
         scan(table, pid_map={child_pid: "fake-session"}, **kw)
         assert state["pidmap"], "child was not attributed on live sweep"

@@ -60,6 +60,7 @@ from devin_janitor.reap import (
     append_ledger,
     load_reap_state,
     reap,
+    reap_build_info,
     render,
     save_reap_state,
     scan,
@@ -523,6 +524,7 @@ def cmd_reap(args: argparse.Namespace) -> int:
     # — the calibration evalset must survive log rotation; the capped
     # shared log keeps only the sweep summary
     now = int(time.time())
+    build = reap_build_info()  # stamped per run — labels never mix builds
     decisions = res.candidates if not args.apply else res.killed
     append_ledger(args.ledger_file, [
         {"ts": now, "decision": "would_kill" if not args.apply else "killed",
@@ -533,14 +535,16 @@ def cmd_reap(args: argparse.Namespace) -> int:
          "session": c.session_slug,
          "cpu_pct": round(c.cpu_pct, 1),
          "age_s": int(c.proc.age_s),
-         "reason": c.reason}
+         "reason": c.reason,
+         "build": build}
         for c in decisions
     ] + [
-        {"ts": now, "decision": "survivor", "pid": pid}
+        {"ts": now, "decision": "survivor", "pid": pid, "build": build}
         for pid in res.survivors
     ] + (
         [{"ts": now, "decision": "circuit_tripped",
-          "eligible": len(res.skipped)}] if res.circuit else []
+          "eligible": len(res.skipped), "build": build}]
+        if res.circuit else []
     ))
     if res.candidates or res.killed or res.survivors or res.circuit:
         _cap_log_size(args.log_file)
