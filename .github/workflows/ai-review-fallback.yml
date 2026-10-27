@@ -236,27 +236,35 @@ jobs:
           [ -s /tmp/pr.diff ] || { echo "::error::empty diff"; exit 1; }
           python3 <<'PYE'
           import json, os, subprocess, sys, urllib.request
+          import re
           diff = open("/tmp/pr.diff").read()[:24000]
-          body = {"model": os.environ["MODEL"], "response_format": {"type": "json_object"}, "max_tokens": 1024,
+          # Tolerant contract, not strict JSON: the 1.5B writes raw quotes
+          # and newlines inside JSON strings (Unterminated string at
+          # char ~4.7k). Plain "VERDICT:" + prose parses every time.
+          body = {"model": os.environ["MODEL"], "max_tokens": 768,
                   "messages": [{"role": "system", "content":
-                      "You are a pull request reviewer. Reply with ONE JSON object only, exactly this shape:\n"
-                      "{\"verdict\":\"approve\",\"review_markdown\":\"## Review\\n<2-3 sentences>\"}\n"
-                      "\"verdict\" must be \"approve\" or \"request_changes\". \"review_markdown\" must contain 2-3 real sentences about the change, never empty. Nothing else in the output."},
+                      "You are a pull request reviewer. Reply in this exact format:\n"
+                      "VERDICT: approve\n"
+                      "REVIEW:\n"
+                      "## Review\n<2-3 sentences about what the change does and any risk>\n\n"
+                      "VERDICT must be approve or request_changes. Nothing else before VERDICT."},
                   {"role": "user", "content": "# Pull Request Diff\n```diff\n" + diff + "\n```"}]}
           last = ""
-          for attempt in (1, 2):
+          for attempt in (1, 2, 3):
               try:
                   req = urllib.request.Request(os.environ["OLLAMA_CHAT"], data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
                   resp = json.load(urllib.request.urlopen(req, timeout=600))
                   text = resp["choices"][0]["message"]["content"]
-                  parsed = json.loads(text)
-                  verdict, markdown = parsed["verdict"], parsed["review_markdown"]
-                  assert verdict in ("approve", "request_changes") and len(markdown) > 10, "contract"
+                  m = re.search(r"VERDICT:\s*(approve|request_changes)", text, re.I)
+                  assert m, "no VERDICT line in: " + text[:120]
+                  verdict = m.group(1).lower()
+                  markdown = (text.split("REVIEW:", 1)[1] if "REVIEW:" in text else text[m.end():]).strip()
+                  assert len(markdown) > 10, "empty review body"
                   break
               except Exception as e:
                   last = str(e) or repr(e)
           else:
-              print(f"::error::model unusable after 2 attempts: {last}")
+              print(f"::error::model unusable after 3 attempts: {last}")
               sys.exit(1)
           subprocess.run(["gh", "pr", "comment", os.environ["PR_NUM"], "--body", "**Reviewer B (local model `" + os.environ["MODEL"] + "`) — verdict: `" + verdict + "`**\n\n" + markdown], check=True)
           print(f"reviewer B verdict: {verdict}")
