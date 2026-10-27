@@ -2968,10 +2968,14 @@ def test_flag_run_quoted_gap_and_repeated_flags() -> None:
     for cmd in (
         'cypress run --env "a;b" --key hunter2',
         'codecov --flags "u|v" -t hunter2',
-        'swift -A https://x -U alice --os-auth-token "x;y" '
-        "-K hunter2 stat",
-        'pulsar-admin --params "a;b" --auth-params token:hunter2 '
-        "tenants list",
+        (
+            'swift -A https://x -U alice --os-auth-token "x;y" '
+            "-K hunter2 stat"
+        ),
+        (
+            'pulsar-admin --params "a;b" --auth-params token:hunter2 '
+            "tenants list"
+        ),
         'atlas --note "x&y" --privateKey hunter2 --publicKey u',
         "az login -p first -p hunter2",
         "surreal sql -p first -p hunter2",
