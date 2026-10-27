@@ -337,6 +337,15 @@ def _key(pid: int, starttime: int) -> str:
 DEFAULT_LEDGER_RETAIN_DAYS = 30
 
 
+def _ledger_key(entry: dict) -> str:
+    """Dedup identity: decision + ``pid:starttime`` — a stuck process
+    reported every 3 min is ONE calibration event, not 480."""
+    pid = entry.get("pid")
+    if pid is None:
+        return f"{entry.get('decision')}:run"
+    return f"{entry.get('decision')}:{pid}:{entry.get('starttime')}"
+
+
 def append_ledger(
     path: str | Path,
     entries: list[dict],
@@ -344,31 +353,52 @@ def append_ledger(
     retain_days: int = DEFAULT_LEDGER_RETAIN_DAYS,
     now: float | None = None,
 ) -> None:
-    """Append-only ``would_kill``/``killed`` decision ledger.
+    """Deduped ``would_kill``/``killed`` decision ledger (mode 0600).
 
-    Unlike the capped shared log, this file IS the calibration
-    evalset — entries older than ``retain_days`` are pruned on write,
-    nothing else is ever dropped. Each entry should carry ``ts`` plus
-    the decision fields (pid, session, cpu, cmdline fingerprint).
+    One row per distinct process identity — first sighting ts_first,
+    latest ts_last, and a sighting ``count``. Kill-enable criteria read
+    DISTINCT identities (>=10 across >=3 incidents over 14 days), so a
+    single stuck process must not inflate the evalset. Rows older than
+    ``retain_days`` are pruned on write; the capped shared log keeps
+    only sweep summaries so rotation cannot eat this evidence.
     """
     if not entries:
         return
     now = time.time() if now is None else now
     cutoff = now - retain_days * 86400
     p = Path(path)
-    kept: list[str] = []
+    rows: dict[str, dict] = {}
     try:
         for line in p.read_text(encoding="utf-8").splitlines():
             try:
-                if json.loads(line).get("ts", 0) >= cutoff:
-                    kept.append(line)
+                e = json.loads(line)
             except json.JSONDecodeError:
                 continue  # corrupt lines are dropped, never kept raw
+            if e.get("ts_first", e.get("ts", 0)) < cutoff:
+                continue
+            rows[_ledger_key(e)] = e
     except OSError:
         pass  # no ledger yet — start fresh
+    for e in entries:
+        key = _ledger_key(e)
+        prev = rows.get(key)
+        if prev is None:
+            rows[key] = {**e, "ts_first": e["ts"],
+                         "ts_last": e["ts"], "count": 1}
+        else:
+            prev["count"] = prev.get("count", 1) + 1
+            prev["ts_last"] = e["ts"]
+            if e.get("cpu_pct") is not None:
+                prev["cpu_pct"] = max(prev.get("cpu_pct") or 0,
+                                      e["cpu_pct"])
     p.parent.mkdir(parents=True, exist_ok=True)
-    kept.extend(json.dumps(e, ensure_ascii=False) for e in entries)
-    p.write_text("\n".join(kept) + "\n", encoding="utf-8")
+    tmp = p.with_name(p.name + ".tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        for e in rows.values():
+            fh.write(json.dumps(e, ensure_ascii=False) + "\n")
+    os.replace(tmp, p)  # atomic; the 0600 mode travels with the tmp inode
+    os.chmod(p, 0o600)  # belt: tighten any older file's mode too
 
 
 # --------------------------------------------------------------- scan ----
@@ -563,21 +593,90 @@ def reap(
 
 # ----------------------------------------------------------- redaction ----
 
+REDACT_TIMEOUT = 0.5
+_redact_broken = False  # one engine timeout → hash-only for the run
 
-def _redact(text: str) -> str:
+
+def _redact_fallback(text: str) -> str:
+    """Fingerprint — NEVER the raw line (issue #96: a token in argv is
+    exactly what must not reach the journal)."""
+    import hashlib
+    digest = hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()
+    return f"<cmdline sha256:{digest[:12]} len={len(text)}>"
+
+
+def _engine_available() -> bool:
+    try:
+        from devin_redact.engine import redact_text  # noqa: F401
+        return True
+    except Exception:  # noqa: BLE001 — absent/broken install
+        return False
+
+
+def _redact(text: str, timeout: float = REDACT_TIMEOUT) -> str:
     """Strip secrets from a cmdline before ANY output or log line.
 
-    The full engine runs when installed; when it is not, the fallback
-    is a fingerprint — NEVER the raw line, since a half-written local
-    regex is exactly how a token leaks into the journal.
+    The engine runs in a FORKED child under a hard timeout — regex
+    ReDoS lives in C code where signal.alarm can't reach (#96); only
+    SIGKILL on a separate process is a real bound. On timeout the child
+    is killed, the engine is marked broken for the rest of the run,
+    and the fingerprint fallback is used (never the raw line).
     """
-    try:
-        from devin_redact.engine import redact_text
-        return redact_text(text)[0]
-    except Exception:  # noqa: BLE001 — redactor unavailable → hash only
-        import hashlib
-        digest = hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()
-        return f"<cmdline sha256:{digest[:12]} len={len(text)}>"
+    global _redact_broken
+    if _redact_broken or not _engine_available():
+        return _redact_fallback(text)
+    import select
+    rfd, wfd = os.pipe()
+    pid = os.fork()
+    if pid == 0:
+        try:
+            os.close(rfd)
+            from devin_redact.engine import redact_text
+            out = redact_text(text)[0] or ""
+            os.write(wfd, out.encode("utf-8", "replace"))
+        except BaseException:  # noqa: BLE001 — child failure = fingerprint
+            pass
+        os._exit(0)
+    os.close(wfd)
+    deadline = time.monotonic() + timeout
+    out = b""
+    alive = True
+    while time.monotonic() < deadline and alive:
+        done, _status = os.waitpid(pid, os.WNOHANG)
+        if done:
+            alive = False
+        r, _, _ = select.select([rfd], [], [], 0.02)
+        if r:
+            chunk = os.read(rfd, 1 << 16)
+            if not chunk:
+                break
+            out += chunk
+    if alive:
+        try:
+            os.kill(pid, 9)
+        except ProcessLookupError:
+            pass
+        try:
+            os.waitpid(pid, 0)
+        except ChildProcessError:
+            pass
+        _redact_broken = True
+        os.close(rfd)
+        return _redact_fallback(text)
+    try:  # drain any bytes that raced the exit
+        while True:
+            r, _, _ = select.select([rfd], [], [], 0)
+            if not r:
+                break
+            chunk = os.read(rfd, 1 << 16)
+            if not chunk:
+                break
+            out += chunk
+    except OSError:
+        pass
+    os.close(rfd)
+    redacted = out.decode("utf-8", "replace").strip()
+    return redacted if redacted else _redact_fallback(text)
 
 
 def render(res: ReapResult, apply: bool) -> str:

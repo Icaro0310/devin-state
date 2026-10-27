@@ -527,6 +527,8 @@ def cmd_reap(args: argparse.Namespace) -> int:
     append_ledger(args.ledger_file, [
         {"ts": now, "decision": "would_kill" if not args.apply else "killed",
          "pid": c.proc.pid,
+         "starttime": c.proc.starttime,
+         "comm": c.proc.comm,
          "cmdline": _redact(c.proc.cmdline)[:200],
          "session": c.session_slug,
          "cpu_pct": round(c.cpu_pct, 1),

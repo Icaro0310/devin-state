@@ -323,23 +323,97 @@ def test_redact_fallback_never_emits_raw(monkeypatch):
     assert "--token" not in out and "--other" not in out
 
 
+def test_redact_timeout_falls_back_and_marks_broken(monkeypatch):
+    """A hanging engine (ReDoS lives in C code — signal.alarm can't
+    reach it) is SIGKILLed in a forked child; the run goes hash-only."""
+    import types
+    import devin_janitor.reap as mod
+
+    fake = types.ModuleType("devin_redact.engine")
+    def redact_text(t):
+        import time as _t
+        _t.sleep(60)
+        return (t, [])
+    fake.redact_text = redact_text
+    monkeypatch.setitem(sys.modules, "devin_redact.engine", fake)
+    monkeypatch.setattr(mod, "_redact_broken", False)
+
+    secret = "toorpass123"
+    t0 = time.monotonic()
+    out = mod._redact(f"mysql://root:{secret}@127.0.0.1/db", timeout=0.5)
+    assert time.monotonic() - t0 < 5.0, "engine hang leaked into caller"
+    assert secret not in out and "sha256:" in out
+    assert mod._redact_broken is True
+    # subsequent calls skip the engine entirely — instant fingerprint
+    t0 = time.monotonic()
+    out2 = mod._redact("mysql://root:abc@h/db")
+    assert time.monotonic() - t0 < 1.0 and "sha256:" in out2
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"),
+                    reason="fork-based timeout is POSIX")
+def test_redact_mysql_uri_budget():
+    """The issue-#96 repro as a cmdline: the budget holds whether the
+    installed engine is the ReDoS'd one (fork killed) or absent (hash)."""
+    import devin_janitor.reap as mod
+    mod._redact_broken = False
+    t0 = time.monotonic()
+    out = mod._redact("conn mysql://root:toorpass@127.0.0.1/db end",
+                      timeout=0.5)
+    assert time.monotonic() - t0 < 5.0
+    assert "toorpass" not in out
+
+
 # ------------------------------------------------------------ ledger ----
 
 
 class TestLedger:
     def test_append_creates_jsonl(self, tmp_path):
         f = tmp_path / "ledger.jsonl"
-        append_ledger(f, [{"ts": 100, "decision": "would_kill", "pid": 5}])
+        append_ledger(
+            f, [{"ts": 100, "decision": "would_kill", "pid": 5,
+                 "starttime": 7}])
         import json as _json
         rows = [_json.loads(l) for l in f.read_text().splitlines()]
-        assert rows == [{"ts": 100, "decision": "would_kill", "pid": 5}]
+        assert len(rows) == 1
+        assert rows[0]["count"] == 1 and rows[0]["ts_first"] == 100 \
+            and rows[0]["ts_last"] == 100 and rows[0]["pid"] == 5
+
+    def test_same_identity_dedups_to_counter(self, tmp_path):
+        """A stuck process seen every 3 min is ONE event, not 480."""
+        f = tmp_path / "ledger.jsonl"
+        e = {"ts": 100, "decision": "would_kill", "pid": 5,
+             "starttime": 7, "cpu_pct": 40.0}
+        append_ledger(f, [dict(e)], now=100)
+        append_ledger(f, [dict(e, ts=200, cpu_pct=95.0)], now=200)
+        import json as _json
+        rows = [_json.loads(l) for l in f.read_text().splitlines()]
+        assert len(rows) == 1
+        assert rows[0]["count"] == 2 and rows[0]["ts_first"] == 100
+        assert rows[0]["ts_last"] == 200 and rows[0]["cpu_pct"] == 95.0
+
+    def test_pid_reuse_is_a_distinct_identity(self, tmp_path):
+        f = tmp_path / "ledger.jsonl"
+        append_ledger(f, [
+            {"ts": 100, "decision": "would_kill", "pid": 5,
+             "starttime": 7},
+            {"ts": 100, "decision": "would_kill", "pid": 5,
+             "starttime": 9},
+        ])
+        import json as _json
+        assert len(f.read_text().splitlines()) == 2
+
+    def test_file_mode_is_0600(self, tmp_path):
+        f = tmp_path / "ledger.jsonl"
+        append_ledger(f, [{"ts": 1, "decision": "killed", "pid": 1}])
+        assert (f.stat().st_mode & 0o777) == 0o600
 
     def test_retention_prunes_old_entries(self, tmp_path):
         f = tmp_path / "ledger.jsonl"
         now = 1_800_000_000.0
         f.write_text(
             '{"ts": %d, "decision": "would_kill", "pid": 1}\n'
-            '{"ts": %d, "decision": "killed", "pid": 2}\n'
+            '{"ts_first": %d, "decision": "killed", "pid": 2}\n'
             % (now - 31 * 86400, now - 10 * 86400),
             encoding="utf-8")
         append_ledger(f, [{"ts": now, "decision": "would_kill", "pid": 3}],
@@ -355,7 +429,8 @@ class TestLedger:
 
     def test_corrupt_lines_dropped_on_rewrite(self, tmp_path):
         f = tmp_path / "ledger.jsonl"
-        f.write_text('{"ts": 1}\n{corrupt\n', encoding="utf-8")
+        f.write_text('{"ts_first": 1, "decision": "x", "pid": 1}\n'
+                     '{corrupt\n', encoding="utf-8")
         append_ledger(f, [{"ts": 2, "decision": "survivor", "pid": 9}],
                       retain_days=30, now=2)
         assert "{corrupt" not in f.read_text()
