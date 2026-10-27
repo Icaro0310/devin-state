@@ -261,13 +261,21 @@ jobs:
           # (missing_verdict_key, 794 chars/280 tokens, stop) — append-mode
           # steering keeps the bundled prompt and adds the contract;
           # concise caps the output drift on this small model.
-          system-prompt-mode: append
-          review-verbosity: concise
+          # The 1.5B completes fast but never honours the bundled review
+          # schema — every lane-B run died on missing_verdict_key
+          # (173 chars/53 tokens, finish_reason=stop). B replaces the
+          # bundled prompt with a minimal contract the parser validates.
+          system-prompt-mode: replace
           system-prompt: |
-            OUTPUT CONTRACT (highest priority): respond with a single JSON
-            object that ALWAYS contains a top-level "verdict" key with one
-            of these exact values: "approve", "comment", "request_changes".
-            Never omit "verdict". When in doubt use "comment".
+            You are a pull request reviewer. The user message contains the
+            PR diff and metadata. Respond with exactly one JSON object and
+            nothing else:
+            {"verdict": "approve"|"comment"|"request_changes",
+             "summary": "one sentence about the change",
+             "findings": [{"severity": "blocker"|"major"|"minor"|"info",
+                           "path": "file path", "issue": "what is wrong"}]}
+            Rules: "verdict" is REQUIRED — never omit it. Use "comment"
+            when unsure. At most 3 findings; empty array if none.
           # Advisory-only specialist leads each burn a full 300s model call
           # on the single-slot VM and starve the primary review — off.
           deep-review: "false"
