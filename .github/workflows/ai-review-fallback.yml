@@ -222,66 +222,45 @@ jobs:
             echo "ok=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Reviewer B — pr-reviewer-action (Ollama via OpenAI API)
+      - name: Reviewer B — local model (direct Ollama call)
         id: rev
         if: steps.probe.outputs.ok == 'true'
-        uses: misospace/pr-reviewer-action@5b1839535748f3afd1bd3ef04e8009302cba9aa6
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          ai-base-url: ${{ vars.OLLAMA_TAILNET_URL }}/v1
-          ai-api-format: openai
-          ai-model: ${{ vars.OLLAMA_MODEL }}
-          ai-api-key: ""
-          tool-mode: "off"
-          # review_blockers: request_changes verdict posts a native
-          # blocking review, approve posts an advisory comment — it can
-          # never publish an approval by construction.
-          publish-mode: review_blockers
-          # 'fail' not 'notice': a model that cannot produce a usable
-          # review must report FAILED here, not post a request_changes
-          # review that impersonates a blocking finding. Real blockers
-          # still publish as request_changes via review_blockers.
-          on-model-failure: fail
-          # Bound the action's own retry loop. Defaults (8 retries x
-          # 300s request timeout + 15s delay) outlive the 15min job
-          # timeout on every failure mode: #238 logged ~55min of
-          # periodic /api/tags probes with zero chat completions.
-          # json_object lets the 1.5B hit the verdict contract instead
-          # of emitting free text that fails the parse -> retry cycle;
-          # the token cap bounds generation time on the CPU-only VM.
-          # The 300s request budget covers server-side queueing on the
-          # single-slot Ollama (cross-repo contention observed on #100
-          # and #101, where a queued request died at the 120s mark).
-          ai-response-format: json_object
-          ai-primary-retries: "2"
-          ai-primary-retry-delay-sec: "10"
-          ai-max-tokens: "1024"
-          ai-request-timeout-sec: "600"
-          # The 1.5B completes fine but drops the required verdict key
-          # (missing_verdict_key, 794 chars/280 tokens, stop) — append-mode
-          # steering keeps the bundled prompt and adds the contract;
-          # concise caps the output drift on this small model.
-          # The 1.5B completes fast but never honours the bundled review
-          # schema — every lane-B run died on missing_verdict_key
-          # (173 chars/53 tokens, finish_reason=stop). B replaces the
-          # bundled prompt with a minimal contract the parser validates.
-          system-prompt-mode: replace
-          system-prompt: |
-            You are a pull request reviewer. Reply with ONE JSON object
-            only, exactly this shape:
-            {"verdict":"approve","review_markdown":"## Review\n<2-3
-            sentences>","requirement_coverage":null,
-            "required_check_dispositions":null,"findings":[],
-            "smart_review_requested":false,"smart_review_reason":null}
-            "verdict" must be "approve" or "request_changes".
-            "review_markdown" must contain 2-3 real sentences, never
-            empty. Emit requirement_coverage and
-            required_check_dispositions as null unless the corpus
-            explicitly contains a Requirement Ledger or required checks
-            section.
-          # Advisory-only specialist leads each burn a full 300s model call
-          # on the single-slot VM and starve the primary review — off.
-          deep-review: "false"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OLLAMA_CHAT: ${{ vars.OLLAMA_TAILNET_URL }}/v1/chat/completions
+          MODEL: ${{ vars.OLLAMA_MODEL }}
+          PR_NUM: ${{ github.event.pull_request.number }}
+        run: |
+          set -u
+          gh api "repos/${{ github.repository }}/pulls/$PR_NUM" -H "Accept: application/vnd.github.diff" > /tmp/pr.diff
+          [ -s /tmp/pr.diff ] || { echo "::error::empty diff"; exit 1; }
+          python3 <<'PYE'
+          import json, os, subprocess, sys, urllib.request
+          diff = open("/tmp/pr.diff").read()[:24000]
+          body = {"model": os.environ["MODEL"], "response_format": {"type": "json_object"}, "max_tokens": 1024,
+                  "messages": [{"role": "system", "content":
+                      "You are a pull request reviewer. Reply with ONE JSON object only, exactly this shape:\n"
+                      "{\"verdict\":\"approve\",\"review_markdown\":\"## Review\\n<2-3 sentences>\"}\n"
+                      "\"verdict\" must be \"approve\" or \"request_changes\". \"review_markdown\" must contain 2-3 real sentences about the change, never empty. Nothing else in the output."},
+                  {"role": "user", "content": "# Pull Request Diff\n```diff\n" + diff + "\n```"}]}
+          last = ""
+          for attempt in (1, 2):
+              try:
+                  req = urllib.request.Request(os.environ["OLLAMA_CHAT"], data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
+                  resp = json.load(urllib.request.urlopen(req, timeout=600))
+                  text = resp["choices"][0]["message"]["content"]
+                  parsed = json.loads(text)
+                  verdict, markdown = parsed["verdict"], parsed["review_markdown"]
+                  assert verdict in ("approve", "request_changes") and len(markdown) > 10, "contract"
+                  break
+              except Exception as e:
+                  last = str(e) or repr(e)
+          else:
+              print(f"::error::model unusable after 2 attempts: {last}")
+              sys.exit(1)
+          subprocess.run(["gh", "pr", "comment", os.environ["PR_NUM"], "--body", "**Reviewer B (local model `" + os.environ["MODEL"] + "`) — verdict: `" + verdict + "`**\n\n" + markdown], check=True)
+          print(f"reviewer B verdict: {verdict}")
+          PYE
         continue-on-error: true
 
       - name: Record outcome
