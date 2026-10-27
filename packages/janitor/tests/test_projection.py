@@ -204,17 +204,21 @@ def test_report_cli_project_json(devin_dir, tmp_path, capsys):
     assert sdb["ok"] and sdb["rate_bytes_per_day"] > 0
 
 
-def test_report_cli_project_invalid(devin_dir, tmp_path):
+def test_report_cli_project_invalid(devin_dir, tmp_path, capsys):
     for bad in ("bogus", "0d"):
         rc = main([
             "report", "--data-dir", str(devin_dir.root),
             "--pending-file", str(tmp_path / "p.json"),
             "--project", bad,
         ])
+        captured = capsys.readouterr()
         assert rc == 2, bad
+        # stderr explains the rejection; no report reaches stdout
+        assert "horizon" in captured.err, bad
+        assert captured.out == "", bad
 
 
-def test_report_cli_project_negative_exits_2(devin_dir, tmp_path):
+def test_report_cli_project_negative_exits_2(devin_dir, tmp_path, capsys):
     # "-3d" fails loudly either way: on Python <3.14 it looks like a flag
     # so argparse exits 2 itself; on 3.14+ argparse consumes it as the
     # value, parse_horizon rejects it and main() returns 2 — same CLI
@@ -226,9 +230,17 @@ def test_report_cli_project_negative_exits_2(devin_dir, tmp_path):
             "--project", "-3d",
         ])
     except SystemExit as exc:
+        # argparse path — stderr names the rejected option
         assert exc.code == 2
+        expected = "--project"
     else:
+        # parse_horizon path — stderr names the invalid horizon
         assert rc == 2
+        expected = "invalid --project horizon '-3d'"
+    captured = capsys.readouterr()
+    assert "error" in captured.err
+    assert expected in captured.err
+    assert captured.out == ""  # rejected before any projection prints
 
 
 def test_report_cli_project_writes_nothing(devin_dir, tmp_path):
