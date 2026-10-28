@@ -16,7 +16,9 @@ post-redact open test (rollback + restore on failure).
 from __future__ import annotations
 
 import ast
+import bisect
 import hashlib
+import io
 import itertools
 import json
 import os
@@ -24,10 +26,20 @@ import re
 import shutil
 import sqlite3
 import tempfile
+import tokenize
 from pathlib import Path, PurePosixPath
 
 from . import __version__
-from .patterns import PATTERNS, SECRET_CATEGORIES, pattern_name, sensitive_match
+from .patterns import (
+    ENV_NAME_PATTERN,
+    FILE_GATED_PATTERNS,
+    GUARD_EXEMPT_PATTERNS,
+    PATTERNS,
+    SECRET_CATEGORIES,
+    SUBMASK_PATTERNS,
+    pattern_name,
+    sensitive_match,
+)
 from .semantic import analyze_tool_call_json
 
 _DB_SUFFIXES = {".db", ".sqlite", ".sqlite3"}
@@ -38,6 +50,37 @@ _DB_SIDECAR_SUFFIXES = ("-wal", "-shm", "-journal")
 _REDACTED_TAG = "<REDACTED:"
 _SEMANTIC_CATEGORY = "sensitive_tool_output"
 _BLOCKING_CATEGORIES = SECRET_CATEGORIES | {_SEMANTIC_CATEGORY}
+
+# Names that mark content as text even when no codec accepts it —
+# a staged ``.env`` or ``config.yaml`` whose bytes fail every decode is
+# scanned lossy (surrogateescape + printable projection), never skipped
+# silently: the gate cannot vouch for bytes it did not read.
+_TEXT_SUFFIXES = {
+    ".env", ".txt", ".md", ".markdown", ".rst", ".log",
+    ".json", ".jsonl", ".yaml", ".yml", ".toml", ".ini", ".cfg",
+    ".conf", ".config", ".properties", ".xml", ".csv", ".tsv",
+    ".py", ".pyi", ".js", ".jsx", ".ts", ".tsx", ".sh", ".bash",
+    ".zsh", ".fish", ".ps1", ".bat", ".cmd", ".rb", ".go", ".rs",
+    ".java", ".kt", ".c", ".h", ".cpp", ".hpp", ".cs", ".php",
+    ".pl", ".lua", ".sql", ".html", ".htm", ".css", ".tf",
+    ".pem", ".key", ".crt", ".cer", ".pub", ".asc",
+}
+_TEXT_BASENAMES = {
+    ".env", ".envrc", ".netrc", ".npmrc", ".pypirc", ".gitconfig",
+    ".git-credentials", ".htpasswd", ".pgpass", "dockerfile",
+    "makefile", "gnumakefile", "id_rsa", "id_dsa", "id_ecdsa",
+    "id_ed25519", "credentials", "secrets",
+}
+
+
+def _text_marked(name: str) -> bool:
+    """Does this path's *name* mark it as text — a file the gate must
+    never skip silently? Suffix list plus well-known credential-ish
+    basenames (``.env*`` included — dotfiles carry no suffix)."""
+    base = PurePosixPath(str(name).replace("\\", "/")).name.lower()
+    if base in _TEXT_BASENAMES or base.startswith(".env"):
+        return True
+    return Path(base).suffix.lower() in _TEXT_SUFFIXES
 
 Finding = dict[str, object]
 
@@ -51,12 +94,17 @@ def _tag(value: str) -> str:
 
 
 def _mask(value: str) -> str:
-    """Lossy preview — never emits the full sensitive value."""
+    """Lossy preview — never emits the full sensitive value.
+
+    Head only: the secret sits at the tail of an env_assignment match
+    (``api_key = "hunter2secret"``), so showing the last four chars
+    leaks its suffix — and a short value leaks outright.
+    """
     if "\n" in value:
         value = value.splitlines()[0]
     if len(value) <= 6:
         return "*" * len(value)
-    return f"{value[:4]}...{value[-4:]}"
+    return f"{value[:4]}..."
 
 
 def _line_of(text: str, offset: int) -> int:
@@ -64,8 +112,394 @@ def _line_of(text: str, offset: int) -> int:
 
 
 _CODE_VALUE_RE = re.compile(
-    r"^\s*(?:[(\[{]|[A-Za-z_][\w.]*\s*\()"
+    r"^\s*(?:[(\[{]|[A-Za-z_][\w.]*\s*\(|lambda\b)"
 )
+
+# A bare type expression: dotted/subscripted atoms joined by ``|`` —
+# ``str``, ``Optional[str]``, ``typing.List[int]``, ``list[str] | None``.
+_TYPE_ATOM = (
+    r"[A-Za-z_][\w.]*"
+    r"(?:\[[^\[\]\n]*(?:\[[^\[\]\n]*\][^\[\]\n]*)*\])?"
+)
+_TYPE_EXPR_RE = re.compile(
+    _TYPE_ATOM + r"(?:\s*\|\s*" + _TYPE_ATOM + r")*"
+)
+# Rewrite-scope variant: also accepts Rust reference modifiers
+# (``&``, ``'a`` lifetimes, ``mut``) so ``const K: &str = "v"`` keeps
+# its type in the rewritten line. Detection and the annotation
+# suppression gate keep using the stricter ``_TYPE_EXPR_RE``.
+_REWRITE_TYPE_RE = re.compile(
+    r"(?:(?:&\s*(?:'\w+\s*)?|mut\s+)+)?"
+    + _TYPE_ATOM + r"(?:\s*\|\s*" + _TYPE_ATOM + r")*"
+)
+# Separator inside a match — multi-char make operators first so
+# ``:=``/``::=``/``+=``/``?=`` land in ``sep_end`` intact, then bare
+# ``=``, then a lone ``:`` only when it is not the head of ``:=``.
+_SEP_RE = re.compile(
+    r"::[ \t]*=|:[ \t]*=|[+?][ \t]*=|=|:(?![ \t]*=)"
+)
+# Builtin + typing names a bare annotation can resolve to. Lowercase
+# scalars that are not in this set (``hunter2``) stay flagged.
+_TYPE_NAMES = frozenset(
+    {
+        "str", "int", "float", "bool", "bytes", "bytearray", "complex",
+        "dict", "list", "set", "tuple", "frozenset", "type", "object",
+        "memoryview", "range", "slice", "None", "True", "False",
+        "Ellipsis", "NotImplemented", "Any", "Optional", "Union",
+        "Literal", "Annotated", "Callable", "ClassVar", "Final",
+        "Self", "Never", "NoReturn", "IO", "Text", "Pattern", "Match",
+        "Sequence", "Mapping", "Iterable", "Iterator", "Awaitable",
+        "Coroutine", "Generator", "ContextManager", "PathLike",
+        "date", "datetime", "time", "timedelta", "Decimal", "UUID",
+        "Path", "SecretStr",
+    }
+)
+
+
+# A dotted path in annotation position — ``pathlib.Path``,
+# ``datetime.datetime``, ``typing.Optional``. The terminal segment of a
+# real annotation names a type: a builtin/typing name or, by
+# convention, a CapWords class. A bare ``abc.def`` whose last segment is
+# neither is credential-shaped (``api_key: abc.def``), not an
+# annotation.
+_DOTTED_PATH_RE = re.compile(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+")
+
+# Lowercase terminal segments that still name real types, keyed by the
+# module namespace that must prefix them — numpy classes and stdlib
+# container/factory names are lowercase by convention:
+# ``numpy.ndarray``, ``collections.deque``, ``datetime.timedelta``,
+# ``socket.socket``, ``weakref.proxy``. The prefix is what makes the
+# terminal a type: a bare ``customer.proxy`` or ``api.ref`` under a
+# credential keyword is a secret-shaped scalar, not an annotation, so
+# the terminal only counts when the first segment is its owning
+# namespace.
+_LOWER_DOTTED_TYPES = {
+    "numpy": {"ndarray", "dtype", "generic", "bool_"},
+    "collections": {"deque", "defaultdict", "namedtuple"},
+    "datetime": {"datetime", "timedelta", "date", "time", "timezone", "tzinfo"},
+    "socket": {"socket"},
+    "mmap": {"mmap"},
+    "array": {"array"},
+    "weakref": {"ref", "proxy"},
+}
+
+
+# ``import numpy as n`` binds ``n`` to the module; ``from collections
+# import deque`` binds ``deque`` to ``collections.deque``. Both shapes
+# appear in annotations, so alias binding is resolved from the text
+# itself rather than a static alias list — an arbitrary alias can
+# never be enumerated, and guessing one re-opens the credential
+# bypass (``password: n.proxy`` in a file with no imports still
+# flags).
+_IMPORT_RE = re.compile(r"(?m)^\s*import\s+([^#\n]+)")
+_FROM_IMPORT_RE = re.compile(
+    r"(?m)^\s*from\s+(\.*[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s+import\s+([^#\n(]+)"
+)
+# The parenthesized form may span lines and hold inline comments —
+# each character is either not ``)``/``#`` or an atomic ``#``-to-EOL
+# comment run, so a ``)`` inside a comment cannot terminate the block
+# early. The comment is matched via ``(?=(...))\3`` — lookahead plus
+# backreference emulates an atomic group in ``re``: the run commits to
+# the full line and cannot be repartitioned with the ``[^)#]`` branch,
+# which is the exponential shape CodeQL flagged on ``"#`` runs inside
+# an unclosed ``import (``.
+_FROM_IMPORT_PAREN_RE = re.compile(
+    r"(?m)^\s*from\s+(\.*[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s+import\s*"
+    r"\(((?:[^)#]|(?=(#[^\n]*))\3)*)\)"
+)
+_COMMENT_RE = re.compile(r"#[^\n]*")
+_ASSIGN_NAME_RE = re.compile(
+    r"(?m)^\s*(?:([A-Za-z_]\w*)\s*[-+*/%&|^@<>]{0,2}=(?!=)"
+    r"|for\s+([A-Za-z_]\w*)\s+in\b"
+    r"|case\s+([A-Za-z_]\w*)\s*[:,]"
+    r"|([A-Za-z_]\w*)\s*:\s*[^=\n]*="
+    r"|(?:def|class)\s+([A-Za-z_]\w*)\s*[(:]"
+    r"|(?:with|except)\b[^\n]*?\bas\s+([A-Za-z_]\w*)"
+    r"|del\s+([A-Za-z_]\w*)\b)"
+)
+_TRIPLE_QUOTE_RE = re.compile(r"('''|\"\"\")")
+
+
+def _string_spans(text: str) -> list[tuple[int, int]]:
+    """Ranges covered by multiline string literals.
+
+    Python's own tokenizer decides what is a string — a ``'''`` or
+    ``\"\"\"`` inside a comment or an ordinary quoted literal is text,
+    not a delimiter, and a ``\\``-escaped quote does not close a
+    docstring. A regex over raw text cannot see either (devin-state#92
+    review). Only multiline STRING tokens matter: a line-anchored
+    ``name: value`` cannot sit inside a single-line literal, and a
+    ``\\``-continued plain string spanning lines counts the same as a
+    triple-quoted one. Source the tokenizer rejects falls back to the
+    delimiter scan — an unclosed opener still runs to EOF
+    (fail-closed: everything after it is treated as string content).
+    """
+    try:
+        return _token_string_spans(text)
+    except (tokenize.TokenError, IndentationError, SyntaxError,
+            ValueError, RecursionError):
+        return _delimiter_string_spans(text)
+
+
+def _token_string_spans(text: str) -> list[tuple[int, int]]:
+    """Multiline STRING-token ranges as absolute offsets."""
+    line_starts = [0]
+    for line in text.split("\n"):
+        line_starts.append(line_starts[-1] + len(line) + 1)
+    spans: list[tuple[int, int]] = []
+    for tok in tokenize.generate_tokens(io.StringIO(text).readline):
+        if tok.type == tokenize.STRING and tok.end[0] > tok.start[0]:
+            spans.append(
+                (
+                    line_starts[tok.start[0] - 1] + tok.start[1],
+                    line_starts[tok.end[0] - 1] + tok.end[1],
+                )
+            )
+    return spans
+
+
+def _delimiter_string_spans(text: str) -> list[tuple[int, int]]:
+    """Best-effort triple-quote scan for source the tokenizer rejects.
+
+    A delimiter run preceded by an odd count of ``\\`` is an escape —
+    ``\\"`` swallows the first quote, so ``\\"\"\"`` inside a docstring
+    is an escaped quote plus ``""``, not a closer. The parity check
+    keeps a credential sitting after an escaped quote inside the span.
+    """
+    spans: list[tuple[int, int]] = []
+    start: int | None = None
+    delim = ""
+    for m in _TRIPLE_QUOTE_RE.finditer(text):
+        backslashes = 0
+        i = m.start() - 1
+        while i >= 0 and text[i] == "\\":
+            backslashes += 1
+            i -= 1
+        if backslashes % 2:
+            continue
+        if start is None:
+            start, delim = m.start(), m.group(1)
+        elif m.group(1) == delim:
+            spans.append((start, m.end()))
+            start = None
+    if start is not None:
+        spans.append((start, len(text)))
+    return spans
+
+
+def _tagged_string_spans(text: str) -> list[tuple[int, int]]:
+    """String-literal spans containing a ``<REDACTED:…>`` tag.
+
+    Unlike ``_string_spans`` this includes *single-line* literals —
+    ``["<REDACTED:x> KEY=v"]`` holds a tag inside a one-line string.
+    The tokenizer gives exact spans for valid source; on failure the
+    triple-quote delimiter scan is the conservative fallback (a missed
+    single-line span then just means the env pattern still flags —
+    the fail-closed direction).
+    """
+    line_starts = [0]
+    for line in text.split("\n"):
+        line_starts.append(line_starts[-1] + len(line) + 1)
+    try:
+        spans = [
+            (
+                line_starts[t.start[0] - 1] + t.start[1],
+                line_starts[t.end[0] - 1] + t.end[1],
+            )
+            for t in tokenize.generate_tokens(io.StringIO(text).readline)
+            if t.type == tokenize.STRING and _REDACTED_TAG in t.string
+        ]
+    except (tokenize.TokenError, IndentationError, SyntaxError,
+            ValueError, RecursionError):
+        spans = [
+            s for s in _delimiter_string_spans(text)
+            if _TAG_RUN.search(text, s[0], s[1])
+        ]
+    return spans
+
+
+def _inside_spans(spans: list[tuple[int, int]], pos: int) -> bool:
+    """Is ``pos`` inside any ``(start, end)`` span? (spans are sorted,
+    disjoint — bisect.)"""
+    lo, hi = 0, len(spans)
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if pos < spans[mid][0]:
+            hi = mid
+        elif pos >= spans[mid][1]:
+            lo = mid + 1
+        else:
+            return True
+    return False
+_NAME_RE = re.compile(r"[A-Za-z_]\w*")
+
+# Aliases only exist where ``x: T`` can be an annotation — Python
+# source. An ``import numpy as n`` line inside an ``.env``/``.yaml``
+# blob is text, not a binding, and must not excuse ``api_key:
+# n.ndarray`` from the gate.
+_PY_SOURCE_SUFFIXES = (".py", ".pyi", ".pyw", ".pyx", ".pxd")
+_PY_SOURCE_NAMES = {"SConstruct", "SConscript", "wscript"}
+
+
+def _python_source_file(file: str) -> bool:
+    base = file.rsplit("/", 1)[-1]
+    return base in _PY_SOURCE_NAMES or base.lower().endswith(
+        _PY_SOURCE_SUFFIXES
+    )
+
+
+def _import_aliases(
+    text: str,
+    strings: list[tuple[int, int]] | None = None,
+) -> tuple[dict[str, str], list[str]]:
+    """Map bound names to module paths, plus wildcard ``*`` modules.
+
+    ``import numpy.linalg as la`` -> ``la: numpy.linalg``;
+    ``from collections import deque as dq`` -> ``dq:
+    collections.deque``; ``from collections import *`` -> ``*`` module
+    ``collections``. Relative imports (``from .x import y``) bind the
+    same way — the leading dots are dropped since only the package's
+    own names can be resolved anyway. Only top-level
+    ``import``/``from ... import`` statements bind names — a file with
+    no imports maps nothing, so credential-shaped dotted scalars still
+    flag there. ``strings`` carries triple-quoted string spans: an
+    ``import`` line inside a docstring is string content and binds
+    nothing.
+    """
+    aliases: dict[str, str] = {}
+    stars: list[str] = []
+
+    def _bind(mod: str, names: str) -> None:
+        for part in names.split(","):
+            part = part.strip().strip("()")
+            if not part:
+                continue
+            if part == "*":
+                stars.append(mod)
+                continue
+            name, sep, alias = part.partition(" as ")
+            name = name.strip()
+            bound = alias.strip() if sep else name
+            if _NAME_RE.fullmatch(name) and _NAME_RE.fullmatch(bound):
+                aliases[bound] = f"{mod}.{name}"
+
+    for m in _IMPORT_RE.finditer(text):
+        if strings and _inside_spans(strings, m.start()):
+            continue
+        for part in m.group(1).split(","):
+            name, sep, alias = part.partition(" as ")
+            if (
+                sep
+                and _NAME_RE.fullmatch(alias.strip())
+                and _NAME_RE.fullmatch(name.strip().split(".", 1)[0])
+            ):
+                aliases[alias.strip()] = name.strip()
+    for m in _FROM_IMPORT_RE.finditer(text):
+        if strings and _inside_spans(strings, m.start()):
+            continue
+        _bind(m.group(1).lstrip("."), m.group(2))
+    for m in _FROM_IMPORT_PAREN_RE.finditer(text):
+        if strings and _inside_spans(strings, m.start()):
+            continue
+        _bind(m.group(1).lstrip("."), _COMMENT_RE.sub("", m.group(2)))
+    # A name rebound by assignment is no longer the import —
+    # ``import numpy as n`` followed by ``n = "x"`` makes ``n.ndarray``
+    # a plain attribute read again. Dropping the binding is the
+    # fail-closed direction: a stray assignment costs one suppressed
+    # annotation, a kept one can hide a credential (devin-state#92).
+    rebound = {
+        name
+        for m in _ASSIGN_NAME_RE.finditer(text)
+        if not strings or not _inside_spans(strings, m.start())
+        for name in m.groups()
+        if name
+    }
+    for name in rebound:
+        aliases.pop(name, None)
+    return aliases, stars
+
+
+def _dotted_terminal_is_type(
+    path: str, bindings: tuple[dict[str, str], list[str]] | None = None
+) -> bool:
+    """Is the last segment of a dotted path a plausible type name —
+    builtin/typing (``datetime.datetime``), CapWords class
+    (``pathlib.Path``, ``models.User``) or a lowercase type name in its
+    owning namespace (``numpy.ndarray``, ``weakref.proxy``, or an
+    import alias of one like ``n.ndarray``)?"""
+    head, _, last = path.rpartition(".")
+    if last in _TYPE_NAMES or last[:1].isupper():
+        return True
+    first = head.split(".", 1)[0]
+    if bindings:
+        aliases, _ = bindings
+        first = aliases.get(first, first).split(".", 1)[0]
+    return last in _LOWER_DOTTED_TYPES.get(first, ())
+
+
+def _looks_like_type_annotation(
+    rhs: str, bindings: tuple[dict[str, str], list[str]] | None = None
+) -> bool:
+    """True when ``rhs`` is a bare type expression, not a secret value.
+
+    ``api_key: str`` and ``token: Optional[str]`` are source-language
+    type annotations, but the colon pattern also fires on them —
+    flagging (and worse, redacting) the type corrupts the code. Only
+    shapes that can *only* name a type are suppressed: a subscripted
+    generic, a ``|`` union, a dotted path whose terminal segment is a
+    type name, a builtin/typing name, or an annotation with a
+    ``= default`` tail. A bare lowercase scalar (``api_key: hunter2``),
+    a lowercase dotted scalar (``api_key: abc.def`` or
+    ``password: customer.proxy`` — credential-shaped, not a type; a
+    lowercase *type* terminal still suppresses only under its owning
+    namespace like ``numpy.ndarray``/``weakref.proxy``) or any quoted
+    value still flags — a quoted ``"str"`` is a real string value in
+    YAML/JSON, never an annotation.
+    """
+    v = rhs.strip()
+    if not v:
+        return False
+    v = v.split(" #", 1)[0].rstrip()   # trailing comment
+    head, eq, tail = v.partition("=")
+    if eq:
+        # ``x: T = default`` is an annotated assignment — but a
+        # string-literal default (``api_key: str = "hunter2"``) is a
+        # hardcoded value wearing an annotation and must still flag.
+        if _literal_string_value(tail):
+            return False
+        v = head.rstrip()
+    if not v or not _TYPE_EXPR_RE.fullmatch(v):
+        return False
+    if "[" in v or "|" in v:
+        # generic / union — but a credential can hide inside a
+        # subscript (``list[abc.def]``), so every dotted path in the
+        # expression must still terminate in a type-like name.
+        return all(
+            _dotted_terminal_is_type(m.group(0), bindings)
+            for m in _DOTTED_PATH_RE.finditer(v)
+        )
+    if "." in v:
+        # ``mod.Type`` is an annotation; ``abc.def``/``v1.2`` is a
+        # credential-shaped scalar. Require a well-formed dotted path
+        # whose terminal segment reads like a type name.
+        return (
+            _DOTTED_PATH_RE.fullmatch(v) is not None
+            and _dotted_terminal_is_type(v, bindings)
+        )
+    if bindings:
+        aliases, stars = bindings
+        if v in aliases:
+            # ``from collections import deque`` binds a bare name — it
+            # is an annotation only if the bound path is a type.
+            return _dotted_terminal_is_type(aliases[v], bindings)
+        # ``from X import *`` binds every name X exports — resolve the
+        # bare name through each starred module and require a type.
+        if any(
+            _dotted_terminal_is_type(f"{mod}.{v}", bindings)
+            for mod in stars
+        ):
+            return True
+    return v in _TYPE_NAMES
 
 
 def _literal_string_value(rhs: str) -> bool:
@@ -96,7 +530,9 @@ def _literal_string_value(rhs: str) -> bool:
     )
 
 
-def _looks_like_code_assignment(whole: str) -> bool:
+def _looks_like_code_assignment(
+    whole: str, bindings: tuple[dict[str, str], list[str]] | None = None
+) -> bool:
     """False-positive guard for ``env_assignment`` matches.
 
     The pattern anchors on names containing KEY/SECRET/TOKEN/etc., which
@@ -111,11 +547,20 @@ def _looks_like_code_assignment(whole: str) -> bool:
     parses to a plain string/bytes literal — the only shape that can
     hold a real hardcoded secret — is flagged even inside parentheses
     (``PASSWORD = ("hunter2")``): parens group but do not contain.
+
+    The separator is the FIRST ``:``/``=`` in the match — variable
+    names can contain neither, so it is always the real assignment
+    point. Looking for ``=`` alone inspected text *inside* quoted
+    values: ``"api_key": "hello=fetch()"`` saw the ``=`` mid-string and
+    suppressed the pair as a call. Bare type expressions are suppressed
+    too (``api_key: str`` is an annotation, not a value).
     """
-    eq = whole.find("=")
-    if eq == -1:
+    sep = re.search(r"[:=]", whole)
+    if sep is None:
         return False
-    rhs = whole[eq + 1 :]
+    rhs = whole[sep.end() :]
+    if _looks_like_type_annotation(rhs, bindings):
+        return True
     if not _CODE_VALUE_RE.match(rhs):
         return False
     return not _literal_string_value(rhs)
@@ -125,19 +570,29 @@ def _looks_like_code_assignment(whole: str) -> bool:
 # is off-limits to re-processing; text around it is not.
 _TAG_RUN = re.compile(r"<REDACTED:[^>\n]*>")
 
-# env_assignment without the ``(?m)^`` anchor — used ONLY by the tag-gap
-# fragment rescan. The anchored pattern misses a ``KEY=`` candidate that
-# does not lead the fragment: after a closed tag, non-key text may come
-# first ('API_KEY=<tag>suffix OTHER_TOKEN=raw' left the tail raw — the
-# TS port caught this in devin-powerups#223). ``\s*`` plus a
+# env_assignment pattern 0 without the ``(?m)^`` anchor — used ONLY by the
+# tag-gap fragment rescan. The anchored pattern misses a ``KEY=``/``KEY:``
+# candidate that does not lead the fragment: after a closed tag, non-key
+# text may come first ('API_KEY=<tag>suffix OTHER_TOKEN=raw' left the tail
+# raw — the TS port caught this in devin-powerups#223). ``\s*`` plus a
 # word-boundary lookbehind on the name reproduces the anchored match
 # exactly at a key-led fragment start — leading whitespace stays inside
-# the match — and still finds each ``KEY=`` later in the fragment.
+# the match — and still finds each assignment later in the fragment.
 _ENV_FRAGMENT_RE = re.compile(
-    r"\s*(?<!\w)(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*"
-    r"(?:KEY|SECRET|TOKEN|PASSWORD|PASSWD|CREDENTIAL)[A-Za-z0-9_]*"
-    r"\s*=\s*\S[^\n]*"
+    r"[\s\ufeff]*(?<!\w)(?:export\s+)?[\"']?" + ENV_NAME_PATTERN +
+    r"[\"']?\s*[:=]\s*(?:"
+    r"(?:\"(?:\\.|[^\"\\\r\n])*?\""
+    r"|'(?:\\.|[^'\\\r\n])*?'"
+    r"|`(?:\\.|[^`\\\r\n])*?`)"
+    r"(?=[ \t]*[,}\]]|[ \t]*$)"
+    r"|\S[^\n]*"
+    r")"
 )
+
+# Tag-gap rescan regex per env_assignment pattern index: the anchored
+# pattern needs its de-anchored twin; already-unanchored patterns (the
+# JSON/dict colon form) rescan with themselves.
+_ENV_FRAGMENT_RES: dict[int, re.Pattern[str]] = {0: _ENV_FRAGMENT_RE}
 
 
 class _ShiftedMatch:
@@ -156,6 +611,10 @@ class _ShiftedMatch:
     def __init__(self, m: re.Match[str], delta: int) -> None:
         self._m = m
         self._delta = delta
+
+    @property
+    def re(self) -> re.Pattern[str]:
+        return self._m.re
 
     @property
     def lastindex(self) -> int | None:
@@ -250,6 +709,8 @@ def _iter_fragment_matches(
     hi: int,
     env: bool,
     value_start: int,
+    bindings: tuple[dict[str, str], list[str]] | None = None,
+    strings: list[tuple[int, int]] | None = None,
 ):
     """Yield ``rx`` matches inside ``text[lo:hi]`` shifted by ``lo``.
 
@@ -276,7 +737,12 @@ def _iter_fragment_matches(
             # never re-processed, same as the whole-match rule.
             continue
         if env:
-            if _looks_like_code_assignment(whole):
+            if strings and _inside_spans(strings, lo + m.start()):
+                pass  # inside a string literal: no annotation position
+            elif (
+                rx not in GUARD_EXEMPT_PATTERNS
+                and _looks_like_code_assignment(whole, bindings)
+            ):
                 continue
             start, end = lo + m.start(), lo + m.end()
             if not (
@@ -287,7 +753,15 @@ def _iter_fragment_matches(
         yield _ShiftedMatch(m, lo)
 
 
-def _iter_tag_gap(rx: re.Pattern[str], text: str, m: re.Match[str], env: bool):
+def _iter_tag_gap(
+    rx: re.Pattern[str],
+    text: str,
+    m: re.Match[str],
+    env: bool,
+    index: int = 0,
+    bindings: tuple[dict[str, str], list[str]] | None = None,
+    strings: list[tuple[int, int]] | None = None,
+):
     """Yield ``rx`` matches inside the tag-free fragments of ``m``.
 
     A match containing ``<REDACTED:…>`` is prior redaction output — but
@@ -304,48 +778,144 @@ def _iter_tag_gap(rx: re.Pattern[str], text: str, m: re.Match[str], env: bool):
     tags = list(_TAG_RUN.finditer(text, m.start(), m.end()))
     if not tags:
         return
-    # env fragments re-scan with the de-anchored variant — ``rx`` is
-    # ``^``-anchored and would miss a ``KEY=`` that does not lead the
-    # fragment (devin-powerups#223 parity note).
-    scan_rx = _ENV_FRAGMENT_RE if env else rx
+    # A run-capture arm (``SUBMASK_PATTERNS``) already proved its
+    # command anchor on the whole match — a tag inside one literal
+    # must not hide the *later* literals, so fragments re-scan with
+    # the sub-regex directly (each yields its own sensitive group).
+    # Other env fragments re-scan with the per-pattern de-anchored
+    # variant — the anchored pattern would miss an assignment that
+    # does not lead the fragment (devin-powerups#223 parity note).
+    scan_rx = SUBMASK_PATTERNS.get(rx)
+    if scan_rx is None:
+        scan_rx = _ENV_FRAGMENT_RES.get(index, rx) if env else rx
     # For env_assignment the enclosure state is measured from the
-    # value's first char — the position after ``=``.
-    value_start = m.start() + m.group(0).index("=") + 1 if env else m.start()
+    # value's first char — the position after the ``=``/``:`` separator
+    # (variable names can contain neither).
+    if env:
+        sep = re.search(r"[:=]", m.group(0))
+        value_start = m.start() + (sep.start() + 1 if sep else 0)
+    else:
+        value_start = m.start()
     pos = m.start()
     for tag in tags:
-        yield from _iter_fragment_matches(scan_rx, text, pos, tag.start(), env, value_start)
+        yield from _iter_fragment_matches(
+            scan_rx, text, pos, tag.start(), env, value_start,
+            bindings, strings,
+        )
         pos = tag.end()
-    yield from _iter_fragment_matches(scan_rx, text, pos, m.end(), env, value_start)
+    yield from _iter_fragment_matches(
+        scan_rx, text, pos, m.end(), env, value_start, bindings, strings
+    )
 
 
-def _iter_matches(text: str):
-    """Yield ``(category, pattern_name, match)`` for every pattern hit."""
+def _iter_matches(
+    text: str,
+    *,
+    python_source: bool | None = None,
+    file: str | None = None,
+):
+    """Yield ``(category, pattern_name, match)`` for every pattern hit.
+
+    ``python_source`` gates import-alias resolution: ``True`` (a Python
+    file) and ``None`` (bare text — pasted code has no filename) map
+    aliases; ``False`` treats import-like lines as inert text so a
+    credential blob cannot hide a value behind ``import numpy as n``.
+    ``file`` gates extension-scoped arms (``FILE_GATED_PATTERNS``).
+    """
+    # Inside a triple-quoted string there is no annotation, import or
+    # assignment position — ``api_key: ref`` in a docstring is string
+    # content and must flag, and an ``import`` line there binds
+    # nothing (devin-state#92).
+    strings = _string_spans(text) if python_source is not False else []
+    # String spans already carrying a ``<REDACTED:…>`` tag are prior
+    # redaction output — a mid-line env match inside one is decoy
+    # text, not a fresh secret (the tag-gap rescan still handles
+    # secrets after a tag in *unenclosed* fragments).
+    tagged_strings = _tagged_string_spans(text)
+    bindings = (
+        _import_aliases(text, strings)
+        if python_source is not False
+        else None
+    )
     for category, regexes in PATTERNS.items():
         env = category == "env_assignment"
         for index, rx in enumerate(regexes):
+            gate = FILE_GATED_PATTERNS.get(rx)
+            if gate is not None and not (
+                file is not None and file.lower().endswith(gate)
+            ):
+                continue
             for m in rx.finditer(text):
                 if _REDACTED_TAG in m.group(0):
                     # Prior redaction output — re-scan only the tag-free
                     # fragments; the env code guard and the enclosure
                     # check apply per fragment there.
-                    for fm in _iter_tag_gap(rx, text, m, env):
+                    for fm in _iter_tag_gap(
+                        rx, text, m, env, index, bindings, strings
+                    ):
                         yield category, pattern_name(category, index), fm
                     continue
-                if env and _looks_like_code_assignment(m.group(0)):
+                if env and tagged_strings and _inside_spans(
+                    tagged_strings, m.start()
+                ):
+                    continue
+                if (
+                    env
+                    # Guard-exempt arms declare the sensitive token
+                    # explicitly (``auth=("u","p")``'s second element)
+                    # — the container-shape heuristic would suppress
+                    # it as a call.
+                    and rx not in GUARD_EXEMPT_PATTERNS
+                    and not (
+                        strings and _inside_spans(strings, m.start())
+                    )
+                    and _looks_like_code_assignment(m.group(0), bindings)
+                ):
                     continue
                 yield category, pattern_name(category, index), m
 
 
 def scan_text(text: str, *, file: str, location: str) -> list[Finding]:
     """Apply every pattern to ``text`` and return findings (sorted, deduped)."""
+    # Sort by span — longest first on a shared start — so a
+    # containing match is always considered before the shorter
+    # form it covers. Exact ties keep iteration order, so the
+    # first pattern to match identical text keeps its name.
+    raw = sorted(
+        _iter_matches(
+            text, python_source=_python_source_file(file), file=file
+        ),
+        key=lambda t: (t[0], t[2].start(), -t[2].end()),
+    )
     findings: list[Finding] = []
     seen: set[tuple[str, str, int]] = set()
-    for category, name, m in _iter_matches(text):
+    acc_starts: dict[str, list[int]] = {}
+    acc_ends: dict[str, list[int]] = {}
+    for category, name, m in raw:
         value = sensitive_match(m)
         key = (category, name, m.start(1) if m.lastindex else m.start())
         if key in seen:
             continue
         seen.add(key)
+        # A match inside an earlier same-category match — strict
+        # or identical span — is the same secret: the
+        # unterminated-PEM pattern is a strict prefix of a
+        # complete block, and two env_assignment arms can cover
+        # identical text (`api_key = "x"` is both a line
+        # assignment and a keyword-argument shape). Accepted
+        # spans never contain one another, so their starts and
+        # ends rise together: only the last accepted span with
+        # ``start <= span[0]`` can hold this match — a bisect
+        # replaces a per-match O(n) rescan (quadratic on dense
+        # inputs like ``f(api_key="x", api_key="x", ...)``).
+        span = m.span(0)
+        starts = acc_starts.setdefault(category, [])
+        ends = acc_ends.setdefault(category, [])
+        i = bisect.bisect_right(starts, span[0]) - 1
+        if i >= 0 and ends[i] >= span[1]:
+            continue
+        starts.insert(i + 1, span[0])
+        ends.insert(i + 1, span[1])
         line = _line_of(text, m.start())
         findings.append(
             {
@@ -361,23 +931,216 @@ def scan_text(text: str, *, file: str, location: str) -> list[Finding]:
     return findings
 
 
-def redact_text(text: str) -> tuple[str, list[dict]]:
+def redact_text(
+    text: str, *, file: str | None = None
+) -> tuple[str, list[dict]]:
     """Replace every secret span in ``text`` with ``<REDACTED:fp>``.
 
     ``env_assignment`` matches keep their ``KEY=`` prefix so a redacted
     ``.env`` stays readable. Overlapping matches resolve greedily: the
     leftmost (then longest) span wins. Returns ``(new_text, edits)``.
     Idempotent — ``<REDACTED:…>`` tags are never re-redacted.
+
+    ``file`` hints the blob's name: for a Python-typed name, import
+    aliases suppress annotation-shaped matches; for any other name,
+    import-like lines are inert text and cannot excuse a credential
+    value. Bare text (no ``file``) resolves aliases from the text
+    itself — pasted code must not be corrupted, and the publication
+    gate never relies on this path.
     """
+    python_source = None if file is None else _python_source_file(file)
     candidates: list[tuple[int, int, str, str, str]] = []
-    for category, name, m in _iter_matches(text):
+    for category, name, m in _iter_matches(
+        text, python_source=python_source, file=file
+    ):
         value = sensitive_match(m)
         fp = _fingerprint(value)
         if category == "env_assignment":
             whole = m.group(0)
-            eq = whole.index("=")
             start, end = m.span(0)
-            replacement = f"{whole[: eq + 1]}{_tag(value)}"
+            if m.lastindex:
+                sub = SUBMASK_PATTERNS.get(m.re)
+                if sub is not None:
+                    # Run-capture arm — group 1 spans the whole
+                    # argument run but only the secret-bearing
+                    # tokens inside it mask. Intervening flags
+                    # (``kubectl --dry-run=client`` between two
+                    # literals) survive untouched.
+                    g_start, g_end = m.span(1)
+                    for sm in sub.finditer(text[g_start:g_end]):
+                        sv = (
+                            sm.group(1) if sm.lastindex
+                            else sm.group(0)
+                        )
+                        candidates.append(
+                            (
+                                g_start + sm.start(),
+                                g_start + sm.end(),
+                                _tag(sv),
+                                category,
+                                _fingerprint(sv),
+                            )
+                        )
+                    continue
+                # The arm captured the sensitive token — group 1 —
+                # inside wider context (``.netrc``'s
+                # ``machine … password p``, a CLI flag's value).
+                # Mask only that span so the line keeps its shape.
+                # A quoted token keeps its quotes, and a bare token
+                # in Python source still gets a quoted tag so the
+                # slot parses.
+                g_start, g_end = m.span(1)
+                gtext = text[g_start:g_end]
+                qm = re.match(r"[rRbBuUfF]*([\"'])", gtext)
+                if (
+                    qm is not None
+                    and len(gtext) > qm.end()
+                    and gtext.endswith(qm.group(1))
+                ):
+                    candidates.append(
+                        (
+                            g_start + qm.end(),
+                            g_end - 1,
+                            _tag(value),
+                            category,
+                            fp,
+                        )
+                    )
+                    continue
+                tag = _tag(value)
+                if file is not None and _python_source_file(file):
+                    tag = f'"{tag}"'
+                candidates.append(
+                    (g_start, g_end, tag, category, fp)
+                )
+                continue
+            # Locate the separator — ``=``/``:`` plus the multi-char
+            # make-style operators (``:=``, ``?=``, ``+=``, ``::=``)
+            # so ``eq``/``sep_end`` bracket the whole operator and
+            # the rewrite keeps it (``KEY := <tag>``, not
+            # ``KEY :<tag>``).
+            eq_m = re.search(_SEP_RE, whole)
+            eq = None if eq_m is None else eq_m.start()
+            sep_end = None if eq_m is None else eq_m.end()
+            if eq == 0 and whole[0] in "?&;#:":
+                # URL/npmrc arm — the match opens with its separator
+                # char (``?api_key=``, ``:_authToken=``); the real
+                # ``=`` sits after the name.
+                eq_m = re.search(_SEP_RE, whole[1:])
+                eq = None if eq_m is None else eq_m.start() + 1
+                sep_end = None if eq_m is None else eq_m.end() + 1
+            if eq is None:
+                # ``setdefault("name", "v")`` call-arg shape — the
+                # credential name is a string argument, so no
+                # ``=``/``:`` separator exists in the match. Keep
+                # everything through the comma and mask only the
+                # value, quoted so the call still parses. A
+                # Dockerfile ``ENV KEY v``/``ARG KEY v`` match has
+                # no separator either — keep ``ENV KEY `` and emit
+                # the tag as the whitespace-separated value.
+                sep = re.search(r",\s*", whole)
+                if sep is not None:
+                    replacement = (
+                        whole[: sep.end()] + '"' + _tag(value) + '"'
+                    )
+                else:
+                    env_m = re.match(
+                        r"(?i)(?:env|arg|set|setenv|setx|launchctl[ \t]+"
+                        r"setenv)(?:[ \t]+[-/][a-zA-Z]+)*[ \t]+\S+[ \t]+",
+                        whole,
+                    )
+                    replacement = (
+                        env_m.group(0) + _tag(value)
+                        if env_m is not None
+                        else _tag(value)
+                    )
+                candidates.append((start, end, replacement, category, fp))
+                continue
+            # ``name: T = "lit"`` — an annotated assignment whose
+            # literal default flagged: only the literal is sensitive.
+            # Keep ``name: T = `` and re-emit the literal as a quoted
+            # tag so the line still parses
+            # (`api_key: str = "<REDACTED:…>"`, not
+            # `api_key:<REDACTED:…>`).
+            rhs = whole[sep_end:]
+            ann_head, ann_sep, ann_tail = rhs.partition("=")
+            replacement = None
+            if ann_sep and _REWRITE_TYPE_RE.fullmatch(ann_head.strip()):
+                lit = ann_tail.split(" #", 1)[0]
+                if _literal_string_value(lit):
+                    lead = len(ann_tail) - len(ann_tail.lstrip())
+                    tok = lit.strip()
+                    # Re-emit the literal's own shape so the
+                    # annotated default keeps its type —
+                    # ``b"…"`` stays bytes and ``("…",)`` stays
+                    # a one-tuple — with the tag as the new
+                    # payload.
+                    m_t = re.fullmatch(r"\(\s*(.+?)\s*,\s*\)", tok)
+                    inner = m_t.group(1) if m_t else tok
+                    pm = re.match(
+                        r"([rRbBuUfF]*)(\"\"\"|'''|[\"'])", inner
+                    )
+                    if pm:
+                        body = (
+                            pm.group(1) + pm.group(2)
+                            + _tag(value) + pm.group(2)
+                        )
+                        if m_t:
+                            body = f"({body},)"
+                    else:
+                        q = '"' if '"' in tok else "'"
+                        body = q + _tag(value) + q
+                        if m_t:
+                            body = f"({body},)"
+                    # Trailing comment text is dropped — it can
+                    # carry secrets the single finding already
+                    # consumed.
+                    replacement = (
+                        whole[:sep_end] + ann_head + "="
+                        + ann_tail[:lead] + body
+                    )
+            if replacement is None:
+                # A quoted value keeps its enclosing quotes — an
+                # unquoted tag in a string slot breaks JSON/Python
+                # structure (`"api_key":<REDACTED>` is invalid;
+                # `"api_key":"<tag>"` is not). ``qm`` captures the
+                # optional whitespace plus the (possibly
+                # ``\``-escaped) opening quote so the replacement
+                # re-emits the same quote token on both sides. A
+                # Python literal prefix (``b``, ``rb``, ``f``, ``u``)
+                # rides along — ``x = b"v"`` keeps its type instead
+                # of degrading to a bare tag that cannot parse.
+                qm = re.match(
+                    r"\s*([rRbBuUfF]{0,2})(\\?[\"'`])", rhs
+                )
+                if qm:
+                    replacement = (
+                        whole[:sep_end] + qm.group(0)
+                        + _tag(value) + qm.group(2)
+                    )
+                elif python_source is True or (
+                    python_source is None and whole[eq] == ":"
+                ):
+                    # An unquoted tag is not a valid Python
+                    # expression — ``api_key:<tag>`` or
+                    # ``x =<tag>`` will not parse — so a ``.py``
+                    # blob emits it quoted; untyped text gets the
+                    # same care for the ``:`` slot
+                    # (annotation/dict), while ``.env`` and
+                    # ``KEY=``-style output keep the plain tag.
+                    replacement = f'{whole[:sep_end]} "{_tag(value)}"'
+                else:
+                    # ``.env``/YAML-style bare tag. A ``:``-separated
+                    # pair keeps its whitespace — ``key: v`` must
+                    # stay a mapping (``key:<tag>`` re-reads as a
+                    # scalar); ``=`` keeps the tight ``KEY=<tag>``
+                    # convention.
+                    lead = 0
+                    if whole[eq] == ":":
+                        lead = len(rhs) - len(rhs.lstrip())
+                    replacement = (
+                        whole[:sep_end] + rhs[:lead] + _tag(value)
+                    )
         else:
             start, end = m.span(1) if m.lastindex else m.span(0)
             replacement = _tag(value)
@@ -425,7 +1188,167 @@ def _looks_binary(path: Path) -> bool:
             chunk = fh.read(_BINARY_SNIFF_BYTES)
     except OSError:
         return True
-    return b"\x00" in chunk
+    return _decode_file_bytes(chunk) is None
+
+
+def _mostly_printable(text: str) -> bool:
+    """Conservative text check: ≤5% non-printable, non-whitespace chars."""
+    if not text:
+        return False
+    bad = sum(
+        1 for c in text if not (c.isprintable() or c in "\n\r\t\f\v")
+    )
+    return bad / len(text) <= 0.05
+
+
+def _decode_file_bytes(raw: bytes) -> tuple[str, str] | None:
+    """``(text, encoding)`` when ``raw`` plausibly holds text, else None.
+
+    UTF-8 first — valid UTF-8 with a stray NUL still counts (the
+    non-printable projection pass rejoins secrets a control byte splits).
+    Then UTF-16: a BOM (``\\xff\\xfe``/``\\xfe\\xff``), or the BOM-less
+    tell-tale of NULs clustered on one byte parity — the shape of
+    ``API_KEY=…`` written by Windows PowerShell redirection, which the
+    old NUL-byte sniff classified as opaque binary and skipped entirely.
+    Decoded UTF-16 must contain no NUL and be mostly printable, so real
+    binaries still fail closed into ``skipped: binary file``.
+
+    Two refinements keep the sniff honest:
+
+    * BOM'd input decodes with the endian-specific codec and keeps the
+      ``\\ufeff`` char, so re-encoding via ``_apply_text`` re-emits the
+      original byte order — a ``FE FF`` big-endian export no longer
+      round-trips as ``FF FE``. The leading mark is ignored for the
+      NUL/printability gates and never lands in a fingerprint
+      (``sensitive_match`` strips it).
+    * A truncated final character (a sniff slice can cut a surrogate
+      pair at ``_BINARY_SNIFF_BYTES``) is dropped before judging — only
+      when the decode error reaches the very end of ``raw``. That
+      tolerance exists so the bounded sniffs (``_looks_binary``,
+      ``_target_type``, ``_blob_kind``) and the read-only scans still
+      see the decodable head; it must never reach a rewrite.
+      ``redact()`` therefore re-verifies a non-UTF-8 decode against the
+      whole file and carries any undecodable tail through
+      ``_apply_text`` as raw bytes — a rewrite can no longer silently
+      truncate the file.
+
+    Last resort: a lossy ``surrogateescape`` UTF-8 decode. Text with a
+    few invalid bytes — a staged ``.env`` holding a credential plus one
+    bad byte — still scans instead of skipping as opaque binary; dense
+    non-printable content keeps failing the printability gate and stays
+    binary.
+    """
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        text = None
+    if text is not None and _mostly_printable(text):
+        return text, "utf-8"
+
+    enc: str | None = None
+    if raw[:2] == b"\xff\xfe":
+        enc = "utf-16-le"
+    elif raw[:2] == b"\xfe\xff":
+        enc = "utf-16-be"
+    elif b"\x00" in raw:
+        head = raw[:_BINARY_SNIFF_BYTES]
+        even_nuls = sum(
+            1 for i in range(0, len(head), 2) if head[i] == 0
+        )
+        odd_nuls = sum(
+            1 for i in range(1, len(head), 2) if head[i] == 0
+        )
+        if odd_nuls >= max(3, even_nuls * 3):
+            enc = "utf-16-le"
+        elif even_nuls >= max(3, odd_nuls * 3):
+            enc = "utf-16-be"
+    if enc is not None:
+        try:
+            cand = raw.decode(enc)
+        except UnicodeDecodeError as exc:
+            # Truncated tail only — an error reaching the end of ``raw``
+            # means the last code point is incomplete (sniff boundary).
+            cand = None
+            if exc.end >= len(raw):
+                try:
+                    cand = raw[: exc.start].decode(enc)
+                except (UnicodeDecodeError, ValueError):
+                    cand = None
+        except ValueError:
+            cand = None
+        if cand is not None:
+            check = cand.removeprefix("\ufeff")
+            if "\x00" not in check and _mostly_printable(check):
+                return cand, enc
+
+    text = raw.decode("utf-8", "surrogateescape")
+    if _mostly_printable(text):
+        return text, "utf-8"
+    return None
+
+
+# ANSI escape sequences are stripped as *units* before the per-char
+# drop: ``ESC`` alone is non-printable and falls away anyway, but its
+# printable tail (``[31m`` of a colour code) would survive and keep a
+# split token apart. Order matters — CSI/OSC/charset first, then the
+# generic two-byte form.
+_ANSI_SEQ_RE = re.compile(
+    r"\x1b\[[0-9:;<=>?]*[ -/]*[@-~]"  # CSI  ESC [ params … final
+    r"|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)"  # OSC  ESC ] … BEL/ST
+    r"|\x1b[()][0-9A-Za-z]"  # charset selects  ESC ( 0
+    r"|\x1b[@-Z\\-~]"  # remaining two-byte escapes (incl. ST)
+)
+
+
+def _printable_projection(text: str) -> str:
+    """Drop ANSI escapes and non-printable chars (and U+FFFD from lossy
+    decodes) — the scan-side twin of
+    :func:`devin_redact.cflite._debinarize`: a secret split by a control
+    byte, colour code, or stray NUL rejoins into one contiguous token
+    and matches. Newlines/tabs survive."""
+    text = _ANSI_SEQ_RE.sub("", text)
+    return "".join(
+        c
+        for c in text
+        if (c.isprintable() or c in "\n\r\t") and c != "\ufffd"
+    )
+
+
+def _scan_text_with_projection(
+    text: str, *, file: str, location: str
+) -> list[Finding]:
+    """scan_text over ``text`` plus, when it holds non-printable chars,
+    over its printable projection — findings from the projected view are
+    marked ``kind="binary-projection"`` (offsets/lines are approximate
+    there, and the per-cell rewrite cannot map them: detection-only)."""
+    findings = scan_text(text, file=file, location=location)
+    projected = _printable_projection(text)
+    if projected == text:
+        return findings
+    seen = {
+        (str(f["category"]), str(f["fingerprint"])) for f in findings
+    }
+    for f in scan_text(projected, file=file, location=location):
+        key = (str(f["category"]), str(f["fingerprint"]))
+        if key in seen:
+            continue
+        seen.add(key)
+        f["kind"] = "binary-projection"
+        findings.append(f)
+    return findings
+
+
+def _scan_lossy(raw: bytes, display: str) -> list[Finding]:
+    """Fail-closed scan for bytes no decoder accepts but whose name is
+    text-marked: decode with ``surrogateescape`` (keeps every byte) and
+    let the printable projection rejoin the ASCII regions — a
+    credential sitting beside undecodable noise can no longer ride a
+    ``skipped: binary`` verdict through the gate."""
+    return _scan_text_with_projection(
+        raw.decode("utf-8", "surrogateescape"),
+        file=display,
+        location="text",
+    )
 
 
 def _target_type(path: Path) -> str:
@@ -447,7 +1370,9 @@ def _target_type(path: Path) -> str:
         return "binary"
     if head.startswith(_SQLITE_MAGIC):
         return "sqlite"
-    if b"\x00" in head:
+    # NUL-bearing content is binary only when nothing decodes it —
+    # UTF-16 exports and UTF-8-with-stray-NUL text are still scannable.
+    if b"\x00" in head and _decode_file_bytes(head) is None:
         return "binary"
     return "text"
 
@@ -462,8 +1387,34 @@ def _leaf_strings(obj) -> list[str]:
     return []
 
 
+def _key_strings(obj) -> list[str]:
+    """String dict *keys* of a JSON payload — a secret can sit in key
+    position (``{"sk-…": "enabled"}``-style config maps). Keys are kept
+    out of ``_leaf_strings`` because the chunked pass joins leaves back
+    together; they are scanned separately in :func:`_scan_cell`, and
+    ``_redact_leaves`` rewrites a flagged key to its tag so detection
+    and redaction cover the same surface."""
+    if isinstance(obj, dict):
+        out: list[str] = []
+        for k, v in obj.items():
+            if isinstance(k, str):
+                out.append(k)
+            out.extend(_key_strings(v))
+        return out
+    if isinstance(obj, list):
+        return [s for v in obj for s in _key_strings(v)]
+    return []
+
+
 def _redact_leaves(obj) -> tuple[object, list[dict]]:
-    """Clone ``obj`` with every string leaf passed through redact_text."""
+    """Clone ``obj`` with every string leaf passed through redact_text.
+
+    A secret-shaped dict *key* is rewritten to its tag too — scan
+    reports it via ``_key_strings`` but the value-only rewrite used to
+    leave it shipping. The pair survives under the masked key so the
+    document's shape is preserved (``{"sk-…": "enabled"}`` →
+    ``{"<REDACTED:…>": "enabled"}``).
+    """
     edits: list[dict] = []
     if isinstance(obj, str):
         new, edits = redact_text(obj)
@@ -472,8 +1423,13 @@ def _redact_leaves(obj) -> tuple[object, list[dict]]:
         out = {}
         for k, v in obj.items():
             nv, e = _redact_leaves(v)
-            out[k] = nv
             edits.extend(e)
+            if isinstance(k, str):
+                nk, ke = redact_text(k)
+                if ke:
+                    k = nk
+                    edits.extend(ke)
+            out[k] = nv
         return out, edits
     if isinstance(obj, list):
         out = []
@@ -553,15 +1509,19 @@ def _scan_cell(value: str, display: str, location: str) -> list[Finding]:
     texts: list[str]
     if stripped.startswith(("{", "[")):
         try:
-            texts = _leaf_strings(json.loads(value))
+            obj = json.loads(value)
         except (json.JSONDecodeError, RecursionError):
             texts = [value]
+        else:
+            texts = _leaf_strings(obj) + _key_strings(obj)
     else:
         texts = [value]
     findings: list[Finding] = []
     seen: set[tuple[str, str]] = set()
     for text in texts:
-        for f in scan_text(text, file=display, location=location):
+        for f in _scan_text_with_projection(
+            text, file=display, location=location
+        ):
             key = (str(f["category"]), str(f["fingerprint"]))
             if key in seen:
                 continue
@@ -608,23 +1568,43 @@ _SPLIT_HEAD_MARKERS = (
     "rk_live_",
     "AIza",
     "xox",
+    "xapp-",
     "ghp_",
     "gho_",
     "ghu_",
     "ghs_",
     "ghr_",
     "github_pat_",
+    "glpat",
+    "gldt",
+    "glrt",
+    "glcbt",
+    "glagent",
+    "npm_",
+    "pypi-",
+    "dop_v1_",
+    "SG.",
+    "sq0",
+    "shp",
+    "ya29.",
+    "hf_",
+    "whsec_",
+    "AGE-SECRET-KEY-",
+    "hooks.slack",
+    "discord",
+    "webhook",
+    "://",
     "eyJ",
     "-----BEGIN",
 )
 # Context-dependent secret shapes: the keyword part sits in the earlier
 # payload, the sensitive tail runs to (or past) the boundary.
 _SPLIT_CONTEXT_RES = (
-    re.compile(r"[Bb]earer(?:\s+[A-Za-z0-9._~+/=-]*)?$"),
+    re.compile(r"(?i)bearer[\s:=]*[A-Za-z0-9._~+/=-]*$"),
     re.compile(
-        r"[A-Za-z_][A-Za-z0-9_]*"
-        r"(?:KEY|SECRET|TOKEN|PASSWORD|PASSWD|CREDENTIAL)[A-Za-z0-9_]*"
-        r"\s*=\s*\S*$"
+        r"(?i)[\"']?[A-Za-z_][A-Za-z0-9_]*"
+        r"(?:key|secret|token|password|passwd|credential|auth)"
+        r"[A-Za-z0-9_]*[\"']?\s*[:=]\s*\S*$"
     ),
     re.compile(r"(?i)(?:pairing|pair)[ -]?code\s*[:=]?\s*[A-Z0-9-]{0,}$"),
 )
@@ -798,6 +1778,9 @@ def _known_by_location(findings: list[Finding]) -> dict[str, set[tuple[str, str]
         loc = str(f.get("location", ""))
         if "#rowid=" not in loc:
             continue
+        # Per-cell locations carry a trailing ``:line N`` — the chunked
+        # pass looks findings up by ``table.column#rowid=N``.
+        loc = loc.split(":line ")[0]
         known.setdefault(loc, set()).add(
             (str(f["category"]), str(f["fingerprint"]))
         )
@@ -1001,8 +1984,14 @@ def _scan_text_file(path: Path, display: str) -> tuple[list[Finding], str | None
         raw = path.read_bytes()
     except OSError as exc:
         return [], f"read failed: {exc}"
-    text = raw.decode("utf-8", errors="replace")
-    return scan_text(text, file=display, location="text"), None
+    decoded = _decode_file_bytes(raw)
+    if decoded is not None:
+        return _scan_text_with_projection(
+            decoded[0], file=display, location="text"
+        ), None
+    if _text_marked(path.name):
+        return _scan_lossy(raw, display), None
+    return [], "skipped: binary file"
 
 
 def _summarize(findings: list[Finding]) -> tuple[dict[str, int], int, str]:
@@ -1059,7 +2048,7 @@ def scan(paths) -> dict:
         kind = _target_type(f)
         if kind == "sqlite":
             findings, err = _scan_db(f, display)
-        elif kind == "binary":
+        elif kind == "binary" and not _text_marked(f.name):
             errors.append({"file": display, "error": "skipped: binary file"})
             continue
         else:
@@ -1075,13 +2064,13 @@ def scan(paths) -> dict:
 def _blob_kind(name: str, blob: bytes) -> str:
     """Dispatch a ``(name, content)`` blob — the in-memory counterpart
     of :func:`_target_type`: sqlite by suffix first then magic header,
-    binary by NUL byte, text otherwise."""
+    binary when nothing decodes it, text otherwise."""
     if Path(name).suffix.lower() in _DB_SUFFIXES:
         return "sqlite"
     head = blob[:_BINARY_SNIFF_BYTES]
     if head.startswith(_SQLITE_MAGIC):
         return "sqlite"
-    if b"\x00" in head:
+    if b"\x00" in head and _decode_file_bytes(head) is None:
         return "binary"
     return "text"
 
@@ -1153,14 +2142,20 @@ def scan_blobs(blobs, *, errors: list[dict] | None = None) -> dict:
         kind = _blob_kind(name, blob)
         if kind == "sqlite":
             findings, err = _scan_blob_db(name, blob, sc)
-        elif kind == "binary":
-            errs.append({"file": name, "error": "skipped: binary file"})
-            return
         else:
-            findings = scan_text(
-                blob.decode("utf-8", "replace"), file=name, location="text"
-            )
-            err = None
+            decoded = _decode_file_bytes(blob)
+            if decoded is not None:
+                findings = _scan_text_with_projection(
+                    decoded[0], file=name, location="text"
+                )
+                err = None
+            elif _text_marked(name):
+                # Text-named but undecodable: never silently CLEAN —
+                # scan the lossy projection (fail closed).
+                findings, err = _scan_lossy(blob, name), None
+            else:
+                errs.append({"file": name, "error": "skipped: binary file"})
+                return
         scanned += 1
         all_findings.extend(findings)
         if err:
@@ -1372,12 +2367,30 @@ def _apply_db(path: Path, cell_edits: list[dict]) -> None:
         raise
 
 
-def _apply_text(path: Path, new_text: str) -> None:
-    """Atomic text rewrite: .bak first, then tmp file + os.replace."""
+def _apply_text(
+    path: Path,
+    new_text: str,
+    encoding: str = "utf-8",
+    tail: bytes = b"",
+) -> None:
+    """Atomic text rewrite: .bak first, then tmp file + os.replace.
+
+    ``encoding`` preserves the input's coding — a UTF-16 file goes back
+    as UTF-16 in its source byte order (BOM included when the input had
+    one, because the decoded text keeps the ``\\ufeff`` mark). Bytes
+    that arrived via ``surrogateescape`` — text-marked files with a few
+    undecodable bytes — encode back byte-exactly. ``tail`` carries raw
+    bytes that never entered the decoded text — the truncated final
+    code point of a damaged UTF-16 file — and is re-appended verbatim
+    so the rewrite cannot silently drop them."""
     _backup(path)
     tmp = path.with_name(path.name + ".redact-tmp")
     try:
-        tmp.write_text(new_text, encoding="utf-8")
+        try:
+            data = new_text.encode(encoding)
+        except UnicodeEncodeError:
+            data = new_text.encode(encoding, "surrogateescape")
+        tmp.write_bytes(data + tail)
         os.replace(tmp, path)
     except BaseException:
         tmp.unlink(missing_ok=True)
@@ -1423,19 +2436,69 @@ def redact(paths, *, apply: bool = False, confirm_irreversible: bool = False) ->
                                 **e,
                             }
                         )
-        elif kind == "binary":
+        elif kind == "binary" and not _text_marked(f.name):
             errors.append({"file": display, "error": "skipped: binary file"})
             continue
         else:
             try:
                 raw = f.read_bytes()
-                text = raw.decode("utf-8")
-            except (OSError, UnicodeDecodeError) as exc:
+            except OSError as exc:
                 errors.append({"file": display, "error": f"read failed: {exc}"})
                 continue
-            new_text, edits = redact_text(text)
+            decoded = _decode_file_bytes(raw)
+            if decoded is None:
+                if not _text_marked(f.name):
+                    errors.append(
+                        {"file": display, "error": "skipped: binary file"}
+                    )
+                    continue
+                # Lossy but byte-exact: surrogateescape round-trips the
+                # undecodable bytes through the rewrite untouched.
+                decoded = (raw.decode("utf-8", "surrogateescape"), "utf-8")
+            text, encoding = decoded
+            tail = b""
+            if encoding != "utf-8":
+                # ``_decode_file_bytes`` tolerates a truncated final
+                # code point for the bounded binary sniff and the
+                # read-only scans — but rewriting only the decoded
+                # prefix would silently delete the original tail bytes.
+                # Re-decode the whole file: when the error sits at EOF
+                # the raw tail travels beside the plan and is appended
+                # verbatim by ``_apply_text``; a mid-content error
+                # (unreachable — such files decode None above, but
+                # belt-and-braces) skips loudly instead of truncating.
+                try:
+                    raw.decode(encoding)
+                except UnicodeDecodeError as exc:
+                    if exc.end >= len(raw):
+                        tail = raw[exc.start :]
+                    else:
+                        errors.append(
+                            {
+                                "file": display,
+                                "error": (
+                                    f"skipped: undecodable {encoding}"
+                                    " content — rewrite would corrupt"
+                                ),
+                            }
+                        )
+                        continue
+                except ValueError as exc:
+                    errors.append(
+                        {"file": display, "error": f"skipped: {exc}"}
+                    )
+                    continue
+            new_text, edits = redact_text(text, file=str(f))
             if edits:
-                planned.append({"kind": "text", "path": f, "new_text": new_text})
+                planned.append(
+                    {
+                        "kind": "text",
+                        "path": f,
+                        "new_text": new_text,
+                        "encoding": encoding,
+                        "tail": tail,
+                    }
+                )
                 for e in edits:
                     edit_log.append({"file": display, "location": f"line {e['line']}", **{k: v for k, v in e.items() if k != "line"}})
 
@@ -1460,7 +2523,12 @@ def redact(paths, *, apply: bool = False, confirm_irreversible: bool = False) ->
             if plan["kind"] == "db":
                 _apply_db(path, plan["cells"])
             else:
-                _apply_text(path, plan["new_text"])
+                _apply_text(
+                    path,
+                    plan["new_text"],
+                    plan.get("encoding", "utf-8"),
+                    tail=plan.get("tail", b""),
+                )
             result["backups"].append(str(path.with_name(path.name + ".bak")))
         except Exception as exc:  # noqa: BLE001 - collect per-file errors, keep applying
             errors.append({"file": str(path), "error": f"apply failed: {exc}"})

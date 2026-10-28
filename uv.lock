@@ -362,6 +362,7 @@ dev = [
     { name = "atheris", version = "3.0.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' and sys_platform == 'linux'" },
     { name = "atheris", version = "3.1.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' and sys_platform == 'linux'" },
     { name = "pytest" },
+    { name = "pytest-timeout" },
 ]
 mcp = [
     { name = "mcp" },
@@ -372,6 +373,7 @@ requires-dist = [
     { name = "atheris", marker = "sys_platform == 'linux' and extra == 'dev'", specifier = ">=2.3" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.2" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
+    { name = "pytest-timeout", marker = "extra == 'dev'", specifier = ">=2.3" },
 ]
 provides-extras = ["dev", "mcp"]
 
