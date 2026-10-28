@@ -66,7 +66,7 @@ jobs:
     # unbounded job means a stuck tailnet/reviewer pins the coverage
     # gate for the platform default (6h). Bounded, like the _gh retry.
     # 20min covers the full 300s×3 retry budget plus setup.
-    timeout-minutes: 25
+    timeout-minutes: 30
     permissions:
       contents: read
       pull-requests: write
