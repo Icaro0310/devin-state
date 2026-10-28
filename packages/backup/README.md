@@ -84,7 +84,7 @@ devin-backup verify  <snapshot-dir>
 devin-backup diff    <snapshot-dir> [--data-dir <session-data-root>] [--config-dir <ui-config-root>] [--json]
 devin-backup list    [--out <backups-dir>]
 devin-backup restore <snapshot-dir> --to <session-data-root> [--config-to <ui-config-root>] [--apply] [--no-backup] [--smoke]
-devin-backup rotate  [--keep N] --yes
+devin-backup rotate  [--keep N] [--older-than <dur>] --yes
 ```
 
 - `create` snapshots `sessions.db`, ACP message databases, `state.vscdb` and
@@ -109,7 +109,11 @@ devin-backup rotate  [--keep N] --yes
   the restored files with `--apply`, the snapshot sources (a pre-restore
   preview, still read-only) without it. Exits 1 if any store fails.
 - `rotate` keeps the newest N snapshots (default `$DEVIN_BACKUP_KEEP` or 10)
-  and is a no-op until `--yes`. `pre-restore-*` dirs are never rotated.
+  and is a no-op until `--yes`. `--older-than <dur>` instead selects
+  snapshots by age — `30d`, `12h`, `4w` — using the snapshot dir's mtime;
+  combined, `--keep` acts as a floor so rotation never leaves fewer than N
+  behind (a set `$DEVIN_BACKUP_KEEP` floors `--older-than` runs too).
+  `pre-restore-*` dirs are never rotated.
 - `create --remote <dest>` re-verifies the fresh snapshot and offloads it:
   an ssh-style `[user@]host:path` goes through the system `rsync -a`
   (credentials stay with ssh/rsync — never in argv), a mounted/local

@@ -16,7 +16,7 @@ devin-backup solves two failure modes of naive file-copy backups of Devin's loca
 - `devin-backup verify <snapshot-dir>`: re-check every hash + `PRAGMA integrity_check`; exit 1 on failure
 - `devin-backup list [--out DIR]`: list snapshots
 - `devin-backup restore <snapshot-dir> --to <data-root> [--apply]`: dry-run by default; `--apply` writes after a `pre-restore-<ts>` backup
-- `devin-backup rotate [--keep N] --yes`: keep the newest N snapshots (default 10 or `$DEVIN_BACKUP_KEEP`); no-op until `--yes`
+- `devin-backup rotate [--keep N] [--older-than <dur>] --yes`: keep the newest N snapshots (default 10 or `$DEVIN_BACKUP_KEEP`) and/or delete snapshots older than `30d`/`12h`/`4w` (dir mtime; `--keep` stays a floor); no-op until `--yes`
 
 ## When to use / when not
 
