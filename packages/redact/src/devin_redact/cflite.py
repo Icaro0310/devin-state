@@ -115,10 +115,24 @@ def _validate(path: Path, max_bytes: int) -> str | None:
 _ENTRY_RE = re.compile(rf"^{ENTRY_PREFIX}[0-9a-f]{{64}}$")
 
 
+# ANSI escape sequences are removed as units first (same rule as
+# engine._printable_projection): the printable tail of ``ESC [31m``
+# would otherwise survive the per-char drop and keep a split token
+# apart.
+_ANSI_SEQ_RE = re.compile(
+    r"\x1b\[[0-9:;<=>?]*[ -/]*[@-~]"  # CSI  ESC [ params … final
+    r"|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)"  # OSC  ESC ] … BEL/ST
+    r"|\x1b[()][0-9A-Za-z]"  # charset selects  ESC ( 0
+    r"|\x1b[@-Z\\-~]"  # remaining two-byte escapes (incl. ST)
+)
+
+
 def _debinarize(text: str) -> str:
-    """Drop every non-printable char — rejoins ASCII fragments that binary
-    bytes split apart, so a credential interrupted by junk still matches
-    contiguous patterns. Newlines/tabs survive for line-oriented rules."""
+    """Drop ANSI escapes and every non-printable char — rejoins ASCII
+    fragments that binary bytes split apart, so a credential interrupted
+    by junk still matches contiguous patterns. Newlines/tabs survive
+    for line-oriented rules."""
+    text = _ANSI_SEQ_RE.sub("", text)
     return "".join(c for c in text if c.isprintable() or c in "\n\r\t")
 
 

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **devin-redact** — adversarial secret-detection hardening: new
+  `connection_uri`/`webhook_url` secret categories, expanded token
+  prefixes (GitLab/npm/PyPI/SendGrid/Square/Shopify/…), UTF-16 and
+  lossy-decode coverage, publish-index hardening, JSON-structure-safe
+  redaction, and fail-closed scanning of undecodable text-marked
+  blobs (see `packages/redact/CHANGELOG.md`).
 - **CI** — `pr-approve` caller repinned from v1.6 to v1.9 in
   `auto-approve.yml`: the v1.9 gate fixes self-cancellation so a
   successful approval no longer renders as a failed check, and adds a

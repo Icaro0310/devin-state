@@ -3,8 +3,9 @@ emitter.
 
 Same secrecy contract as the JSON report and the SARIF emitter: the
 report **never** carries matched secret text. The *before* column shows
-the engine's lossy masked preview (``first4...last4``, stars for short
-values); the *after* column is the ``<REDACTED:sha256prefix>`` tag that
+the engine's lossy masked preview (``first4...``, stars for short
+values — head only, since the secret sits at the tail); the *after*
+column is the ``<REDACTED:sha256prefix>`` tag that
 ``redact`` would write — the fingerprint is the tag's own content, so no
 secret material is needed to render it. Every dynamic value is
 HTML-escaped, so the report is safe to share for human review of

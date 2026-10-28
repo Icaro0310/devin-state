@@ -80,6 +80,7 @@ Requires Python ≥ 3.10. Install with `pipx install devin-backup`, `uv tool ins
 
 ```bash
 devin-backup create  [--data-dir <session-data-root>] [--config-dir <ui-config-root>] [--out <backups-dir>] [--remote <dest>] [--move]
+devin-backup preflight [--data-dir <session-data-root>] [--config-dir <ui-config-root>] [--out <backups-dir>] [--remote <dest>] [--json]
 devin-backup verify  <snapshot-dir>
 devin-backup diff    <snapshot-dir> [--data-dir <session-data-root>] [--config-dir <ui-config-root>] [--json]
 devin-backup list    [--out <backups-dir>]
@@ -114,6 +115,23 @@ devin-backup rotate  [--keep N] [--older-than <dur>] --yes
   combined, `--keep` acts as a floor so rotation never leaves fewer than N
   behind (a set `$DEVIN_BACKUP_KEEP` floors `--older-than` runs too).
   `pre-restore-*` dirs are never rotated.
+- `preflight` checks operational readiness **before** a `create` run —
+  one `PASS`/`FAIL`/`UNKNOWN` line per check, never a single aggregate:
+  `data-root` exists, `config-root` exists (when `create` would include
+  it), `stores-found` discovers ≥1 readable store after the same
+  `--exclude`/`--exclude-secrets` filters, `dest-writable` accepts a
+  real write probe (or the nearest existing ancestor does), `free-space`
+  is ≥ the summed size of the stores that would be copied,
+  `tool-sqlite3` has a working online-backup API, no timestamp dir
+  without `manifest.json` sits in the backups dir (a `create` still
+  running or one that crashed), the newest snapshot's manifest still
+  parses, and — with `--remote` — rsync exists for ssh targets or the
+  mounted path is writable. Exit codes: `0` all checks pass, `1` any
+  check failed *or* could not be evaluated (fail-closed — an
+  unevaluable check is never silently passed), `2` usage/spec error.
+  Ideal in front of a scheduled `create`. `--json` emits the same
+  report (`checks[]`, `summary`, `ok`).
+
 - `create --remote <dest>` re-verifies the fresh snapshot and offloads it:
   an ssh-style `[user@]host:path` goes through the system `rsync -a`
   (credentials stay with ssh/rsync — never in argv), a mounted/local
@@ -135,7 +153,7 @@ on Windows and `$XDG_CONFIG_HOME/Devin` (normally `~/.config/Devin`) on Linux.
 `--out` defaults to `$DEVIN_BACKUP_DIR` or `<data-root>/backups`.
 
 ```python
-from devin_backup import diff, restore, smoke, snapshot, verify
+from devin_backup import diff, preflight, restore, smoke, snapshot, verify
 
 snap = snapshot.create_snapshot(data_dir, backups_dir, config_dir=config_dir)
 verify.verify_snapshot(snap)                       # {"ok": True, ...}

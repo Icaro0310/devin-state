@@ -120,6 +120,32 @@ by `report` and selectable via `run --tiers`:
   marker (original key, slug, backend, size, timestamps) so the removal
   stays auditable; the verified snapshot owns payload restoration.
 
+### Orphan reaper (Linux)
+
+`devin-janitor reap` hunts runaway orphan processes — devin/bridge/agent
+children whose parent session died. Dry-run is the default; nothing dies
+without `--apply`.
+
+```bash
+devin-janitor reap              # report candidates only
+devin-janitor reap --apply      # SIGTERM, wait, then SIGKILL eligible ones
+```
+
+Killing is gated by **attribution**, not just behaviour — a process only
+becomes eligible when it maps to a Devin session lock that is already
+dead (via the `devin_office.procmap` mapping). If the office map is
+unavailable, attribution fails and **no kill happens** (fail-safe).
+Identity is `(PID, starttime)`, so PID reuse can never mislabel a newer
+process, and targets must also clear a grace period (`--grace-min 10`)
+plus a sustained CPU threshold (`--cpu-pct 30` over `--sample-sec`).
+
+Safety rails: `--max-kill 5` is a circuit breaker — if eligible
+candidates exceed it, NOTHING is killed. `--term-wait` paces TERM → KILL.
+Every `would_kill`/`killed` decision is appended to a dedicated
+append-only ledger (`--ledger-file`, ≥30-day retention) so reaping stays
+auditable. The reaper never runs unattended: like tier3, `--apply` is a
+manual decision and is not scheduled by `install --daily`.
+
 ### `.devin/` runtime artifacts
 
 The PAS learning loop and the janitor itself accumulate runtime state in

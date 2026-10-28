@@ -13,6 +13,7 @@ devin-backup solves two failure modes of naive file-copy backups of Devin's loca
 
 - `pipx install "devin-backup @ git+https://github.com/Icaro0310/devin-state.git#subdirectory=packages/backup"`: install (Python >= 3.10)
 - `devin-backup create [--data-dir DIR] [--config-dir DIR] [--out DIR]`: snapshot sessions.db, ACP message DBs, state.vscdb and .devin/ files
+- `devin-backup preflight [--data-dir DIR] [--out DIR] [--json]`: per-check readiness report before `create`; exit 0 all-pass, 1 on FAIL/UNKNOWN, 2 usage error
 - `devin-backup verify <snapshot-dir>`: re-check every hash + `PRAGMA integrity_check`; exit 1 on failure
 - `devin-backup list [--out DIR]`: list snapshots
 - `devin-backup restore <snapshot-dir> --to <data-root> [--apply]`: dry-run by default; `--apply` writes after a `pre-restore-<ts>` backup

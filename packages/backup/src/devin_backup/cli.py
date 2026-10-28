@@ -11,6 +11,7 @@ from pathlib import Path
 from devin_backup import (
     __version__,
     diff,
+    preflight,
     restore,
     rotate,
     smoke,
@@ -51,7 +52,7 @@ def _cmd_create(args) -> int:
     snap = snapshot.create_snapshot(
         data_dir, out, config_dir=config_dir,
         exclude=tuple(args.exclude or ()),
-        exclude_secrets=args.exclude_secrets,
+        exclude_secrets=bool(args.exclude_secrets),
     )
     manifest = snapshot.load_manifest(snap)
     total = sum(f.get("size", 0) for f in manifest["files"])
@@ -223,6 +224,39 @@ def _cmd_diff(args) -> int:
     return 0
 
 
+def _cmd_preflight(args) -> int:
+    data_dir, out = _resolve_dirs(args)
+    config_dir = args.config_dir
+    config_explicit = config_dir is not None
+    if config_dir is None and args.data_dir is None:
+        config_dir = default_config_dir()
+    report = preflight.run_preflight(
+        data_dir,
+        out,
+        config_dir=config_dir,
+        config_dir_explicit=config_explicit,
+        remote=args.remote,
+        exclude=tuple(args.exclude or ()),
+        exclude_secrets=bool(args.exclude_secrets),
+    )
+    if args.json:
+        print(json.dumps(report, indent=2))
+    else:
+        print(f"preflight — {report['data_dir']} → {report['out']}:")
+        for c in report["checks"]:
+            line = f"  {c['status'].upper():<7} {c['name']}"
+            if c["detail"]:
+                line += f"  ({c['detail']})"
+            print(line)
+        s = report["summary"]
+        state = "ok" if report["ok"] else "FAILED"
+        print(
+            f"preflight {state}: {s['pass']} passed, "
+            f"{s['fail']} failed, {s['unknown']} unknown"
+        )
+    return 0 if report["ok"] else 1
+
+
 def _cmd_rotate(args) -> int:
     _, out = _resolve_dirs(args)
     if not args.yes:
@@ -360,6 +394,41 @@ def build_parser() -> argparse.ArgumentParser:
         "--json", action="store_true", help="machine-readable JSON output"
     )
     p_diff.set_defaults(func=_cmd_diff)
+
+    p_pref = sub.add_parser(
+        "preflight",
+        help="check backup readiness before 'create' (exit 0 all-pass, "
+        "1 checks failed, 2 usage error)",
+        description="Check operational readiness before a 'create' run "
+        "— one PASS/FAIL/UNKNOWN line per check. Exit codes: "
+        "0 = all checks pass, 1 = a check failed or could not be "
+        "evaluated (the backup would likely fail or silently miss "
+        "stores), 2 = usage/spec error",
+    )
+    add_dirs(p_pref)
+    p_pref.add_argument(
+        "--config-dir",
+        help="separate Devin UI config root (Linux default is detected)",
+    )
+    p_pref.add_argument(
+        "--exclude", action="append", metavar="PATTERN",
+        help="evaluate as if 'create --exclude PATTERN' were given "
+        "(repeatable)",
+    )
+    p_pref.add_argument(
+        "--exclude-secrets", action="store_true",
+        help="evaluate as if 'create --exclude-secrets' were given",
+    )
+    p_pref.add_argument(
+        "--remote", metavar="DEST",
+        help="also check the 'create --remote' offload target: rsync on "
+        "PATH for an ssh-style '[user@]host:path', existence + "
+        "writability for a mounted/local path",
+    )
+    p_pref.add_argument(
+        "--json", action="store_true", help="machine-readable JSON output"
+    )
+    p_pref.set_defaults(func=_cmd_preflight)
 
     p_rotate = sub.add_parser(
         "rotate",
