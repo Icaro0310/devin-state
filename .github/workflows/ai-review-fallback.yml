@@ -173,7 +173,7 @@ jobs:
     # bound of its own — PR #238 hung 55min issuing periodic probes with
     # zero completions. 20min covers the full 300s×3 retry budget plus
     # setup; beyond that it is unavailability, not slowness.
-    timeout-minutes: 25
+    timeout-minutes: 40
     permissions:
       contents: read
       pull-requests: write
@@ -238,11 +238,11 @@ jobs:
           import json, os, subprocess, sys, urllib.request
           import re
           diff = open("/tmp/pr.diff").read()[:16000]
-          def call(msgs, max_tok):
+          def call(msgs, max_tok, sock):
               b = {"model": os.environ["MODEL"], "max_tokens": max_tok,
                    "temperature": 0.1, "messages": msgs}
               req = urllib.request.Request(os.environ["OLLAMA_CHAT"], data=json.dumps(b).encode(), headers={"Content-Type": "application/json"})
-              return json.load(urllib.request.urlopen(req, timeout=600))["choices"][0]["message"]["content"]
+              return json.load(urllib.request.urlopen(req, timeout=sock))["choices"][0]["message"]["content"]
           # Call 1 — free-form review. Prose is the model's strength; it
           # produced coherent reviews on every prior run. Call 2 classifies
           # the model's OWN review as a/b — a tiny context where the
@@ -258,10 +258,10 @@ jobs:
           # Ollama 500s under concurrent lanes are transient (RAM pressure,
           # single slot). Retry with backoff against a deadline so attempts
           # land after the queue drains instead of all hitting congestion.
-          deadline = time.time() + 540
+          deadline = time.time() + 1140
           while time.time() < deadline:
               try:
-                  markdown = call(rmsg, 400).strip()
+                  markdown = call(rmsg, 400, 1100).strip()
                   if len(markdown) > 20:
                       break
                   last = "empty review"
@@ -272,13 +272,13 @@ jobs:
               print(f"::error::model produced no review within deadline: {last}")
               sys.exit(1)
           verdict = "undetermined"
-          deadline2 = time.time() + 240
+          deadline2 = time.time() + 660
           while time.time() < deadline2:
               try:
                   cmsg = [{"role": "user", "content":
                            "A reviewer wrote about this pull request:\n\n" + markdown[:1200] +
                            "\n\nDid they approve it? Answer with one letter:\n(a) approve\n(b) request changes\nAnswer: ("}]
-                  vtext = call(cmsg, 8)
+                  vtext = call(cmsg, 8, 620)
                   m = re.search(r"[\(]?\s*(a|b)\b", vtext, re.I)
                   assert m, "no letter in: " + vtext[:60]
                   verdict = "approve" if m.group(1).lower() == "a" else "request_changes"
