@@ -1,3 +1,4 @@
+import os
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -117,6 +118,65 @@ def test_cli_rotate_with_yes(data_dir, backups_dir, capsys):
     assert rc == 0
     assert "deleted" in capsys.readouterr().out.lower()
     assert [p.name for p in backups_dir.iterdir()] == [snaps[-1].name]
+
+
+def _aged_snaps(data_dir, backups_dir, ages_days):
+    now = datetime.now(timezone.utc)
+    snaps = [
+        snapshot.create_snapshot(
+            data_dir, backups_dir, now=T0 + timedelta(hours=i)
+        )
+        for i in range(len(ages_days))
+    ]
+    for snap, age in zip(snaps, ages_days):
+        ts = (now - timedelta(days=age)).timestamp()
+        os.utime(snap, (ts, ts))
+    return snaps
+
+
+def test_cli_rotate_older_than_requires_yes(data_dir, backups_dir, capsys):
+    _aged_snaps(data_dir, backups_dir, [60, 40])
+    rc = cli.main(
+        ["rotate", "--out", str(backups_dir), "--older-than", "30d"]
+    )
+    assert rc == 2
+    assert "--yes" in capsys.readouterr().err
+    assert len(list(backups_dir.iterdir())) == 2
+
+
+def test_cli_rotate_older_than_with_yes(data_dir, backups_dir, capsys):
+    snaps = _aged_snaps(data_dir, backups_dir, [60, 40, 10, 1])
+    rc = cli.main(
+        ["rotate", "--out", str(backups_dir), "--older-than", "30d", "--yes"]
+    )
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "deleted" in out.lower()
+    remaining = sorted(p.name for p in backups_dir.iterdir())
+    assert remaining == sorted(p.name for p in snaps[2:])
+
+
+def test_cli_rotate_older_than_keep_floor(data_dir, backups_dir, capsys):
+    snaps = _aged_snaps(data_dir, backups_dir, [60, 50, 40, 35])
+    rc = cli.main(
+        [
+            "rotate", "--out", str(backups_dir),
+            "--older-than", "30d", "--keep", "2", "--yes",
+        ]
+    )
+    assert rc == 0
+    capsys.readouterr()
+    remaining = sorted(p.name for p in backups_dir.iterdir())
+    assert remaining == sorted(p.name for p in snaps[2:])
+
+
+def test_cli_rotate_older_than_bad_duration(data_dir, backups_dir, capsys):
+    _aged_snaps(data_dir, backups_dir, [60])
+    rc = cli.main(
+        ["rotate", "--out", str(backups_dir), "--older-than", "bogus", "--yes"]
+    )
+    assert rc == 2
+    assert "duration" in capsys.readouterr().err.lower()
 
 
 def test_cli_no_command_errors(capsys):

@@ -265,9 +265,26 @@ def _cmd_rotate(args) -> int:
             file=sys.stderr,
         )
         return 2
-    deleted = rotate.rotate_snapshots(out, keep=args.keep)
+    older_than = (
+        rotate.parse_duration(args.older_than) if args.older_than else None
+    )
+    keep = args.keep
+    if keep is None:
+        env_keep = os.environ.get("DEVIN_BACKUP_KEEP")
+        if older_than is None:
+            # keep-mode default: env or 10
+            keep = int(env_keep or "10")
+        elif env_keep is not None:
+            # a configured retention floor still protects --older-than runs
+            keep = int(env_keep)
+    deleted = rotate.rotate_snapshots(out, keep=keep, older_than=older_than)
     if not deleted:
-        print(f"nothing to delete (keep={args.keep})")
+        criteria = []
+        if keep is not None:
+            criteria.append(f"keep={keep}")
+        if args.older_than:
+            criteria.append(f"older-than={args.older_than}")
+        print(f"nothing to delete ({', '.join(criteria)})")
     for d in deleted:
         print(f"deleted {d.name}")
     return 0
@@ -413,12 +430,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_pref.set_defaults(func=_cmd_preflight)
 
-    p_rotate = sub.add_parser("rotate", help="keep last N snapshots, delete older")
+    p_rotate = sub.add_parser(
+        "rotate",
+        help="delete old snapshots — keep last N and/or older than a duration",
+    )
     add_dirs(p_rotate)
     p_rotate.add_argument(
-        "--keep", type=int,
-        default=int(os.environ.get("DEVIN_BACKUP_KEEP", "10")),
-        help="snapshots to keep (default: $DEVIN_BACKUP_KEEP or 10)",
+        "--keep", type=int, default=None,
+        help="snapshots to keep (default: $DEVIN_BACKUP_KEEP or 10); "
+        "with --older-than it acts as a floor — rotation never leaves "
+        "fewer than this many",
+    )
+    p_rotate.add_argument(
+        "--older-than", metavar="DUR",
+        help="also rotate snapshots older than DUR — <N>h, <N>d or <N>w "
+        "(e.g. 12h, 30d, 4w), by snapshot dir mtime",
     )
     p_rotate.add_argument(
         "--yes", action="store_true",

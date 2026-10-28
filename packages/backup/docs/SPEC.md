@@ -42,8 +42,9 @@ the SQLite backup API, and stamps every snapshot with `schema_version` from
   fallback; sha256/size/schema_version per file.
 - `verify.py` — re-checks sha256 and runs `PRAGMA integrity_check` on DBs
   (catches sources that were already corrupt at backup time).
-- `rotate.py` — `list_snapshots()` + `rotate_snapshots(keep=N)`; only
-  timestamp-named manifest dirs are ever deleted.
+- `rotate.py` — `list_snapshots()` +
+  `rotate_snapshots(keep=N, older_than=dur)`; only timestamp-named
+  manifest dirs are ever deleted.
 - `restore.py` — dry-run by default; pre-restore backup of files it would
   overwrite; refuses to overwrite with `backup=False`; schema-drift warnings.
 - `cli.py` — thin argparse wrapper.
