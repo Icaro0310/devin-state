@@ -16,7 +16,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "pytest-timeout>=2.3"]
 mcp = ["mcp>=1.2"]
 
 [project.scripts]
@@ -28,6 +28,10 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+timeout = 120
+markers = [
+    "integration: spawns real child processes (still never scans /proc)",
+]
 pythonpath = ["src"]
 
 [tool.uv.sources]

@@ -13,12 +13,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sqlite3
 import subprocess
 import sys
 import time
 from collections.abc import Sequence
 from dataclasses import asdict
+from pathlib import Path
 
 from devin_internals.schema import SchemaError
 
@@ -51,6 +53,18 @@ from devin_janitor.inventory import (
 from devin_janitor.judge import Verdict, make_judge
 from devin_janitor.notify import resolve_notify_cmd, send_notification
 from devin_janitor.paths import resolve
+from devin_janitor.reap import (
+    DEFAULT_STATE_FILE,
+    ProcFsTable,
+    _redact,
+    append_ledger,
+    load_reap_state,
+    reap,
+    reap_build_info,
+    render,
+    save_reap_state,
+    scan,
+)
 from devin_janitor.report import (
     append_log,
     audit_entry,
@@ -70,6 +84,7 @@ from devin_janitor.tiers import (
 DEFAULT_KEEP_FILE = ".devin/janitor-keep.json"
 DEFAULT_PENDING_FILE = ".devin/janitor-pending.json"
 DEFAULT_LOG_FILE = ".devin/memory/janitor-log.jsonl"
+DEFAULT_REAP_LEDGER = ".devin/memory/janitor-reap-ledger.jsonl"
 DEFAULT_DEVIN_DIR = ".devin"
 
 
@@ -448,6 +463,132 @@ def cmd_pending(args: argparse.Namespace) -> int:
     return 0
 
 
+# --------------------------------------------------------------- reap ----
+
+
+def _cap_log_size(path: str | Path, max_bytes: int = 256 * 1024) -> None:
+    """Keep the reap audit log under ``max_bytes`` — the 3-min timer
+    runs ~480 sweeps/day and a noisy detector would grow it forever.
+    Rotation keeps the newest entries (the tail)."""
+    p = Path(path)
+    try:
+        if p.stat().st_size <= max_bytes:
+            return
+        tail = p.read_bytes()[-max_bytes:]
+        nl = tail.find(b"\n")
+        p.write_bytes(tail[nl + 1:] if nl >= 0 else tail)
+    except OSError:
+        pass
+
+
+def cmd_reap(args: argparse.Namespace) -> int:
+    """Reap runaway orphan processes (Linux only; dry-run default).
+
+    Destructive path is gated four ways: same-UID only (root refuses
+    outright), attribution to a dead Devin session via procmap, grace
+    tracked across runs, and a max_kill circuit breaker. A
+    ``reap.disabled`` kill-switch file next to the state file makes
+    every sweep a no-op before any /proc work.
+    """
+    if not sys.platform.startswith("linux"):
+        print("error: 'reap' is Linux-only (reads /proc)", file=sys.stderr)
+        return 2
+    if os.geteuid() == 0:
+        print("error: 'reap' refuses to run as root", file=sys.stderr)
+        return 2
+    disable_file = (
+        Path(args.disable_file) if args.disable_file
+        else Path(args.state_file).parent / "reap.disabled"
+    )
+    if disable_file.exists():
+        print(f"reap disabled by {disable_file} — sweep skipped")
+        return 0
+    paths = _resolve(args)
+    state = load_reap_state(args.state_file)
+    table = ProcFsTable()
+    res = scan(
+        table,
+        locks_dir=paths.session_locks_dir,
+        sessions_db=paths.sessions_db,
+        state=state,
+        grace_min=args.grace_min,
+        cpu_pct=args.cpu_pct,
+        sample_sec=args.sample_sec,
+        max_kill=args.max_kill,
+    )
+    if args.apply and res.candidates:
+        killed = reap(table, res.candidates, term_wait=args.term_wait)
+        res.killed, res.survivors = killed.killed, killed.survivors
+    save_reap_state(args.state_file, state)
+    # decisions go to the dedicated append-only ledger (≥30d retention)
+    # — the calibration evalset must survive log rotation; the capped
+    # shared log keeps only the sweep summary
+    now = int(time.time())
+    build = reap_build_info()  # stamped per run — labels never mix builds
+    decisions = res.candidates if not args.apply else res.killed
+    append_ledger(args.ledger_file, [
+        {"ts": now, "decision": "would_kill" if not args.apply else "killed",
+         "pid": c.proc.pid,
+         "starttime": c.proc.starttime,
+         "comm": c.proc.comm,
+         "cmdline": _redact(c.proc.cmdline)[:200],
+         "session": c.session_slug,
+         "cpu_pct": round(c.cpu_pct, 1),
+         "age_s": int(c.proc.age_s),
+         "reason": c.reason,
+         "build": build}
+        for c in decisions
+    ] + [
+        {"ts": now, "decision": "survivor", "pid": pid, "build": build}
+        for pid in res.survivors
+    ] + (
+        [{"ts": now, "decision": "circuit_tripped",
+          "eligible": len(res.skipped), "build": build}]
+        if res.circuit else []
+    ))
+    if res.candidates or res.killed or res.survivors or res.circuit:
+        _cap_log_size(args.log_file)
+        append_log(args.log_file, {
+            "ts": now,
+            "kind": "reap",
+            "apply": bool(args.apply),
+            "scanned": res.scanned,
+            "orphans": res.orphans,
+            "attributed": res.attributed,
+            "eligible": len(res.candidates),
+            "killed": len(res.killed),
+            "survivors": len(res.survivors),
+            "circuit": res.circuit,
+        })
+    if args.json:
+        payload = {
+            "apply": bool(args.apply),
+            "scanned": res.scanned,
+            "orphans": res.orphans,
+            "attributed": res.attributed,
+            "attribution_ok": res.attribution_ok,
+            "circuit": res.circuit,
+            "candidates": [
+                {"pid": c.proc.pid, "comm": c.proc.comm,
+                 "cmdline": _redact(c.proc.cmdline),
+                 "session": c.session_slug,
+                 "cpu_pct": c.cpu_pct, "age_s": c.proc.age_s,
+                 "reason": c.reason}
+                for c in res.candidates
+            ],
+            "skipped": [
+                {"pid": p.pid, "comm": p.comm, "reason": why}
+                for p, why in res.skipped
+            ],
+            "killed": [c.proc.pid for c in res.killed],
+            "survivors": res.survivors,
+        }
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+    else:
+        print(render(res, apply=args.apply))
+    return 0
+
+
 # --------------------------------------------------------------- report --
 
 
@@ -602,6 +743,40 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--retry", action="store_true",
                    help="retry queued gui-file deletions")
     p.set_defaults(func=cmd_pending)
+
+    p = sub.add_parser(
+        "reap",
+        help="reap runaway orphan processes (dry-run without --apply)",
+    )
+    _add_path_args(p)
+    p.add_argument("--apply", action="store_true",
+                   help="TERM then KILL eligible orphans (default: dry-run)")
+    p.add_argument("--grace-min", type=float, default=10.0,
+                   help="minutes a proc must stay orphaned before it's "
+                        "eligible (default: 10)")
+    p.add_argument("--cpu-pct", type=float, default=30.0,
+                   help="minimum sampled CPU%% to count as runaway "
+                        "(default: 30)")
+    p.add_argument("--sample-sec", type=float, default=2.0,
+                   help="CPU sampling window in seconds (default: 2)")
+    p.add_argument("--term-wait", type=float, default=3.0,
+                   help="seconds to wait after SIGTERM before SIGKILL "
+                        "(default: 3)")
+    p.add_argument("--max-kill", type=int, default=5,
+                   help="circuit breaker: if eligible candidates exceed "
+                        "this, kill NOTHING (default: 5)")
+    p.add_argument("--state-file", default=DEFAULT_STATE_FILE,
+                   help="orphan first-seen + attribution tracker "
+                        f"(default: {DEFAULT_STATE_FILE})")
+    p.add_argument("--ledger-file", default=DEFAULT_REAP_LEDGER,
+                   help="append-only would_kill/killed decision ledger, "
+                        f"30-day retention (default: {DEFAULT_REAP_LEDGER})")
+    p.add_argument("--disable-file", default=None,
+                   help="kill-switch path — presence skips every sweep "
+                        "(default: reap.disabled next to --state-file)")
+    p.add_argument("--log-file", default=DEFAULT_LOG_FILE)
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_reap)
 
     p = sub.add_parser(
         "report", help="recoverable-space report (advisory, read-only)"
