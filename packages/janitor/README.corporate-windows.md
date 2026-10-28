@@ -36,14 +36,14 @@ Use `--data-dir`/`--config-dir` (plus `--sessions-db`/`--acp-dir`/`--locks-dir` 
 - **Blocked installers:** if winget/Store are disabled by policy, `uv` installs as a standalone binary, download the GitHub release zip, extract to `%LOCALAPPDATA%\bin`, add it to PATH.
 - **Long paths:** keep checkout/install roots short (`C:\dev`), MAX_PATH (260 chars) can still bite inside virtualenvs; `LongPathsEnabled` needs admin, short roots do not.
 - **EDR/antivirus:** if a scan kills the install, retry with an exclusion or ask IT to allowlist `%LOCALAPPDATA%\uv` and `%USERPROFILE%\.local\bin`. These tools never elevate or listen on the network by default.
-- **Offline/air-gapped:** `pip download <package> -d wheels\` on a connected machine, copy the folder, then `pip install --no-index --find-links wheels\` on the target (pure-Python tools; native deps need a matching platform wheel). For `source_only` tools installed from a copied checkout, stage the build backend too (`pip download setuptools wheel -d wheels\`, into the folder being copied) and install it first (`pip install --no-index --find-links wheels\ setuptools wheel`; `--no-build-isolation` needs the backend installed, not only staged), then install with `pip install --no-index --find-links wheels\ --no-build-isolation .` inside the checkout.
+- **Offline/air-gapped:** `pip download <package> -d wheels\` on a connected machine, copy the folder, then `pip install --no-index --find-links wheels\` on the target (pure-Python tools; native deps need a matching platform wheel). For `source_only` tools installed from a copied checkout, stage the build backend too (`pip download setuptools wheel`), then install with `pip install --no-index --find-links wheels\ --no-build-isolation .` inside the checkout.
 - **Fully local runtime:** no network calls. The opt-in `--judge command:<cmd>` hook spawns a user-supplied command, absent under local-only.
 
 ## Zscaler
 
 Zscaler é comum em ambientes corporativos e se comporta diferente de um proxy genérico. Dois produtos importam aqui: **Zscaler Internet Access (ZIA)**, proxy com inspeção de TLS, e **Zscaler Private Access (ZPA)**, túnel/VPN para aplicações internas.
 
-- **Certificado raiz:** a inspeção de TLS da ZIA substitui o certificado dos sites pelo da Zscaler. Sem a raiz no bundle correto, `pip`/`uv`/`npm`/`git` falham com `SSL: CERTIFICATE_VERIFY_FAILED`. A raiz vive no repositório de certificados do Windows (instalada por política ou pelo Client Connector), e o bundle das variáveis abaixo precisa ser PEM (Base-64), não DER. Pelo GUI, exporte via Trusted Root Certification Authorities → Zscaler → Export escolhendo "Base-64 encoded X.509 (.CER)": `certmgr.msc` abre apenas o store do usuário atual; raízes instaladas por política na máquina aparecem no `certlm.msc`. Via PowerShell, `Get-ChildItem Cert:\LocalMachine\Root | ? Subject -like "*Zscaler*"` + `Export-Certificate` gera DER; converta para PEM com `certutil -encode zscaler-root.cer zscaler-root.pem`. Em alternativa peça o PEM ao TI. Cada ferramenta lê a raiz de um lugar diferente:
+- **Certificado raiz:** a inspeção de TLS da ZIA substitui o certificado dos sites pelo da Zscaler. Sem a raiz no bundle correto, `pip`/`uv`/`npm`/`git` falham com `SSL: CERTIFICATE_VERIFY_FAILED`. A raiz vive no repositório de certificados do Windows (instalada por política ou pelo Client Connector), que tem duas lojas: `certmgr.msc` cobre o usuário atual e `certlm.msc` cobre a máquina; a raiz pode estar em só uma delas. Exporte pelo assistente (Trusted Root Certification Authorities → Zscaler → Export) escolhendo "Base-64 encoded X.509 (.CER)", que já sai em PEM; via PowerShell, `Get-ChildItem Cert:\CurrentUser\Root, Cert:\LocalMachine\Root | ? Subject -like "*Zscaler*"` acha o cert nas duas lojas, mas `Export-Certificate` grava DER, não PEM; converta com `certutil -encode zscaler-root.cer zscaler-root.pem`. Em alternativa peça o PEM ao TI. Cada ferramenta lê a raiz de um lugar diferente:
   ```powershell
   $env:REQUESTS_CA_BUNDLE="C:\path\zscaler-root.pem"   # pip e ferramentas baseadas em requests
   $env:SSL_CERT_FILE="C:\path\zscaler-root.pem"        # uv, urllib do Python (inclui o check de manifest do DevKit)
@@ -74,8 +74,7 @@ User-scope registration (`schtasks` or the `ScheduledTask` cmdlets) needs no adm
 - Devin plugin + skill: `devin plugins install
   Icaro0310/devin-state#packages/janitor/adapters`. The manifest
   launches the server through `uvx --from 'devin-janitor[mcp]' devin-janitor-mcp`, which
-  resolves from PyPI as of 0.1.1 (the 0.1.0 wheel predates the entry
-  point); on 0.1.0 install from
+  resolves once the next PyPI release ships, until then install from
   source (`pip install -e 'packages/janitor[mcp]'` from a checkout).
 
 

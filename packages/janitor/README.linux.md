@@ -21,12 +21,6 @@ uv tool install 'devin-janitor'
 Session data normally lives under `${XDG_DATA_HOME:-$HOME/.local/share}/devin/cli/`; UI state and ACP stores under `${XDG_CONFIG_HOME:-$HOME/.config}/Devin/User/`.
 Use `--data-dir`/`--config-dir` (plus `--sessions-db`/`--acp-dir`/`--locks-dir` for finer control) for non-default locations.
 
-Detection fallback for older/migrated installs: without `DEVIN_DATA_DIR`
-the data root is the first of `${XDG_DATA_HOME:-~/.local/share}/devin`,
-`${XDG_CONFIG_HOME:-~/.config}/devin`, `~/devin` that already contains a
-`cli/sessions.db` — so a store created under the config home keeps
-being found after the convention moved to data home.
-
 ## Environment notes
 
 - Delegated runtime is optional; this guide installs local tooling only.
@@ -60,8 +54,7 @@ Equivalent `systemd --user` timer works too; enable lingering if it must run wit
 - Devin plugin + skill: `devin plugins install
   Icaro0310/devin-state#packages/janitor/adapters`. The manifest
   launches the server through `uvx --from 'devin-janitor[mcp]' devin-janitor-mcp`, which
-  resolves from PyPI as of 0.1.1 (the 0.1.0 wheel predates both the
-  entry point and the `mcp` extra). On 0.1.0 or a source checkout, an
+  resolves once the next PyPI release ships. Until then, an
   editable install does not change what `uvx --from` resolves —
   either run the source-installed `devin-janitor-mcp` directly, or
   point a local manifest copy at the checkout:
