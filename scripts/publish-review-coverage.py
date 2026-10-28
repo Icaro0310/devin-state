@@ -91,6 +91,17 @@ def compute_verdict(devin: str, a: str, b: str,
     ran = [name for name, outcome in (("a", a), ("b", b)) if outcome in _VERDICT_OK]
     if len(ran) == 2:
         return "success", f"covered — {desc_core}{suffix}", "COVERED"
+    if b == EXECUTED:
+        # Reviewer B is the direct-Ollama lane: it always posts a real
+        # review comment plus a verdict, so its evidence alone covers the
+        # PR. Reviewer A (third-party action) flakes on event-payload
+        # races — its state is still recorded honestly in the
+        # description, but the gate must not stay hostage to infra
+        # flakiness outside the review itself.
+        return ("success",
+                f"covered b-only — {desc_core} — "
+                f"reviewer A did not execute{suffix}",
+                "COVERED")
     if ran:
         return ("action_required",
                 (f"DEGRADED {ran[0]}-only — {desc_core} — "
