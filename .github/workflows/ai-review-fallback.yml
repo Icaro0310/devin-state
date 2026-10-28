@@ -1,25 +1,41 @@
 name: ai-review-fallback
 
 # When Devin Review does not actually run on a PR head (trial exhausted,
-# failed, or signal unverifiable), two local-model reviewers produce real
-# review evidence over Tailscale, and a "Review Coverage" commit status
-# records what executed. Devin Review stays first — EXECUTED means neither
-# fallback runs.
+# failed, or signal unverifiable), the fallback lanes produce review
+# evidence and a "Review Coverage" check records the decider's verdict.
+# Devin Review stays first — EXECUTED means no fallback runs.
+#
+#   * review-a    — LLM deep-review lane over Tailscale/Ollama: the deep
+#                   inspector. Small models never make security decisions,
+#                   so its findings are advisory evidence, not a verdict.
+#   * static-scan — deterministic advisory scanners on the runner
+#                   (gitleaks + semgrep + ruff over the PR diff applied as
+#                   DATA onto the trusted base ref): evidence only, the
+#                   job always succeeds.
+#   * judge       — the authoritative decider. Waits for the
+#                   devin-judge/review commit status posted by the
+#                   laptop-side watcher (poordjaevin ACP gate on the
+#                   diff): approve -> EXECUTED, reject -> REJECTED,
+#                   no status -> UNAVAILABLE.
 #
 #   PR -> classify (commit status, not check-run)
 #        ├ EXECUTED            -> coverage: success (devin), fallbacks skip
-#        ├ SKIPPED_CREDITS     -> review-a + review-b -> coverage
-#        ├ FAILED_BEFORE_REVIEW-> review-a + review-b -> coverage
-#        └ UNVERIFIED          -> review-a + review-b -> coverage
+#        ├ SKIPPED_CREDITS     -> review-a + static-scan + judge -> coverage
+#        ├ FAILED_BEFORE_REVIEW-> review-a + static-scan + judge -> coverage
+#        └ UNVERIFIED          -> review-a + static-scan + judge -> coverage
 #
 # pull_request_target on purpose: the workflow file and every checked-out
 # byte come from the base branch, so a PR cannot alter its own review
 # pipeline, and the token can post comments/statuses on fork PRs too.
-# Neither reviewer checks out or runs PR-controlled code:
+# No lane checks out or runs PR-controlled code:
 #   - review-a reads the diff through the GitHub API only.
-#   - review-b checks out the BASE ref (trusted), runs with tool-mode off
-#     and no evidence-providers-file, so nothing in its workspace or tool
-#     surface is controlled by the PR.
+#   - static-scan checks out the BASE ref (trusted) and applies the diff
+#     as DATA — the scanners parse text, nothing executes.
+#   - judge never checks out at all: the untrusted diff stays data for
+#     the watcher-side gate.
+# The judge is the final decider: REJECTED fails coverage and overrides
+# lane A entirely; a missing verdict holds coverage at action_required —
+# lane A alone can never clear a PR.
 #
 # Boundaries kept: Ollama is tailnet-only (tailscale serve on the VM);
 # the Tailscale identity is an ephemeral tagged node; coverage never spoofs
@@ -161,14 +177,14 @@ jobs:
           echo "result=$r" >> "$GITHUB_OUTPUT"
           echo "reviewer A: $r (findings=${{ steps.rev.outputs.findings_count || '?' }}, critical=${{ steps.rev.outputs.critical_count || '?' }})"
 
-  review-b:
-    # Deterministic static-analysis lane — gitleaks + semgrep + ruff,
-    # all on the runner. No model, no VM, no Tailscale, no secrets: the
-    # PR diff is applied onto the trusted base ref as DATA and the
-    # scanners parse text — nothing PR-controlled executes. With the
-    # shared single-slot model gone from this lane there is nothing to
-    # serialize on, so B runs in parallel with A; always() keeps its
-    # outcome honest even when classify flaked.
+  static-scan:
+    # Advisory evidence lane — gitleaks + semgrep + ruff, all on the
+    # runner. No model, no VM, no Tailscale, no secrets: the PR diff is
+    # applied onto the trusted base ref as DATA and the scanners parse
+    # text — nothing PR-controlled executes. Its findings inform the
+    # judge and human reviewers; the lane itself never gates coverage,
+    # so every step is continue-on-error and the job always succeeds.
+    # result is EXECUTED|FAILED, observability only.
     needs: classify
     if: always() && needs.classify.outputs.state != 'EXECUTED'
     runs-on: ubuntu-latest
@@ -183,15 +199,17 @@ jobs:
     steps:
       # Base ref only — the PR head is never materialized as executable
       # code: checkout pins base.sha and the diff lands as text the
-      # scanners read. Same trust posture as the old base-checkout lane.
+      # scanners read.
       - name: Checkout trusted base ref
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           fetch-depth: 0
+        continue-on-error: true
 
       - name: Install pinned toolchain
         id: pre
+        continue-on-error: true
         run: |
           set -euo pipefail
           # gitleaks — pinned release tarball, sha256-verified.
@@ -208,7 +226,7 @@ jobs:
           export PATH="$HOME/.local/bin:$PATH"
           /tmp/gitleaks version && semgrep --version && ruff --version
 
-      - name: Reviewer B — static analysis (gitleaks + semgrep + ruff)
+      - name: Static scan (gitleaks + semgrep + ruff)
         id: rev
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -239,7 +257,7 @@ jobs:
           echo "changed files: $(wc -l < /tmp/changed-files.txt)"
           # Compact embedded ruleset — deterministic, no semgrep.dev
           # registry dependency.
-          cat > /tmp/lane-b-rules.yml <<'RULES'
+          cat > /tmp/static-scan-rules.yml <<'RULES'
           rules:
             - id: py-eval-exec
               languages: [python]
@@ -350,7 +368,7 @@ jobs:
             || echo "gitleaks rc=$?"
           # semgrep — embedded rules only; findings never fail the step.
           if [ -s /tmp/changed-files.txt ]; then
-            semgrep scan --config /tmp/lane-b-rules.yml --json \
+            semgrep scan --config /tmp/static-scan-rules.yml --json \
               -o /tmp/semgrep.json --metrics off /tmp/bscan \
               >/tmp/semgrep.out 2>/tmp/semgrep.err || echo "semgrep rc=$?"
           fi
@@ -436,16 +454,17 @@ jobs:
           else:
               sections.append("**ruff** — skipped (no Python files changed)")
           verdict = "EXECUTED" if ran else "FAILED"
-          body = ("**Reviewer B (static analysis) — verdict: `%s`**\n\n" % verdict
+          body = ("**Static scan (advisory) — result: `%s`**\n\n" % verdict
                   + "Deterministic scan of %d changed file(s) — "
                     "gitleaks 8.30.1 · semgrep 1.182.1 · ruff 0.17.3. "
-                    "Findings are evidence, not lane failures.\n\n" % len(changed)
+                    "Findings are advisory evidence for the judge, "
+                    "not a lane verdict.\n\n" % len(changed)
                   + "\n\n".join(sections))
-          with open("/tmp/lane-b.md", "w", encoding="utf-8") as fh:
+          with open("/tmp/static-scan.md", "w", encoding="utf-8") as fh:
               fh.write(body)
           subprocess.run(["gh", "pr", "comment", os.environ["PR_NUM"],
-                          "--body-file", "/tmp/lane-b.md"], check=True)
-          print("reviewer B verdict:", verdict)
+                          "--body-file", "/tmp/static-scan.md"], check=True)
+          print("static-scan result:", verdict)
           sys.exit(0 if ran else 1)
           PYE
         continue-on-error: true
@@ -454,19 +473,114 @@ jobs:
         id: mark
         if: always()
         run: |
+          # Advisory lane: EXECUTED means the scanners ran and reported;
+          # FAILED covers every other outcome. The job always succeeds —
+          # it never gates coverage, that is the judge's role.
           if [ "${{ steps.rev.outcome }}" = "success" ]; then
             r=EXECUTED
-          elif [ "${{ steps.pre.outcome }}" = "failure" ] || \
-               [ "${{ steps.pre.outcome }}" = "cancelled" ]; then
-            r=UNAVAILABLE
           else
             r=FAILED
           fi
           echo "result=$r" >> "$GITHUB_OUTPUT"
-          echo "reviewer B: $r"
+          echo "static-scan: $r"
+
+  judge:
+    # The authoritative decider. A laptop-side watcher (judge-watch,
+    # cron every few minutes) polls open PRs for head SHAs missing the
+    # devin-judge/review commit status, runs the poordjaevin gate
+    # locally (ACP backend = high Devin model) on the diff, and posts:
+    #   approve -> status success  -> this job reports EXECUTED
+    #   reject  -> status failure  -> this job reports REJECTED
+    #   gate error / watcher down  -> no status -> UNAVAILABLE
+    # This job never checks anything out: the untrusted diff stays data
+    # for the watcher-side gate. It always completes — polling errors
+    # degrade to UNAVAILABLE, never a hard job failure.
+    needs: classify
+    if: always() && needs.classify.outputs.state != 'EXECUTED'
+    runs-on: ubuntu-latest
+    # Must exceed JUDGE_WAIT_MINUTES — raise both together.
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      statuses: read        # read the devin-judge/review commit status
+      pull-requests: write  # verdict comment
+      issues: write         # judge-requested label lives on the issues API
+    outputs:
+      result: ${{ steps.poll.outputs.result }}
+    env:
+      JUDGE_WAIT_MINUTES: "15"
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      PR_NUM: ${{ github.event.pull_request.number }}
+    steps:
+      - name: Nudge the watcher — judge-requested label
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Best-effort nudge only. The watcher's real trigger is the
+          # missing devin-judge/review status; the label documents that
+          # this run is waiting on a verdict.
+          [ -n "$PR_NUM" ] || exit 0
+          gh api "repos/${{ github.repository }}/issues/$PR_NUM/labels" \
+            -f "labels[]=judge-requested" >/dev/null 2>&1 || true
+
+      - name: Poll the devin-judge/review commit status
+        id: poll
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -u
+          if [ -z "$HEAD_SHA" ]; then
+            echo "::warning::no PR head SHA in this event — judge cannot run"
+            echo "result=UNAVAILABLE" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          deadline=$(( $(date +%s) + ${JUDGE_WAIT_MINUTES:-15} * 60 ))
+          state=""
+          while :; do
+            # Newest status with our context wins; gh errors keep the
+            # loop alive and degrade to UNAVAILABLE at the deadline.
+            state=$(gh api "repos/${{ github.repository }}/statuses/$HEAD_SHA" \
+              --jq '[.[]|select(.context=="devin-judge/review")][0].state' \
+              2>/dev/null || true)
+            [ "$state" = "null" ] && state=""
+            echo "poll: devin-judge/review=${state:-<none>} ($(date -u +%H:%M:%S))"
+            case "$state" in success|failure) break ;; esac
+            [ "$(date +%s)" -ge "$deadline" ] && break
+            sleep 30
+          done
+          case "$state" in
+            success) r=EXECUTED ;;
+            failure) r=REJECTED ;;
+            *)       r=UNAVAILABLE ;;
+          esac
+          echo "result=$r" >> "$GITHUB_OUTPUT"
+          echo "judge: $r (status=${state:-none})"
+
+      - name: Comment the verdict on the PR
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RESULT: ${{ steps.poll.outputs.result }}
+        run: |
+          [ -n "$PR_NUM" ] || exit 0
+          case "$RESULT" in
+            EXECUTED)
+              verdict=APPROVED
+              detail="The poordjaevin ACP gate approved this head (\`devin-judge/review\` = success)." ;;
+            REJECTED)
+              verdict=REJECTED
+              detail="The poordjaevin ACP gate rejected this head (\`devin-judge/review\` = failure). Coverage fails; see the judge's own comment for rationale." ;;
+            *)
+              verdict=UNAVAILABLE
+              detail="No \`devin-judge/review\` status within ${JUDGE_WAIT_MINUTES:-15}m: the laptop-side watcher is offline or the gate errored. Coverage holds at action_required — a human must decide." ;;
+          esac
+          body=$(printf '**devin-judge (Lane B) — verdict: `%s`**\n\n%s' \
+            "$verdict" "$detail")
+          gh pr comment "$PR_NUM" --body "$body" \
+            || echo "::warning::judge verdict comment failed"
 
   coverage:
-    needs: [classify, review-a, review-b]
+    needs: [classify, review-a, judge]
     if: always()
     runs-on: ubuntu-latest
     permissions:
@@ -481,7 +595,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DEVIN: ${{ needs.classify.outputs.state }}
           A: ${{ needs.review-a.outputs.result }}
-          B: ${{ needs.review-b.outputs.result }}
+          B: ${{ needs.judge.outputs.result }}
         run: >-
           python3 scripts/publish-review-coverage.py
           --repo "${{ github.repository }}"

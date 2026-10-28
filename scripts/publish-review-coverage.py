@@ -5,18 +5,25 @@ The failure class this sensor covers:
 
 * A green "Devin Review" status is ambiguous — skipped-for-credits posts
   ``success`` too. Review coverage must be computed from explicit evidence:
-  the Devin classification plus each fallback reviewer's outcome.
-* ``DEGRADED`` is a first-class verdict: one reviewer executed, the other
-  failed. It is neither full coverage nor a no-review failure, and the
-  merge gate must not treat it as either.
+  the Devin classification plus the fallback lanes' outcomes.
+* The judge is the final decider. Its verdict arrives out-of-band as the
+  ``devin-judge/review`` commit status (posted by the laptop-side
+  watcher running the poordjaevin ACP gate) and enters here as ``--b``:
+  approve is ``EXECUTED``, reject is ``REJECTED``, no status is
+  ``UNAVAILABLE``.
+* ``ACTION_REQUIRED`` is a first-class verdict: the judge produced no
+  verdict at all. Lane A's evidence alone cannot clear a PR — small
+  models never make security decisions — so an absent judge means a
+  human decides, not a green check.
 * The check never impersonates Devin Review: its name is
   ``Review Coverage``, its summary names every evidence source.
 
-Why a check run, not a commit status: ``DEGRADED`` must not be green.
-Commit statuses only know error/failure/pending/success — publishing
-partial coverage as ``success`` would repeat the skipped-as-success bug
-one layer down. The Checks API has the honest conclusion:
-``action_required`` — a human decides, and the code is not blamed.
+Why a check run, not a commit status: a missing judge verdict must not
+be green. Commit statuses only know error/failure/pending/success —
+publishing judge-absent coverage as ``success`` would repeat the
+skipped-as-success bug one layer down. The Checks API has the honest
+conclusion: ``action_required`` — a human decides, and the code is not
+blamed.
 
 Outputs posted per head SHA:
 
@@ -32,16 +39,24 @@ Inputs are outcome strings, not job internals:
 
 * ``--devin`` — classifier output: EXECUTED | SKIPPED_CREDITS |
   FAILED_BEFORE_REVIEW | UNVERIFIED (or SKIPPED when the job was skipped).
-* ``--a`` / ``--b`` — reviewer outcome: EXECUTED | FAILED | UNAVAILABLE
-  (or SKIPPED when the job did not run).
+* ``--a`` — lane A reviewer outcome: EXECUTED | FAILED | UNAVAILABLE
+  (or SKIPPED when the job did not run). Advisory evidence only.
+* ``--b`` — judge verdict: EXECUTED (approved) | REJECTED | UNAVAILABLE
+  (or SKIPPED when the judge job did not run).
 
 Verdicts:
 
-* ``devin=EXECUTED``            → success, coverage by Devin itself.
-* ``a and b EXECUTED``          → success, full fallback coverage.
-* exactly one EXECUTED          → ``action_required``, ``DEGRADED``
-                                  prefix — partial evidence, human call.
-* neither EXECUTED              → failure — no review executed.
+* ``devin=EXECUTED``   → success, coverage by Devin itself.
+* ``b=REJECTED``       → failure — the judge rejected the PR. Overrides
+                         lane A entirely: the judge is the final
+                         decider, so its reject cannot be cleared by
+                         advisory evidence.
+* ``b=EXECUTED``       → success — the judge approved. The description
+                         records whether lane A also executed
+                         (``judge-only`` is honest full coverage).
+* ``b`` anything else  → ``action_required`` — no judge verdict
+                         (UNAVAILABLE / FAILED / SKIPPED). Lane A alone
+                         cannot clear a PR; a human decides.
 
 Findings are deliberately NOT part of the verdict: a review that ran and
 found critical issues is successful execution. The merge gate reads
@@ -64,7 +79,7 @@ import sys
 
 COVERAGE_CONTEXT = "Review Coverage"
 EXECUTED = "EXECUTED"
-_VERDICT_OK = {EXECUTED}
+REJECTED = "REJECTED"
 
 
 def compute_verdict(devin: str, a: str, b: str,
@@ -76,11 +91,11 @@ def compute_verdict(devin: str, a: str, b: str,
     embedded in the description so a reader — human or gate — can
     distinguish coverage kinds.
 
-    ``a_critical`` > 0 appends ``findings=blocking`` — the review still
-    executed (conclusion stays success), but the merge gate must hold.
-    This is the findings-as-data channel for reviewer A, whose own
-    comments are advisory; reviewer B's blockers surface as
-    request_changes reviews.
+    ``b`` is the devin-judge verdict — the poordjaevin ACP gate is the
+    final decider (small models never make security decisions, so lane
+    A is evidence, never a decider). ``a_critical`` > 0 appends
+    ``findings=blocking`` — lane A's findings-as-data channel for the
+    merge gate.
     """
     desc_core = f"devin={devin} a={a} b={b}"
     suffix = f" findings=blocking(critical={a_critical})" if a_critical > 0 else ""
@@ -88,26 +103,30 @@ def compute_verdict(devin: str, a: str, b: str,
         return ("success",
                 f"devin=EXECUTED — primary review ran; fallback not needed{suffix}",
                 "EXECUTED")
-    ran = [name for name, outcome in (("a", a), ("b", b)) if outcome in _VERDICT_OK]
-    if len(ran) == 2:
-        return "success", f"covered — {desc_core}{suffix}", "COVERED"
+    if b == REJECTED:
+        # The judge is the final decider: its reject overrides lane A
+        # entirely, whatever the advisory lanes found.
+        return ("failure",
+                f"judge rejected the PR — {desc_core}{suffix}",
+                "FAILURE")
     if b == EXECUTED:
-        # Reviewer B is the direct-Ollama lane: it always posts a real
-        # review comment plus a verdict, so its evidence alone covers the
-        # PR. Reviewer A (third-party action) flakes on event-payload
-        # races — its state is still recorded honestly in the
-        # description, but the gate must not stay hostage to infra
-        # flakiness outside the review itself.
+        # Judge approved. The description stays honest about lane A:
+        # it executed and reported findings, or it did not.
+        if a == EXECUTED:
+            return ("success",
+                    (f"covered — judge approved; lane A also executed "
+                     f"— {desc_core}{suffix}"),
+                    "COVERED")
         return ("success",
-                (f"covered b-only — {desc_core} — "
+                (f"covered judge-only — {desc_core} — "
                  f"reviewer A did not execute{suffix}"),
                 "COVERED")
-    if ran:
-        return ("action_required",
-                (f"DEGRADED {ran[0]}-only — {desc_core} — "
-                 f"partial coverage, requires human review{suffix}"),
-                "DEGRADED")
-    return "failure", f"no review executed — {desc_core}", "FAILURE"
+    # No judge verdict (UNAVAILABLE / FAILED / SKIPPED / unexpected):
+    # lane A alone cannot clear a PR — a human decides.
+    return ("action_required",
+            (f"ACTION_REQUIRED — no judge verdict — {desc_core} — "
+             f"lane A alone cannot clear a PR{suffix}"),
+            "ACTION_REQUIRED")
 
 
 def _mirror_state(conclusion: str) -> str:
@@ -145,7 +164,7 @@ def post_check(repo: str, sha: str, conclusion: str, summary: str,
 def post_status(repo: str, sha: str, conclusion: str, description: str,
                 target_url: str | None) -> bool:
     """Compatibility mirror: keeps the gate's status-event trigger alive
-    for success, and never shows green for degraded coverage."""
+    for success, and never shows green without a judge verdict."""
     cmd = [f"repos/{repo}/statuses/{sha}",
            "-f", f"state={_mirror_state(conclusion)}",
            "-f", f"context={COVERAGE_CONTEXT}",
@@ -188,7 +207,7 @@ def main(argv: list[str] | None = None) -> int:
     if not post_status(args.repo, args.sha, conclusion, description,
                        args.target_url):
         # the check run (source of truth) is posted; the mirror failing
-        # only loses the status-event retrigger — degraded/none stays
+        # only loses the status-event retrigger — action_required stays
         # held either way, so warn instead of hard-failing the job.
         print("::warning::Review Coverage status mirror failed — "
               "check run posted, status-event retrigger lost",
