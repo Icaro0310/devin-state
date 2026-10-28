@@ -252,20 +252,28 @@ jobs:
                    "Write a short pull request review for this diff. "
                    "2-4 sentences on what it does and any risk.\n\n"
                    "```diff\n" + diff + "\n```"}]
+          import time
           last = ""
           markdown = ""
-          for attempt in (1, 2, 3):
+          # Ollama 500s under concurrent lanes are transient (RAM pressure,
+          # single slot). Retry with backoff against a deadline so attempts
+          # land after the queue drains instead of all hitting congestion.
+          deadline = time.time() + 540
+          while time.time() < deadline:
               try:
                   markdown = call(rmsg, 400).strip()
-                  assert len(markdown) > 20, "empty review"
-                  break
+                  if len(markdown) > 20:
+                      break
+                  last = "empty review"
               except Exception as e:
                   last = str(e) or repr(e)
-          if not markdown:
-              print(f"::error::model produced no review after 3 attempts: {last}")
+              time.sleep(25)
+          if not markdown or len(markdown) <= 20:
+              print(f"::error::model produced no review within deadline: {last}")
               sys.exit(1)
           verdict = "undetermined"
-          for attempt in (1, 2, 3):
+          deadline2 = time.time() + 240
+          while time.time() < deadline2:
               try:
                   cmsg = [{"role": "user", "content":
                            "A reviewer wrote about this pull request:\n\n" + markdown[:1200] +
@@ -277,6 +285,7 @@ jobs:
                   break
               except Exception as e:
                   last = str(e) or repr(e)
+                  time.sleep(20)
           if verdict == "undetermined":
               print("::warning::verdict classification failed; publishing undetermined")
           subprocess.run(["gh", "pr", "comment", os.environ["PR_NUM"], "--body", "**Reviewer B (local model `" + os.environ["MODEL"] + "`) — verdict: `" + verdict + "`**\n\n" + markdown], check=True)
