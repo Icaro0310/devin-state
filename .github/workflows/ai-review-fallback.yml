@@ -32,7 +32,7 @@ on:
 concurrency:
   # Repo-wide: the Ollama reviewer backend is a single-slot service, so
   # fallback runs for different PRs must queue rather than contend.
-  group: ai-review-fallback
+  group: ai-review-${{ github.repository }}
   cancel-in-progress: false
 
 permissions:
