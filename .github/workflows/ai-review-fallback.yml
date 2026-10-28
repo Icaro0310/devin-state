@@ -1,25 +1,41 @@
 name: ai-review-fallback
 
 # When Devin Review does not actually run on a PR head (trial exhausted,
-# failed, or signal unverifiable), two local-model reviewers produce real
-# review evidence over Tailscale, and a "Review Coverage" commit status
-# records what executed. Devin Review stays first — EXECUTED means neither
-# fallback runs.
+# failed, or signal unverifiable), the fallback lanes produce review
+# evidence and a "Review Coverage" check records the decider's verdict.
+# Devin Review stays first — EXECUTED means no fallback runs.
+#
+#   * review-a    — LLM deep-review lane over Tailscale/Ollama: the deep
+#                   inspector. Small models never make security decisions,
+#                   so its findings are advisory evidence, not a verdict.
+#   * static-scan — deterministic advisory scanners on the runner
+#                   (gitleaks + semgrep + ruff over the PR diff applied as
+#                   DATA onto the trusted base ref): evidence only, the
+#                   job always succeeds.
+#   * judge       — the authoritative decider. Waits for the
+#                   devin-judge/review commit status posted by the
+#                   laptop-side watcher (poordjaevin ACP gate on the
+#                   diff): approve -> EXECUTED, reject -> REJECTED,
+#                   no status -> UNAVAILABLE.
 #
 #   PR -> classify (commit status, not check-run)
 #        ├ EXECUTED            -> coverage: success (devin), fallbacks skip
-#        ├ SKIPPED_CREDITS     -> review-a + review-b -> coverage
-#        ├ FAILED_BEFORE_REVIEW-> review-a + review-b -> coverage
-#        └ UNVERIFIED          -> review-a + review-b -> coverage
+#        ├ SKIPPED_CREDITS     -> review-a + static-scan + judge -> coverage
+#        ├ FAILED_BEFORE_REVIEW-> review-a + static-scan + judge -> coverage
+#        └ UNVERIFIED          -> review-a + static-scan + judge -> coverage
 #
 # pull_request_target on purpose: the workflow file and every checked-out
 # byte come from the base branch, so a PR cannot alter its own review
 # pipeline, and the token can post comments/statuses on fork PRs too.
-# Neither reviewer checks out or runs PR-controlled code:
+# No lane checks out or runs PR-controlled code:
 #   - review-a reads the diff through the GitHub API only.
-#   - review-b checks out the BASE ref (trusted), runs with tool-mode off
-#     and no evidence-providers-file, so nothing in its workspace or tool
-#     surface is controlled by the PR.
+#   - static-scan checks out the BASE ref (trusted) and applies the diff
+#     as DATA — the scanners parse text, nothing executes.
+#   - judge never checks out at all: the untrusted diff stays data for
+#     the watcher-side gate.
+# The judge is the final decider: REJECTED fails coverage and overrides
+# lane A entirely; a missing verdict holds coverage at action_required —
+# lane A alone can never clear a PR.
 #
 # Boundaries kept: Ollama is tailnet-only (tailscale serve on the VM);
 # the Tailscale identity is an ephemeral tagged node; coverage never spoofs
@@ -161,135 +177,295 @@ jobs:
           echo "result=$r" >> "$GITHUB_OUTPUT"
           echo "reviewer A: $r (findings=${{ steps.rev.outputs.findings_count || '?' }}, critical=${{ steps.rev.outputs.critical_count || '?' }})"
 
-  review-b:
-    # Serialized after A: the tailnet Ollama serves one request at a time
-    # (-np 1), so parallel A+B meant one held the model while the other
-    # queued into its request timeout (PR #100: b timed out at 9min).
-    # always() so B reports its own outcome even when A failed.
-    needs: [classify, review-a]
+  static-scan:
+    # Advisory evidence lane — gitleaks + semgrep + ruff, all on the
+    # runner. No model, no VM, no Tailscale, no secrets: the PR diff is
+    # applied onto the trusted base ref as DATA and the scanners parse
+    # text — nothing PR-controlled executes. Its findings inform the
+    # judge and human reviewers; the lane itself never gates coverage,
+    # so every step is continue-on-error and the job always succeeds.
+    # result is EXECUTED|FAILED, observability only.
+    needs: classify
     if: always() && needs.classify.outputs.state != 'EXECUTED'
     runs-on: ubuntu-latest
-    # The action retries an unreachable endpoint internally and has no
-    # bound of its own — PR #238 hung 55min issuing periodic probes with
-    # zero completions. 20min covers the full 300s×3 retry budget plus
-    # setup; beyond that it is unavailability, not slowness.
-    timeout-minutes: 40
+    # Two pinned pip installs + three scanners finish in ~2-4min;
+    # 15 is generous headroom for big diffs.
+    timeout-minutes: 15
     permissions:
       contents: read
       pull-requests: write
-      id-token: write
     outputs:
       result: ${{ steps.mark.outputs.result }}
     steps:
-      - name: Preflight — creds and reachability
-        id: pre
-        env:
-          TS_KEY: ${{ secrets.TS_AUTHKEY }}
-        run: |
-          if [ -z "$TS_KEY" ] || [ -z "$OLLAMA_URL" ]; then
-            echo "::warning::Tailscale key or OLLAMA_TAILNET_URL absent — reviewer B unavailable"
-            echo "ok=false" >> "$GITHUB_OUTPUT"; exit 0
-          fi
-          echo "ok=true" >> "$GITHUB_OUTPUT"
-
-      - name: Tailscale (ephemeral tag)
-        id: ts
-        if: steps.pre.outputs.ok == 'true'
-        uses: tailscale/github-action@99a8333667fff04fdd6cffb46dfd409f8329a7bf
-        with:
-          authkey: ${{ secrets.TS_AUTHKEY }}
-          tags: tag:gh-ollama-review
-        continue-on-error: true
-
-      # Base ref only — the PR head is never materialized in this job's
-      # workspace. tool-mode off + no evidence-providers-file means the
-      # action executes nothing but argv-only reads of trusted base code;
-      # PR content reaches the model solely via the redacted diff corpus.
+      # Base ref only — the PR head is never materialized as executable
+      # code: checkout pins base.sha and the diff lands as text the
+      # scanners read.
       - name: Checkout trusted base ref
-        if: steps.pre.outputs.ok == 'true' && steps.ts.outcome == 'success'
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
+          ref: ${{ github.event.pull_request.base.sha }}
           fetch-depth: 0
+        continue-on-error: true
 
-      - name: Endpoint probe
-        id: probe
-        if: steps.pre.outputs.ok == 'true' && steps.ts.outcome == 'success'
+      - name: Install pinned toolchain
+        id: pre
+        continue-on-error: true
         run: |
-          if curl -fsS --max-time 15 "$OLLAMA_URL/api/tags" -o /dev/null; then
-            echo "ok=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "::warning::$OLLAMA_URL unreachable over tailnet"
-            echo "ok=false" >> "$GITHUB_OUTPUT"
-          fi
+          set -euo pipefail
+          # gitleaks — pinned release tarball, sha256-verified.
+          GL_VER=8.30.1
+          GL_SHA256=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+          curl -fsSL -o /tmp/gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GL_VER}/gitleaks_${GL_VER}_linux_x64.tar.gz"
+          echo "${GL_SHA256}  /tmp/gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          # semgrep + ruff — pinned PyPI releases via pipx.
+          pipx install semgrep==1.182.1
+          pipx install ruff==0.17.3
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.local/bin:$PATH"
+          /tmp/gitleaks version && semgrep --version && ruff --version
 
-      - name: Reviewer B — local model (direct Ollama call)
+      - name: Static scan (gitleaks + semgrep + ruff)
         id: rev
-        if: steps.probe.outputs.ok == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          OLLAMA_CHAT: ${{ vars.OLLAMA_TAILNET_URL }}/v1/chat/completions
-          MODEL: ${{ vars.OLLAMA_MODEL }}
           PR_NUM: ${{ github.event.pull_request.number }}
         run: |
           set -u
-          gh api "repos/${{ github.repository }}/pulls/$PR_NUM" -H "Accept: application/vnd.github.diff" > /tmp/pr.diff
+          gh api "repos/${{ github.repository }}/pulls/$PR_NUM" \
+            -H "Accept: application/vnd.github.diff" > /tmp/pr.diff
           [ -s /tmp/pr.diff ] || { echo "::error::empty diff"; exit 1; }
+          # The diff lands on the trusted base as DATA for the scanners
+          # to read — PR code is never executed. patch+fuzz covers the
+          # case where the diff's merge-base drifted from base.sha.
+          if git apply --check /tmp/pr.diff 2>/dev/null; then
+            git apply /tmp/pr.diff
+          elif patch -p1 --dry-run --fuzz=3 -f < /tmp/pr.diff >/dev/null 2>&1; then
+            patch -p1 --fuzz=3 -f --no-backup-if-mismatch < /tmp/pr.diff
+          else
+            echo "::error::PR diff does not apply onto the base ref"; exit 1
+          fi
+          # Scope: files the diff touches, restricted to paths that
+          # exist post-apply (deletions drop out).
+          grep -E '^\+\+\+ b/' /tmp/pr.diff \
+            | sed 's|^+++ b/||; s/^"//; s/"$//' | sort -u > /tmp/changed-all.txt
+          : > /tmp/changed-files.txt
+          while IFS= read -r f; do
+            [ -f "$f" ] && printf '%s\n' "$f" >> /tmp/changed-files.txt
+          done < /tmp/changed-all.txt
+          echo "changed files: $(wc -l < /tmp/changed-files.txt)"
+          # Compact embedded ruleset — deterministic, no semgrep.dev
+          # registry dependency.
+          cat > /tmp/static-scan-rules.yml <<'RULES'
+          rules:
+            - id: py-eval-exec
+              languages: [python]
+              severity: ERROR
+              message: eval()/exec() executes dynamic content — code injection risk.
+              patterns:
+                - pattern-either:
+                    - pattern: eval(...)
+                    - pattern: exec(...)
+            - id: py-shell-true
+              languages: [python]
+              severity: ERROR
+              message: shell command execution (shell=True / os.system / os.popen) — command injection risk.
+              patterns:
+                - pattern-either:
+                    - pattern: os.system(...)
+                    - pattern: os.popen(...)
+                    - pattern: subprocess.getoutput(...)
+                    - pattern: subprocess.run(..., shell=True, ...)
+                    - pattern: subprocess.call(..., shell=True, ...)
+                    - pattern: subprocess.Popen(..., shell=True, ...)
+                    - pattern: subprocess.check_output(..., shell=True, ...)
+                    - pattern: subprocess.check_call(..., shell=True, ...)
+            - id: py-yaml-load-unsafe
+              languages: [python]
+              severity: ERROR
+              message: yaml.load() without a SafeLoader — unsafe deserialization.
+              patterns:
+                - pattern: yaml.load(...)
+                - pattern-not: yaml.load(..., Loader=yaml.SafeLoader, ...)
+                - pattern-not: yaml.load(..., Loader=yaml.CSafeLoader, ...)
+                - pattern-not: yaml.load(..., yaml.SafeLoader, ...)
+                - pattern-not: yaml.load(..., yaml.CSafeLoader, ...)
+            - id: py-pickle-unsafe
+              languages: [python]
+              severity: ERROR
+              message: pickle/marshal deserialization — unsafe on untrusted data.
+              patterns:
+                - pattern-either:
+                    - pattern: pickle.loads(...)
+                    - pattern: pickle.load(...)
+                    - pattern: cPickle.loads(...)
+                    - pattern: cPickle.load(...)
+                    - pattern: marshal.loads(...)
+                    - pattern: marshal.load(...)
+            - id: py-sql-string-built
+              languages: [python]
+              severity: ERROR
+              message: SQL query built by string formatting/concat — SQL injection risk.
+              patterns:
+                - pattern-either:
+                    - pattern: $CUR.execute("..." + ...)
+                    - pattern: $CUR.execute("...".format(...))
+                    - pattern: $CUR.execute("..." % (...))
+                    - pattern: $CUR.execute(f"...")
+            - id: py-requests-verify-false
+              languages: [python]
+              severity: WARNING
+              message: TLS verification disabled (verify=False).
+              patterns:
+                - pattern-either:
+                    - pattern: requests.get(..., verify=False, ...)
+                    - pattern: requests.post(..., verify=False, ...)
+                    - pattern: requests.put(..., verify=False, ...)
+                    - pattern: requests.delete(..., verify=False, ...)
+                    - pattern: requests.patch(..., verify=False, ...)
+                    - pattern: requests.head(..., verify=False, ...)
+                    - pattern: requests.request(..., verify=False, ...)
+                    - pattern: $S.request(..., verify=False, ...)
+            - id: js-eval
+              languages: [javascript, typescript]
+              severity: ERROR
+              message: eval()/new Function() — code injection risk.
+              patterns:
+                - pattern-either:
+                    - pattern: eval(...)
+                    - pattern: new Function(...)
+            - id: js-child-process-exec
+              languages: [javascript, typescript]
+              severity: WARNING
+              message: child_process.exec — shell command execution; prefer execFile/spawn with argv arrays.
+              patterns:
+                - pattern-either:
+                    - pattern: require("child_process").exec(...)
+                    - patterns:
+                        - pattern-inside: |
+                            $CP = require("child_process")
+                            ...
+                        - pattern: $CP.exec(...)
+            - id: generic-hardcoded-secret
+              languages: [generic]
+              severity: WARNING
+              message: possible hardcoded secret — credential-looking literal assigned in code.
+              pattern-regex: (?i)(api[_-]?key|secret|access[_-]?token|auth[_-]?token|password|passwd|private[_-]?key)\s*[:=]\s*["'][A-Za-z0-9+/_=.\-]{16,}["']
+          RULES
+          # Staging dir holding ONLY the changed files — pre-existing
+          # base secrets/lint can't flood the report, and one dir target
+          # per scanner avoids argv-length limits on huge PRs.
+          mkdir -p /tmp/bscan
+          while IFS= read -r f; do
+            mkdir -p "/tmp/bscan/$(dirname "$f")" && cp -- "$f" "/tmp/bscan/$f"
+          done < /tmp/changed-files.txt
+          # gitleaks — --redact keeps matched secrets out of the JSON
+          # and comment; --exit-code 0 keeps findings non-fatal.
+          /tmp/gitleaks dir /tmp/bscan --no-banner --redact \
+            --report-format json --report-path /tmp/gitleaks.json \
+            --exit-code 0 >/tmp/gitleaks.out 2>/tmp/gitleaks.err \
+            || echo "gitleaks rc=$?"
+          # semgrep — embedded rules only; findings never fail the step.
+          if [ -s /tmp/changed-files.txt ]; then
+            semgrep scan --config /tmp/static-scan-rules.yml --json \
+              -o /tmp/semgrep.json --metrics off /tmp/bscan \
+              >/tmp/semgrep.out 2>/tmp/semgrep.err || echo "semgrep rc=$?"
+          fi
+          # ruff — only when the diff touches Python. E9=syntax,
+          # F=pyflakes, S=flake8-bandit security rules. ruff only
+          # checks .py, so the staged dir is already the right scope.
+          grep -i '\.py$' /tmp/changed-files.txt > /tmp/changed-py.txt || true
+          if [ -s /tmp/changed-py.txt ]; then
+            ruff check --no-cache --select E9,F,S --output-format json \
+              --output-file /tmp/ruff.json /tmp/bscan \
+              >/tmp/ruff.out 2>/tmp/ruff.err || true
+          fi
           python3 <<'PYE'
-          import json, os, subprocess, sys, urllib.request
-          import re
-          diff = open("/tmp/pr.diff").read()[:16000]
-          def call(msgs, max_tok, sock):
-              b = {"model": os.environ["MODEL"], "max_tokens": max_tok,
-                   "temperature": 0.1, "messages": msgs}
-              req = urllib.request.Request(os.environ["OLLAMA_CHAT"], data=json.dumps(b).encode(), headers={"Content-Type": "application/json"})
-              return json.load(urllib.request.urlopen(req, timeout=sock))["choices"][0]["message"]["content"]
-          # Call 1 — free-form review. Prose is the model's strength; it
-          # produced coherent reviews on every prior run. Call 2 classifies
-          # the model's OWN review as a/b — a tiny context where the
-          # completion bias is strong. If classification fails, the comment
-          # is still published, honestly labeled undetermined.
-          rmsg = [{"role": "user", "content":
-                   "Write a short pull request review for this diff. "
-                   "2-4 sentences on what it does and any risk.\n\n"
-                   "```diff\n" + diff + "\n```"}]
-          import time
-          last = ""
-          markdown = ""
-          # Ollama 500s under concurrent lanes are transient (RAM pressure,
-          # single slot). Retry with backoff against a deadline so attempts
-          # land after the queue drains instead of all hitting congestion.
-          deadline = time.time() + 1140
-          while time.time() < deadline:
+          import json, os, subprocess, sys
+          # Findings are the review: a secret found is a SUCCESSFUL
+          # detection, not a lane failure. EXECUTED means the scanners
+          # ran; FAILED only when none produced a report at all.
+          MAXN = 10
+          def load(p):
               try:
-                  markdown = call(rmsg, 400, 1100).strip()
-                  if len(markdown) > 20:
-                      break
-                  last = "empty review"
-              except Exception as e:
-                  last = str(e) or repr(e)
-              time.sleep(25)
-          if not markdown or len(markdown) <= 20:
-              print(f"::error::model produced no review within deadline: {last}")
-              sys.exit(1)
-          verdict = "undetermined"
-          deadline2 = time.time() + 660
-          while time.time() < deadline2:
-              try:
-                  cmsg = [{"role": "user", "content":
-                           "A reviewer wrote about this pull request:\n\n" + markdown[:1200] +
-                           "\n\nDid they approve it? Answer with one letter:\n(a) approve\n(b) request changes\nAnswer: ("}]
-                  vtext = call(cmsg, 8, 620)
-                  m = re.search(r"[\(]?\s*(a|b)\b", vtext, re.I)
-                  assert m, "no letter in: " + vtext[:60]
-                  verdict = "approve" if m.group(1).lower() == "a" else "request_changes"
-                  break
-              except Exception as e:
-                  last = str(e) or repr(e)
-                  time.sleep(20)
-          if verdict == "undetermined":
-              print("::warning::verdict classification failed; publishing undetermined")
-          subprocess.run(["gh", "pr", "comment", os.environ["PR_NUM"], "--body", "**Reviewer B (local model `" + os.environ["MODEL"] + "`) — verdict: `" + verdict + "`**\n\n" + markdown], check=True)
-          print(f"reviewer B verdict: {verdict}")
+                  with open(p, encoding="utf-8") as fh:
+                      return json.load(fh)
+              except Exception:
+                  return None
+          def rel(p):
+              # Report repo-relative paths: gitleaks reports under the
+              # staging dir, ruff resolves to absolute workspace paths.
+              for base in ("/tmp/bscan/", os.getcwd() + "/"):
+                  if p.startswith(base):
+                      return p[len(base):]
+              return p
+          changed = [l.rstrip("\n") for l in open("/tmp/changed-files.txt")]
+          have_py = (os.path.exists("/tmp/changed-py.txt")
+                     and os.path.getsize("/tmp/changed-py.txt") > 0)
+          sections, ran = [], 0
+          gl = load("/tmp/gitleaks.json")
+          if isinstance(gl, list):
+              ran += 1
+              lines = ["**gitleaks** — %d finding(s)" % len(gl)]
+              for f in gl[:MAXN]:
+                  # Secret/Match fields are never printed (report is
+                  # --redact'ed anyway): file/line/rule only.
+                  lines.append("- `%s:%s` `%s` — %s" % (
+                      rel(f.get("File", "?")), f.get("StartLine", "?"),
+                      f.get("RuleID", "?"),
+                      (f.get("Description") or "secret detected")[:140]))
+              if len(gl) > MAXN:
+                  lines.append("- … +%d more (see workflow log)" % (len(gl) - MAXN))
+              sections.append("\n".join(lines))
+          else:
+              sections.append("**gitleaks** — tool failed to produce a report (see workflow log)")
+          sg = load("/tmp/semgrep.json")
+          if isinstance(sg, dict):
+              ran += 1
+              res = sg.get("results") or []
+              lines = ["**semgrep** — %d finding(s)" % len(res)]
+              for r in res[:MAXN]:
+                  ex = r.get("extra") or {}
+                  lines.append("- `%s:%s` `%s` (%s) — %s" % (
+                      rel(r.get("path", "?")), (r.get("start") or {}).get("line", "?"),
+                      (r.get("check_id") or "?").split(".")[-1],
+                      ex.get("severity", "?"),
+                      (ex.get("message") or "").strip()[:140]))
+              if len(res) > MAXN:
+                  lines.append("- … +%d more (see workflow log)" % (len(res) - MAXN))
+              sections.append("\n".join(lines))
+          else:
+              sections.append("**semgrep** — tool failed to produce a report (see workflow log)")
+          rf = load("/tmp/ruff.json")
+          if isinstance(rf, list):
+              ran += 1
+              lines = ["**ruff** (E9,F,S) — %d finding(s)" % len(rf)]
+              for r in rf[:MAXN]:
+                  lines.append("- `%s:%s` `%s` — %s" % (
+                      rel(r.get("filename", "?")),
+                      (r.get("location") or {}).get("row", "?"),
+                      r.get("code") or "lint", (r.get("message") or "")[:140]))
+              if len(rf) > MAXN:
+                  lines.append("- … +%d more (see workflow log)" % (len(rf) - MAXN))
+              sections.append("\n".join(lines))
+          elif have_py:
+              sections.append("**ruff** — tool failed to produce a report (see workflow log)")
+          else:
+              sections.append("**ruff** — skipped (no Python files changed)")
+          verdict = "EXECUTED" if ran else "FAILED"
+          body = ("**Static scan (advisory) — result: `%s`**\n\n" % verdict
+                  + "Deterministic scan of %d changed file(s) — "
+                    "gitleaks 8.30.1 · semgrep 1.182.1 · ruff 0.17.3. "
+                    "Findings are advisory evidence for the judge, "
+                    "not a lane verdict.\n\n" % len(changed)
+                  + "\n\n".join(sections))
+          with open("/tmp/static-scan.md", "w", encoding="utf-8") as fh:
+              fh.write(body)
+          subprocess.run(["gh", "pr", "comment", os.environ["PR_NUM"],
+                          "--body-file", "/tmp/static-scan.md"], check=True)
+          print("static-scan result:", verdict)
+          sys.exit(0 if ran else 1)
           PYE
         continue-on-error: true
 
@@ -297,20 +473,114 @@ jobs:
         id: mark
         if: always()
         run: |
+          # Advisory lane: EXECUTED means the scanners ran and reported;
+          # FAILED covers every other outcome. The job always succeeds —
+          # it never gates coverage, that is the judge's role.
           if [ "${{ steps.rev.outcome }}" = "success" ]; then
             r=EXECUTED
-          elif [ "${{ steps.pre.outputs.ok }}" != "true" ] || \
-               [ "${{ steps.probe.outputs.ok }}" = "false" ] || \
-               [ "${{ steps.ts.outcome }}" = "failure" ]; then
-            r=UNAVAILABLE
           else
             r=FAILED
           fi
           echo "result=$r" >> "$GITHUB_OUTPUT"
-          echo "reviewer B: $r"
+          echo "static-scan: $r"
+
+  judge:
+    # The authoritative decider. A laptop-side watcher (judge-watch,
+    # cron every few minutes) polls open PRs for head SHAs missing the
+    # devin-judge/review commit status, runs the poordjaevin gate
+    # locally (ACP backend = high Devin model) on the diff, and posts:
+    #   approve -> status success  -> this job reports EXECUTED
+    #   reject  -> status failure  -> this job reports REJECTED
+    #   gate error / watcher down  -> no status -> UNAVAILABLE
+    # This job never checks anything out: the untrusted diff stays data
+    # for the watcher-side gate. It always completes — polling errors
+    # degrade to UNAVAILABLE, never a hard job failure.
+    needs: classify
+    if: always() && needs.classify.outputs.state != 'EXECUTED'
+    runs-on: ubuntu-latest
+    # Must exceed JUDGE_WAIT_MINUTES — raise both together.
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      statuses: read        # read the devin-judge/review commit status
+      pull-requests: write  # verdict comment
+      issues: write         # judge-requested label lives on the issues API
+    outputs:
+      result: ${{ steps.poll.outputs.result }}
+    env:
+      JUDGE_WAIT_MINUTES: "15"
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      PR_NUM: ${{ github.event.pull_request.number }}
+    steps:
+      - name: Nudge the watcher — judge-requested label
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Best-effort nudge only. The watcher's real trigger is the
+          # missing devin-judge/review status; the label documents that
+          # this run is waiting on a verdict.
+          [ -n "$PR_NUM" ] || exit 0
+          gh api "repos/${{ github.repository }}/issues/$PR_NUM/labels" \
+            -f "labels[]=judge-requested" >/dev/null 2>&1 || true
+
+      - name: Poll the devin-judge/review commit status
+        id: poll
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -u
+          if [ -z "$HEAD_SHA" ]; then
+            echo "::warning::no PR head SHA in this event — judge cannot run"
+            echo "result=UNAVAILABLE" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          deadline=$(( $(date +%s) + ${JUDGE_WAIT_MINUTES:-15} * 60 ))
+          state=""
+          while :; do
+            # Newest status with our context wins; gh errors keep the
+            # loop alive and degrade to UNAVAILABLE at the deadline.
+            state=$(gh api "repos/${{ github.repository }}/statuses/$HEAD_SHA" \
+              --jq '[.[]|select(.context=="devin-judge/review")][0].state' \
+              2>/dev/null || true)
+            [ "$state" = "null" ] && state=""
+            echo "poll: devin-judge/review=${state:-<none>} ($(date -u +%H:%M:%S))"
+            case "$state" in success|failure) break ;; esac
+            [ "$(date +%s)" -ge "$deadline" ] && break
+            sleep 30
+          done
+          case "$state" in
+            success) r=EXECUTED ;;
+            failure) r=REJECTED ;;
+            *)       r=UNAVAILABLE ;;
+          esac
+          echo "result=$r" >> "$GITHUB_OUTPUT"
+          echo "judge: $r (status=${state:-none})"
+
+      - name: Comment the verdict on the PR
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RESULT: ${{ steps.poll.outputs.result }}
+        run: |
+          [ -n "$PR_NUM" ] || exit 0
+          case "$RESULT" in
+            EXECUTED)
+              verdict=APPROVED
+              detail="The poordjaevin ACP gate approved this head (\`devin-judge/review\` = success)." ;;
+            REJECTED)
+              verdict=REJECTED
+              detail="The poordjaevin ACP gate rejected this head (\`devin-judge/review\` = failure). Coverage fails; see the judge's own comment for rationale." ;;
+            *)
+              verdict=UNAVAILABLE
+              detail="No \`devin-judge/review\` status within ${JUDGE_WAIT_MINUTES:-15}m: the laptop-side watcher is offline or the gate errored. Coverage holds at action_required — a human must decide." ;;
+          esac
+          body=$(printf '**devin-judge (Lane B) — verdict: `%s`**\n\n%s' \
+            "$verdict" "$detail")
+          gh pr comment "$PR_NUM" --body "$body" \
+            || echo "::warning::judge verdict comment failed"
 
   coverage:
-    needs: [classify, review-a, review-b]
+    needs: [classify, review-a, judge]
     if: always()
     runs-on: ubuntu-latest
     permissions:
@@ -325,7 +595,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DEVIN: ${{ needs.classify.outputs.state }}
           A: ${{ needs.review-a.outputs.result }}
-          B: ${{ needs.review-b.outputs.result }}
+          B: ${{ needs.judge.outputs.result }}
         run: >-
           python3 scripts/publish-review-coverage.py
           --repo "${{ github.repository }}"

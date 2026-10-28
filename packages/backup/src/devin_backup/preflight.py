@@ -57,7 +57,7 @@ from devin_backup.snapshot import (
 )
 from devin_backup.stores import Store, discover_stores
 
-PASS = "pass"
+PASSED = "pass"
 FAIL = "fail"
 UNKNOWN = "unknown"
 
@@ -70,7 +70,7 @@ def _check_data_root(data_dir: Path) -> dict:
     name = "data-root"
     try:
         if data_dir.is_dir():
-            return _result(name, PASS, f"exists: {data_dir}")
+            return _result(name, PASSED, f"exists: {data_dir}")
         if data_dir.exists():
             return _result(name, FAIL, f"{data_dir} is not a directory")
         return _result(name, FAIL, f"{data_dir} does not exist")
@@ -85,7 +85,7 @@ def _check_config_root(config_dir: Path, explicit: bool) -> dict:
     except OSError as exc:
         return _result(name, UNKNOWN, f"cannot stat {config_dir}: {exc}")
     if ok:
-        return _result(name, PASS, f"exists: {config_dir}")
+        return _result(name, PASSED, f"exists: {config_dir}")
     if explicit:
         return _result(
             name, FAIL,
@@ -104,13 +104,13 @@ def _kept_stores(
     config_dir: Path | None,
     out_dir: Path,
     exclude: tuple[str, ...],
-    exclude_secrets: bool,
+    skip_sensitive: bool,
 ) -> list[Store]:
     """Stores ``create`` would copy, exclusions applied. May raise."""
     stores = discover_stores(data_dir, config_dir=config_dir,
                              exclude=[out_dir])
     patterns = tuple(exclude) + (
-        SENSITIVE_PATTERNS if exclude_secrets else ()
+        SENSITIVE_PATTERNS if skip_sensitive else ()
     )
     return [s for s in stores if not _excluded(s, patterns)]
 
@@ -164,7 +164,7 @@ def _check_dest(out_dir: Path) -> dict:
             if err:
                 return _result(name, FAIL,
                                f"{out_dir} not writable: {err}")
-            return _result(name, PASS, f"writable: {out_dir}")
+            return _result(name, PASSED, f"writable: {out_dir}")
         base = _nearest_existing_dir(out_dir)
         err = _writable_probe(base)
         if err:
@@ -172,7 +172,7 @@ def _check_dest(out_dir: Path) -> dict:
                 name, FAIL,
                 f"cannot create {out_dir}: {base} not writable: {err}")
         return _result(
-            name, PASS,
+            name, PASSED,
             f"{out_dir} will be created under writable {base}")
     except OSError as exc:
         return _result(name, UNKNOWN, f"cannot evaluate {out_dir}: {exc}")
@@ -189,7 +189,7 @@ def _check_free_space(out_dir: Path, needed: int | None) -> dict:
     except OSError as exc:
         return _result(name, UNKNOWN, f"cannot statfs {out_dir}: {exc}")
     if free >= needed:
-        return _result(name, PASS,
+        return _result(name, PASSED,
                        f"{free} B free >= {needed} B needed "
                        "(sum of store sizes)")
     return _result(name, FAIL,
@@ -216,7 +216,7 @@ def _check_sqlite() -> dict:
             "sqlite3 lacks Connection.backup — SQLite stores would "
             "fall back to unsafe file-copy")
     return _result(
-        name, PASS,
+        name, PASSED,
         f"sqlite3 {sqlite3.sqlite_version} — online backup API available")
 
 
@@ -233,13 +233,13 @@ def _check_inflight(out_dir: Path) -> dict:
     name = "no-inflight-snapshot"
     try:
         if not out_dir.is_dir():
-            return _result(name, PASS, "no backups dir yet")
+            return _result(name, PASSED, "no backups dir yet")
         stale = sorted(d.name for d in _snapshot_dirs(
             out_dir, with_manifest=False))
     except OSError as exc:
         return _result(name, UNKNOWN, f"cannot scan {out_dir}: {exc}")
     if not stale:
-        return _result(name, PASS, "none found")
+        return _result(name, PASSED, "none found")
     names = ", ".join(stale[:3]) + ("…" if len(stale) > 3 else "")
     return _result(
         name, FAIL,
@@ -251,13 +251,13 @@ def _check_latest(out_dir: Path) -> dict:
     name = "latest-snapshot"
     try:
         if not out_dir.is_dir():
-            return _result(name, PASS,
+            return _result(name, PASSED,
                            "no previous snapshot — first backup")
         snaps = sorted(_snapshot_dirs(out_dir, with_manifest=True))
     except OSError as exc:
         return _result(name, UNKNOWN, f"cannot scan {out_dir}: {exc}")
     if not snaps:
-        return _result(name, PASS, "no previous snapshot — first backup")
+        return _result(name, PASSED, "no previous snapshot — first backup")
     newest = snaps[-1]
     try:
         load_manifest(newest)
@@ -265,7 +265,7 @@ def _check_latest(out_dir: Path) -> dict:
         return _result(
             name, FAIL,
             f"{newest.name}: {exc} — last backup may be corrupt")
-    return _result(name, PASS, f"{newest.name} manifest readable")
+    return _result(name, PASSED, f"{newest.name} manifest readable")
 
 
 def _check_remote(dest: str) -> dict:
@@ -273,7 +273,7 @@ def _check_remote(dest: str) -> dict:
         name = "tool-rsync"
         rsync = shutil.which("rsync")
         if rsync:
-            return _result(name, PASS, f"{rsync} — needed for ssh target")
+            return _result(name, PASSED, f"{rsync} — needed for ssh target")
         return _result(
             name, FAIL,
             f"ssh target {dest!r} needs rsync on PATH (posix); "
@@ -289,7 +289,7 @@ def _check_remote(dest: str) -> dict:
         err = _writable_probe(dest_path)
         if err:
             return _result(name, FAIL, f"{dest_path} not writable: {err}")
-        return _result(name, PASS, f"writable: {dest_path}")
+        return _result(name, PASSED, f"writable: {dest_path}")
     except OSError as exc:
         return _result(name, UNKNOWN,
                        f"cannot evaluate {dest_path}: {exc}")
@@ -351,7 +351,7 @@ def run_preflight(
                 "copy would fail mid-snapshot"))
         else:
             checks.append(_result(
-                "stores-found", PASS,
+                "stores-found", PASSED,
                 f"{len(stores)} store(s), {total} B"))
 
     checks.append(_check_dest(out_dir))
@@ -362,7 +362,7 @@ def run_preflight(
     if remote is not None:
         checks.append(_check_remote(remote))
 
-    summary = {PASS: 0, FAIL: 0, UNKNOWN: 0}
+    summary = {PASSED: 0, FAIL: 0, UNKNOWN: 0}
     for c in checks:
         summary[c["status"]] += 1
     return {

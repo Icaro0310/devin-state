@@ -52,7 +52,7 @@ def _cmd_create(args) -> int:
     snap = snapshot.create_snapshot(
         data_dir, out, config_dir=config_dir,
         exclude=tuple(args.exclude or ()),
-        exclude_secrets=args.exclude_secrets,
+        exclude_secrets=bool(args.exclude_secrets),
     )
     manifest = snapshot.load_manifest(snap)
     total = sum(f.get("size", 0) for f in manifest["files"])
@@ -237,7 +237,7 @@ def _cmd_preflight(args) -> int:
         config_dir_explicit=config_explicit,
         remote=args.remote,
         exclude=tuple(args.exclude or ()),
-        exclude_secrets=args.exclude_secrets,
+        exclude_secrets=bool(args.exclude_secrets),
     )
     if args.json:
         print(json.dumps(report, indent=2))
