@@ -39,9 +39,9 @@ PRE_RESTORE_PREFIX = "pre-restore-"
 # Codeium/Windsurf) and user-identifying key names live there.
 SENSITIVE_PATTERNS = (
     "globalStorage/state.vscdb",
-    "credentials.toml",
     "*.pem",
     "*.key",
+    "credentials.toml",
 )
 
 

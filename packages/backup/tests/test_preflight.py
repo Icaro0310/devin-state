@@ -42,7 +42,7 @@ def test_run_preflight_report_shape(data_dir, backups_dir):
     assert report["config_dir"] is None
     assert report["estimated_bytes"] > 0
     statuses = {c["status"] for c in report["checks"]}
-    assert statuses == {preflight.PASS}
+    assert statuses == {preflight.PASSED}
     assert report["summary"]["pass"] == len(report["checks"])
     assert all({"name", "status", "detail"} <= set(c)
                for c in report["checks"])
@@ -54,7 +54,7 @@ def test_preflight_config_root_pass_and_unknown(data_dir, backups_dir,
     cfg.mkdir()
     report = preflight.run_preflight(
         data_dir, backups_dir, config_dir=cfg, config_dir_explicit=True)
-    assert _check(report, "config-root")["status"] == preflight.PASS
+    assert _check(report, "config-root")["status"] == preflight.PASSED
 
     # a missing *default* root degrades to unknown — fail-closed, not pass
     report = preflight.run_preflight(
@@ -170,8 +170,8 @@ def test_preflight_inflight_ignores_complete_snapshots(
         data_dir, backups_dir):
     snapshot.create_snapshot(data_dir, backups_dir)
     report = preflight.run_preflight(data_dir, backups_dir)
-    assert _check(report, "no-inflight-snapshot")["status"] == preflight.PASS
-    assert _check(report, "latest-snapshot")["status"] == preflight.PASS
+    assert _check(report, "no-inflight-snapshot")["status"] == preflight.PASSED
+    assert _check(report, "latest-snapshot")["status"] == preflight.PASSED
 
 
 def test_preflight_latest_corrupt_manifest(data_dir, backups_dir):
@@ -190,7 +190,7 @@ def test_preflight_exclude_filters_estimate(data_dir, backups_dir):
     reduced = preflight.run_preflight(
         data_dir, backups_dir, exclude=("sessions.db", "*.vscdb"))
     assert reduced["estimated_bytes"] < full["estimated_bytes"]
-    assert _check(reduced, "stores-found")["status"] == preflight.PASS
+    assert _check(reduced, "stores-found")["status"] == preflight.PASSED
 
 
 def test_preflight_exclude_everything_fails(data_dir, backups_dir):
@@ -207,7 +207,7 @@ def test_preflight_remote_local_dir(data_dir, backups_dir, tmp_path):
     dest = tmp_path / "nas"
     dest.mkdir()
     report = preflight.run_preflight(data_dir, backups_dir, remote=str(dest))
-    assert _check(report, "remote-dest")["status"] == preflight.PASS
+    assert _check(report, "remote-dest")["status"] == preflight.PASSED
 
     report = preflight.run_preflight(
         data_dir, backups_dir, remote=str(tmp_path / "unmounted"))
@@ -227,7 +227,7 @@ def test_preflight_remote_ssh_needs_rsync(data_dir, backups_dir,
         preflight.shutil, "which", lambda name: "/usr/bin/rsync")
     report = preflight.run_preflight(
         data_dir, backups_dir, remote="me@nas.example:/backups")
-    assert _check(report, "tool-rsync")["status"] == preflight.PASS
+    assert _check(report, "tool-rsync")["status"] == preflight.PASSED
 
 
 # ---------------------------------------------------------------------------
