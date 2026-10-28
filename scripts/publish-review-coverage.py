@@ -99,8 +99,8 @@ def compute_verdict(devin: str, a: str, b: str,
         # description, but the gate must not stay hostage to infra
         # flakiness outside the review itself.
         return ("success",
-                f"covered b-only — {desc_core} — "
-                f"reviewer A did not execute{suffix}",
+                (f"covered b-only — {desc_core} — "
+                 f"reviewer A did not execute{suffix}"),
                 "COVERED")
     if ran:
         return ("action_required",
