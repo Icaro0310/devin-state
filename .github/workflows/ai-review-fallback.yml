@@ -64,7 +64,7 @@ jobs:
       state: ${{ steps.c.outputs.state }}
     steps:
       - name: Checkout trusted base (workflow logic only)
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - id: c
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -201,7 +201,7 @@ jobs:
       # code: checkout pins base.sha and the diff lands as text the
       # scanners read.
       - name: Checkout trusted base ref
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           fetch-depth: 0
@@ -589,7 +589,7 @@ jobs:
       statuses: write
     steps:
       - name: Checkout trusted base (coverage logic only)
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Publish Review Coverage status
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
