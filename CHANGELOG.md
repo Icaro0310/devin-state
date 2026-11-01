@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **CI** — `tailscale/github-action` bumped from 4.3.0 to 4.4.0 in
+  `ai-review-fallback.yml` (dependabot).
 - **devin-redact** — adversarial secret-detection hardening: new
   `connection_uri`/`webhook_url` secret categories, expanded token
   prefixes (GitLab/npm/PyPI/SendGrid/Square/Shopify/…), UTF-16 and
