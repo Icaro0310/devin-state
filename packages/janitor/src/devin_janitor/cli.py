@@ -643,9 +643,15 @@ def cmd_report(args: argparse.Namespace) -> int:
         print(json.dumps(rep, indent=2, ensure_ascii=False))
     else:
         print(render_space_report(rep))
-    # a degraded report (unreadable store/unknown schema) must not look like
-    # success to schedulers — exit 3 keeps it advisory but alarmable
-    return 3 if rep.get("classification_error") else 0
+    # a degraded report (unreadable store/unknown schema/failed tier pass)
+    # must not look like success to schedulers — exit 3 keeps it advisory
+    # but alarmable
+    degraded = (
+        bool(rep.get("classification_error"))
+        or any(s.get("error") for s in rep.get("stores", []))
+        or bool((rep.get("cleanup_tiers") or {}).get("error"))
+    )
+    return 3 if degraded else 0
 
 
 # --------------------------------------------------------------- install --

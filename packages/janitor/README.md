@@ -222,7 +222,9 @@ sessions in `.devin/janitor-keep.json`
 `--config file.json`. `report` reads every store (`sessions.db`,
 `acp-messages/`, `state.vscdb`, `session_locks/`, `.devin/` artifacts) and
 estimates what the
-janitor's own rules would free — it never writes and always exits 0. Full
+janitor's own rules would free — it never writes; it exits 0 on a clean
+report and 3 when the report is degraded (unreadable store, unknown
+schema, or a failed store/tier pass) so a scheduler can alarm on it. Full
 details: [docs/SPEC.md](docs/SPEC.md).
 
 ## Works with Devin alone (Devin-only mode)

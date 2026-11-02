@@ -284,17 +284,17 @@ def test_report_cli_json_devin_store(devin_dir, dotdevin, tmp_path, capsys):
     assert store["recoverable_bytes"] > 0
 
 
-def test_report_cli_malformed_devin_still_exits_0(devin_dir, dotdevin,
-                                                tmp_path, capsys):
-    """report is advisory: a corrupt .devin state file surfaces as the
-    store's error row, never as a failed command."""
+def test_report_cli_malformed_devin_exits_3(devin_dir, dotdevin,
+                                            tmp_path, capsys):
+    """A corrupt .devin state file surfaces as the store's error row —
+    advisory but degraded, so the exit code is 3, not 0."""
     _write(dotdevin, "learning-state.json", "{broken")
     rc = main([
         "report", "--data-dir", str(devin_dir.root),
         "--devin-dir", str(dotdevin),
         "--pending-file", str(tmp_path / "p.json"),
     ])
-    assert rc == 0
+    assert rc == 3
     assert "error" in capsys.readouterr().out
 
 
