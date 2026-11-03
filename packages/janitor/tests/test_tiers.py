@@ -22,11 +22,22 @@ def test_empty_session_auto_delete():
 
 
 def test_grace_window_keeps_recent():
-    recent = mkrow("new", last_activity=time.time() - 3600)
+    # Robot/judge classes bypass grace (deleted regardless of age); the grace
+    # window only protects substantive recent work — so this row must have
+    # real activity metrics, not the mkrow defaults that match the judge tier.
+    recent = mkrow("new", last_activity=time.time() - 3600, user_msgs=100)
     old = mkrow("old", last_activity=OLD_S, user_msgs=100)
     c = classify([recent, old])
     assert c.kept["new"] == "grace window"
     assert c.tier_of("old") is Tier.KEEP
+
+
+def test_robot_sessions_skip_grace_window():
+    # Directive 2026-11-03: robot/judge sessions are deleted with no grace
+    # period even when last_activity is inside the window.
+    recent_noise = mkrow("bot", last_activity=time.time() - 3600)
+    c = classify([recent_noise])
+    assert c.tier_of("bot") is Tier.AUTO_DELETE or "bot" in [r.id for r in c.judge]
 
 
 def test_keep_ids_and_patterns():

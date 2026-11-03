@@ -110,10 +110,9 @@ def classify(
         if r.id in keep_ids or keep_re.search(title):
             result.kept[r.id] = "allowlist/marked"
             continue
-        if r.last_activity and r.last_activity > grace_ts:
-            result.kept[r.id] = "grace window"
-            continue
 
+        # Robot/judge classes are deleted without grace period (2026-11-03,
+        # Icaro's directive): the grace window only protects substantive work.
         if r.is_empty:
             result.auto_delete.append((r, "empty"))
         elif r.id in dup_losers:
@@ -133,6 +132,8 @@ def classify(
             and r.score < cfg.judge_max_score
         ):
             result.judge.append(r)
+        elif r.last_activity and r.last_activity > grace_ts:
+            result.kept[r.id] = "grace window"
         else:
             result.kept[r.id] = "substantive work"
 

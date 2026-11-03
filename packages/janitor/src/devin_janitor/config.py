@@ -17,7 +17,30 @@ from typing import Any
 DEFAULT_NOISE_PATTERNS = [
     (r"judge tool|classif|support_triage|entailment|^\[\d+\]$|^\{\"items\"|"
     r"^billing$|^BLOCKED$|SESSION_OK|echo.*test|sentinel|safe test command|"
-    r"heartbeat-probe|Lista.*(tools|ferramentas).*djaevin-local|tools MCP.*djaevin-local"),
+    r"heartbeat-probe|Lista.*(tools|ferramentas).*djaevin-local|tools MCP.*djaevin-local|"
+    # robot eval-scoring sessions (directive 2026-11-03): any variant of the
+    # Score/Assess/Evaluate/Judge-* phrasing the eval loop generates — these
+    # never carry durable knowledge and must not survive via the judge tier.
+    r"^Score |^Score whether|^Assess |^Evaluate |^Judge |"
+    # PT eval verbs + EN verify/validate/evaluating at title start: every
+    # observed match is the ~38-msg/0-tool-call NLI gate template, never
+    # user work. "[ _]" covers both space titles and namer's Title_Case.
+    r"^Evaluating[ _]|^Avaliar[ _]|^Pontuar[ _]|^Julgar[ _]|"
+    r"^Verify[ _]|^Validate[ _]|"
+    # NLI-eval vocabulary anywhere in the title.
+    r"premis|hypothes|hip[oó]tes|aleg[aã][cç][aã]o|veracidade|sustentad|"
+    r"estimate from 0|claim evaluation|intent assessment|untrusted json|"
+    # "reply exactly: ok/pong" model probes — exact/ok/pong co-occurring
+    # with a reply-verb in either order (probes get renamed by
+    # session-namer, so title shape is a permutation of these words).
+    # (?<![a-z0-9])/(?![a-z0-9]) instead of \b: underscores are word chars,
+    # so \b never fires inside Title_Case probe names.
+    r"(?<![a-z0-9])(ok|pong|exact(ly)?)(?![a-z0-9]).*"
+    r"(?<![a-z0-9])(reply|respond|response|request|acknowledge|confirm|"
+    r"require|echo|only|one|generation|instruction|ok|pong)(?![a-z0-9])|"
+    r"(?<![a-z0-9])(reply|respond|response|request|acknowledge|confirm|"
+    r"require|echo|only|one|generation|instruction)(?![a-z0-9]).*"
+    r"(?<![a-z0-9])(ok|pong|exact(ly)?)(?![a-z0-9])"),
 ]
 
 # One-shot cycles whose durable knowledge lives elsewhere (slack-brain
@@ -34,7 +57,9 @@ DEFAULT_KEEP_TITLE_PATTERNS = [r"n[ãa]o apagar", r"SLACK-BRAIN"]
 DEFAULT_JUDGE_STATEMENT = (
     "This session transcript contains durable, reusable knowledge — "
     "decisions, conventions, fixes or project context worth preserving "
-    "for future work."
+    "for future work. Automation/eval-scoring sessions (claim scoring, "
+    "entailment evals, heartbeat probes) are never durable knowledge — "
+    "their outputs live in the eval system's own store, so answer delete."
 )
 
 
