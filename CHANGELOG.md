@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **devin-janitor** — `report` now exits **3** (was 0) when the report is
+  degraded: `classification_error`, any store entry carrying an `error`,
+  or a failed `cleanup_tiers` pass. Read-only contract unchanged — 0 on a
+  clean report — but schedulers can now alarm on silent degradation.
 - **devin-redact** — adversarial secret-detection hardening: new
   `connection_uri`/`webhook_url` secret categories, expanded token
   prefixes (GitLab/npm/PyPI/SendGrid/Square/Shopify/…), UTF-16 and
