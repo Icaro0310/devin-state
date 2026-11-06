@@ -111,20 +111,6 @@ def classify(
             result.kept[r.id] = "allowlist/marked"
             continue
 
-        # Same funnel as the legacy script: sessions the user opened in the
-        # desktop UI are never janitor targets; managed eval-backend sessions
-        # born hidden are pure noise; hidden without a managed tag is a
-        # user choice and stays.
-        if r.user_session:
-            result.kept[r.id] = "user-opened session (requestingTabId)"
-            continue
-        if r.managed_tag == "djaevin-acp":
-            result.auto_delete.append((r, "managed eval backend"))
-            continue
-        if r.hidden and not r.managed_tag:
-            result.kept[r.id] = "hidden by user"
-            continue
-
         # Robot/judge classes are deleted without grace period (2026-11-03,
         # Icaro's directive): the grace window only protects substantive work.
         if r.is_empty:

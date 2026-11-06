@@ -38,10 +38,7 @@ def test_delete_gui_files_removes_db_and_lock(devin_dir, tmp_path):
     (acp / "g1.lock").write_text("x")
     pending = {}
     assert delete_gui_files(acp, "g1", pending) is True
-    # .db* files are gone; the .lock survives — orphan locks are removed by
-    # remove_orphan_locks only after the session is provably dead.
-    assert not list(acp.glob("g1.db*"))
-    assert (acp / "g1.lock").is_file()
+    assert not list(acp.glob("g1.*"))
     assert pending == {}
 
 
