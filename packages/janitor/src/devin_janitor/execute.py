@@ -87,8 +87,9 @@ def delete_gui_files(
     added to ``pending`` for retry on a later run.
     """
     acp_dir = Path(acp_dir)
+    # Never remove .lock files here — orphan locks are handled by
+    # remove_orphan_locks once the session is provably dead.
     files = list(acp_dir.glob(f"{session_id}.db*"))
-    files += [p for p in acp_dir.glob(f"{session_id}.lock") if p not in files]
     ok = True
     for p in files:
         try:
@@ -141,8 +142,12 @@ def devin_running() -> bool:
                 timeout=20,
             ).stdout
             return out.count("Devin.exe") > 1
+        # -x devin-desktop: the desktop app only. The old -fi matched this
+        # process's own cmdline ("devin-janitor"), so vacuum/tier3 were
+        # permanently dead.
         out = subprocess.run(
-            ["pgrep", "-fi", "devin"], capture_output=True, timeout=20, check=False
+            ["pgrep", "-x", "devin-desktop"],
+            capture_output=True, timeout=20, check=False,
         )
         return out.returncode == 0
     except (OSError, subprocess.TimeoutExpired):
@@ -152,6 +157,39 @@ def devin_running() -> bool:
 def has_locks(paths: DevinPaths) -> bool:
     locks = paths.session_locks_dir
     return locks.is_dir() and any(locks.glob("*.lock"))
+
+
+def session_locked(paths: DevinPaths, session_id: str) -> bool:
+    """True when a live process holds this session's lock.
+
+    Same semantics as the legacy janitor: a lock file is only evidence of
+    a live session while a process actually holds the flock — stale lock
+    files (crashed runs) are acquirable and count as unlocked.
+    """
+    candidates = (
+        paths.session_locks_dir / f"{session_id}.lock",
+        paths.acp_messages_dir / f"{session_id}.lock",
+    )
+    for lock in candidates:
+        if not lock.is_file():
+            continue
+        if os.name == "nt":
+            return True  # conservative: no portable flock probe
+        try:
+            fd = os.open(lock, os.O_RDWR)
+        except OSError:
+            continue
+        try:
+            import fcntl
+
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            os.close(fd)
+            return True  # lock held by a live process
+        else:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
+    return False
 
 
 def vacuum_if_safe(
@@ -194,6 +232,11 @@ def apply_deletions(
     con.execute("PRAGMA busy_timeout=30000")
     try:
         for row, _why in targets:
+            # Recheck the lock immediately before deleting — a session that
+            # came alive since classification must survive this run.
+            if session_locked(paths, row.id):
+                pending.setdefault(row.id, int(time.time()))
+                continue
             removed = delete_session_rows(con, row.id)
             if removed:
                 stats["cli_rows"] += 1

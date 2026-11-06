@@ -48,6 +48,9 @@ class SessionRow:
     files_touched: int = 0
     prompt: str = ""
     empty_flag: bool = False
+    hidden: bool = False
+    managed_tag: str = ""
+    user_session: bool = False
 
     @property
     def score(self) -> int:
@@ -143,6 +146,12 @@ def _cli_rows(store: SessionsStore) -> list[SessionRow]:
             [t.tool_call_json for t in tool_states]
             + [t.tool_call_update_json for t in tool_states]
         )
+        meta = {}
+        if s.metadata:
+            try:
+                meta = json.loads(s.metadata)
+            except (json.JSONDecodeError, TypeError):
+                meta = {}
         rows.append(
             SessionRow(
                 id=s.id,
@@ -158,6 +167,11 @@ def _cli_rows(store: SessionsStore) -> list[SessionRow]:
                 tool_calls=len(tool_states),
                 files_touched=files,
                 prompt=prompt,
+                hidden=bool(s.hidden),
+                managed_tag=str(meta.get("janitor_managed", "") or ""),
+                # requestingTabId marks a session the user opened in the
+                # desktop UI — never janitor-managed, always protected.
+                user_session="requestingTabId" in (s.metadata or ""),
             )
         )
     return rows
@@ -193,6 +207,7 @@ def _gui_row(db_path: Path) -> SessionRow | None:
 
     mtime = db_path.stat().st_mtime
     user_msgs = sum(1 for m in messages if "user" in m.kind.lower())
+    managed = str(meta.get("janitor_managed", "") or "")
     return SessionRow(
         id=sid,
         origin="gui",
@@ -203,6 +218,7 @@ def _gui_row(db_path: Path) -> SessionRow | None:
         user_msgs=user_msgs,
         assistant_msgs=len(messages) - user_msgs,
         tool_calls=sum(1 for m in messages if "tool" in m.kind.lower()),
+        managed_tag=managed,
     )
 
 

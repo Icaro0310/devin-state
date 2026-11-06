@@ -21,7 +21,8 @@ DEFAULT_NOISE_PATTERNS = [
     # robot eval-scoring sessions (directive 2026-11-03): any variant of the
     # Score/Assess/Evaluate/Judge-* phrasing the eval loop generates — these
     # never carry durable knowledge and must not survive via the judge tier.
-    r"^Score |^Score whether|^Assess |^Evaluate |^Judge |"
+    r"^Score[ _]|^Assess[ _]|^Evaluate[ _]|^Judge[ _]|"
+    r"^ping$|^pong$|^ok$|exact(ly)?[ _-]?ok|^functions\.|^\{\"scores|"
     # PT eval verbs + EN verify/validate/evaluating at title start: every
     # observed match is the ~38-msg/0-tool-call NLI gate template, never
     # user work. "[ _]" covers both space titles and namer's Title_Case.
