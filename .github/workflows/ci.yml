@@ -1,8 +1,11 @@
 name: ci
 
-# Secrets scan runs on every change; per-package test workflows
-# (test-*.yml) are scoped by path so a change under packages/x/ runs
-# only that package's suite plus the integration suite where relevant.
+# Secrets scan runs on every change; per-package test jobs are gated on
+# the `changes` diff (job-level path gating, replacing the path-filtered
+# test-*.yml PR triggers) so a change under packages/x/ runs only that
+# package's suite plus the integration suite where relevant. The
+# always-on `ci-gate` job aggregates every result into the single
+# required check.
 
 on:
   push:
@@ -13,6 +16,41 @@ permissions:
   contents: read
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      backup: ${{ steps.f.outputs.backup }}
+      integration: ${{ steps.f.outputs.integration }}
+      janitor: ${{ steps.f.outputs.janitor }}
+      redact: ${{ steps.f.outputs.redact }}
+      scheduler: ${{ steps.f.outputs.scheduler }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - id: f
+        run: |
+          base="${{ github.event.pull_request.base.sha || github.event.before }}"
+          if [ -z "$base" ] || ! git rev-parse --verify "$base" >/dev/null 2>&1; then
+            base="HEAD~1"
+          fi
+          diff_ok=0
+          git diff --name-only "$base" HEAD >/dev/null 2>&1 && diff_ok=1
+          # diff not computable -> run every suite (safe default)
+          for spec in \
+            'backup:packages/backup/** shared/install-scheduler/** .github/workflows/test-backup.yml' \
+            'integration:packages/backup/** packages/janitor/** shared/install-scheduler/** tests/integration/** .github/workflows/test-integration.yml .github/workflows/pypi-publish.yml' \
+            'janitor:packages/janitor/** shared/install-scheduler/** .github/workflows/test-janitor.yml' \
+            'redact:packages/redact/** .github/workflows/test-redact.yml' \
+            'scheduler:shared/install-scheduler/** .github/workflows/test-scheduler.yml' \
+          ; do
+            pkg="${spec%%:*}"; paths="${spec#*:}"
+            if [ "$diff_ok" = "0" ] || git diff --name-only "$base" HEAD -- $paths | grep -q .; then
+              echo "$pkg=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "$pkg=false" >> "$GITHUB_OUTPUT"
+            fi
+          done
   lint:
     runs-on: ubuntu-latest
     steps:
@@ -28,3 +66,68 @@ jobs:
     permissions:
       contents: read
     uses: Icaro0310/devin-powerups/.github/workflows/adapters-check.yml@v1
+  test-backup:
+    needs: changes
+    if: needs.changes.outputs.backup == 'true'
+    permissions:
+      contents: read
+    uses: Icaro0310/devin-powerups/.github/workflows/python-test.yml@v1
+    with:
+      package-dir: packages/backup
+      pre-install: -e shared/install-scheduler
+  test-integration:
+    needs: changes
+    if: needs.changes.outputs.integration == 'true'
+    permissions:
+      contents: read
+    uses: Icaro0310/devin-powerups/.github/workflows/python-test.yml@v1
+    with:
+      package-dir: tests/integration
+      skip-install: true
+      pre-install: pytest -e packages/backup -e packages/janitor -e shared/install-scheduler
+  test-janitor:
+    needs: changes
+    if: needs.changes.outputs.janitor == 'true'
+    permissions:
+      contents: read
+    uses: Icaro0310/devin-powerups/.github/workflows/python-test.yml@v1
+    with:
+      package-dir: packages/janitor
+      pre-install: -e shared/install-scheduler
+  test-redact:
+    needs: changes
+    if: needs.changes.outputs.redact == 'true'
+    permissions:
+      contents: read
+    uses: Icaro0310/devin-powerups/.github/workflows/python-test.yml@v1
+    with:
+      package-dir: packages/redact
+  test-scheduler:
+    needs: changes
+    if: needs.changes.outputs.scheduler == 'true'
+    permissions:
+      contents: read
+    uses: Icaro0310/devin-powerups/.github/workflows/python-test.yml@v1
+    with:
+      package-dir: shared/install-scheduler
+  ci-gate:
+    if: always()
+    needs: [changes, lint, secrets-scan, adapters-check, test-backup, test-integration, test-janitor, test-redact, test-scheduler]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Aggregate job results
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PY'
+          import json, os, sys
+          needs = json.loads(os.environ["NEEDS"])
+          bad = {k: v["result"] for k, v in needs.items()
+                 if v["result"] not in ("success", "skipped")}
+          for k, v in needs.items():
+              print(f"{k}: {v['result']}")
+          if bad:
+              print(f"ci-gate FAIL: {bad}", file=sys.stderr)
+              sys.exit(1)
+          print("ci-gate PASS")
+          PY

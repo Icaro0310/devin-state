@@ -7,11 +7,7 @@ on:
       - 'packages/janitor/**'
       - 'shared/install-scheduler/**'
       - '.github/workflows/test-janitor.yml'
-  pull_request:
-    paths:
-      - 'packages/janitor/**'
-      - 'shared/install-scheduler/**'
-      - '.github/workflows/test-janitor.yml'
+  # pull_request testing now lives in ci.yml (job-level path gating + ci-gate aggregator)
 
 permissions:
   contents: read

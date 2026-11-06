@@ -6,10 +6,7 @@ on:
     paths:
       - 'packages/redact/**'
       - '.github/workflows/test-redact.yml'
-  pull_request:
-    paths:
-      - 'packages/redact/**'
-      - '.github/workflows/test-redact.yml'
+  # pull_request testing now lives in ci.yml (job-level path gating + ci-gate aggregator)
 
 permissions:
   contents: read

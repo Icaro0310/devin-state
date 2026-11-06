@@ -6,10 +6,7 @@ on:
     paths:
       - 'shared/install-scheduler/**'
       - '.github/workflows/test-scheduler.yml'
-  pull_request:
-    paths:
-      - 'shared/install-scheduler/**'
-      - '.github/workflows/test-scheduler.yml'
+  # pull_request testing now lives in ci.yml (job-level path gating + ci-gate aggregator)
 
 permissions:
   contents: read

@@ -7,11 +7,7 @@ on:
       - 'packages/backup/**'
       - 'shared/install-scheduler/**'
       - '.github/workflows/test-backup.yml'
-  pull_request:
-    paths:
-      - 'packages/backup/**'
-      - 'shared/install-scheduler/**'
-      - '.github/workflows/test-backup.yml'
+  # pull_request testing now lives in ci.yml (job-level path gating + ci-gate aggregator)
 
 permissions:
   contents: read

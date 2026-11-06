@@ -14,14 +14,7 @@ on:
       - 'tests/integration/**'
       - '.github/workflows/test-integration.yml'
       - '.github/workflows/pypi-publish.yml'
-  pull_request:
-    paths:
-      - 'packages/backup/**'
-      - 'packages/janitor/**'
-      - 'shared/install-scheduler/**'
-      - 'tests/integration/**'
-      - '.github/workflows/test-integration.yml'
-      - '.github/workflows/pypi-publish.yml'
+  # pull_request testing now lives in ci.yml (job-level path gating + ci-gate aggregator)
 
 permissions:
   contents: read
