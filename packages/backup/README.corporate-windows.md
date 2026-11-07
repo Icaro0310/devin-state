@@ -36,7 +36,7 @@ Use `--data-dir`/`--config-dir` for non-default locations.
 - **Blocked installers:** if winget/Store are disabled by policy, `uv` installs as a standalone binary, download the GitHub release zip, extract to `%LOCALAPPDATA%\bin`, add it to PATH.
 - **Long paths:** keep checkout/install roots short (`C:\dev`), MAX_PATH (260 chars) can still bite inside virtualenvs; `LongPathsEnabled` needs admin, short roots do not.
 - **EDR/antivirus:** if a scan kills the install, retry with an exclusion or ask IT to allowlist `%LOCALAPPDATA%\uv` and `%USERPROFILE%\.local\bin`. These tools never elevate or listen on the network by default.
-- **Offline/air-gapped:** `pip download <package> -d wheels\` on a connected machine, copy the folder, then `pip install --no-index --find-links wheels\` on the target (pure-Python tools; native deps need a matching platform wheel). For `source_only` tools installed from a copied checkout, stage the build backend too (`pip download setuptools wheel`), then install with `pip install --no-index --find-links wheels\ --no-build-isolation .` inside the checkout.
+- **Offline/air-gapped:** `pip download <package> -d wheels\` on a connected machine, copy the folder, then `pip install --no-index --find-links wheels\` on the target (pure-Python tools; native deps need a matching platform wheel). For `source_only` tools installed from a copied checkout, stage the build backend too (`pip download setuptools wheel -d wheels\`, into the folder being copied) and install it first (`pip install --no-index --find-links wheels\ setuptools wheel`; `--no-build-isolation` needs the backend installed, not only staged), then install with `pip install --no-index --find-links wheels\ --no-build-isolation .` inside the checkout.
 - **Fully local runtime:** installed tools make no required network calls, this tool has none; it reads `sessions.db` and local stores only.
 
 ## Zscaler
@@ -91,7 +91,8 @@ User-scope registration (`schtasks` or the `ScheduledTask` cmdlets) needs no adm
 - Devin plugin + skill: `devin plugins install
   Icaro0310/devin-state#packages/backup/adapters`. The manifest
   launches the server through `uvx --from 'devin-backup[mcp]' devin-backup-mcp`, which
-  resolves once the next PyPI release ships, until then install from
+  resolves from PyPI as of 0.1.1 (the 0.1.0 wheel predates the entry
+  point); on 0.1.0 install from
   source (`pip install -e 'packages/backup[mcp]'` from a checkout).
 
 
