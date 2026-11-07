@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **CI** — `docker/login-action` bumped from 4.6.0 to 4.7.0 in
+  `docker-publish.yml` (dependabot).
 - **devin-redact** — adversarial secret-detection hardening: new
   `connection_uri`/`webhook_url` secret categories, expanded token
   prefixes (GitLab/npm/PyPI/SendGrid/Square/Shopify/…), UTF-16 and
