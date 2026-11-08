@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **CI** — `docker-publish.yml` `sigstore/cosign-installer` bumped
+  4.1.2 → 4.1.3 (Dependabot PR #117); signing path unchanged.
 - **devin-redact** — adversarial secret-detection hardening: new
   `connection_uri`/`webhook_url` secret categories, expanded token
   prefixes (GitLab/npm/PyPI/SendGrid/Square/Shopify/…), UTF-16 and
