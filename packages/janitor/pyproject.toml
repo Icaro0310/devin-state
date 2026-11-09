@@ -13,6 +13,8 @@ authors = [{ name = "Icaro0310" }]
 dependencies = [
     "devin-internals-spec>=0.3.0,<0.4.0",
     "devin-install-scheduler>=0.1.0",
+    "devin-office>=0.1.0,<0.2.0",
+    "devin-redact>=0.2.6,<0.3.0",
 ]
 
 [project.optional-dependencies]

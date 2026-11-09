@@ -14,5 +14,8 @@ package = false
 [tool.uv.workspace]
 members = ["packages/*", "shared/*"]
 
+[tool.uv.sources]
+devin-redact = { workspace = true }
+
 [dependency-groups]
 dev = ["pytest>=8", "ruff>=0.9"]
