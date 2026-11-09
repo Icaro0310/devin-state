@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **CI** — `pr-approve` caller bumped from v1.12 to v1.14 in
+  `auto-approve.yml`: v1.14 adds the auto-merge arm (`gh pr merge
+  --auto` once checks pass), so the caller now grants `contents: write`
+  at workflow level and on the `approve` job — the permission the arm
+  requires; `tests/integration/test_auto_approve_gate.py` pins the new
+  contract.
 - **devin-redact** — adversarial secret-detection hardening: new
   `connection_uri`/`webhook_url` secret categories, expanded token
   prefixes (GitLab/npm/PyPI/SendGrid/Square/Shopify/…), UTF-16 and
