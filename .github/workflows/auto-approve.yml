@@ -23,7 +23,7 @@ on:
   status: {}
 
 permissions:
-  contents: read
+  contents: write
   pull-requests: write
 
 jobs:
@@ -36,6 +36,6 @@ jobs:
         github.event.context == 'devin-judge/review') &&
        github.event.state == 'success')
     permissions:
-      contents: read
+      contents: write
       pull-requests: write
-    uses: Icaro0310/devin-powerups/.github/workflows/pr-approve.yml@v1.12
+    uses: Icaro0310/devin-powerups/.github/workflows/pr-approve.yml@v1.14
