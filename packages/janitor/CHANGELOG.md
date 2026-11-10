@@ -19,6 +19,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `run --apply` with tier2 selected, violating the fail-open contract
   that an unclear verdict can never delete.
 
+## [0.1.3] - 2026-11-09
+
+### Fixed
+
+- Declared `devin-office` and `devin-redact` as install dependencies.
+  The reap attribution path imports both packages; environments that
+  installed `devin-janitor` alone got sessions reaped without process
+  attribution (`attribution_ok=false`). Installations from PyPI now
+  pull both wheels automatically.
+
 ## [0.1.2] - 2026-10-21
 
 ### Added

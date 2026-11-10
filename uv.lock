@@ -326,11 +326,13 @@ wheels = [
 
 [[package]]
 name = "devin-janitor"
-version = "0.1.2"
+version = "0.1.3"
 source = { editable = "packages/janitor" }
 dependencies = [
     { name = "devin-install-scheduler" },
     { name = "devin-internals-spec" },
+    { name = "devin-office" },
+    { name = "devin-redact" },
 ]
 
 [package.optional-dependencies]
@@ -346,11 +348,22 @@ mcp = [
 requires-dist = [
     { name = "devin-install-scheduler", editable = "shared/install-scheduler" },
     { name = "devin-internals-spec", specifier = ">=0.3.0,<0.4.0" },
+    { name = "devin-office", specifier = ">=0.1.0,<0.2.0" },
+    { name = "devin-redact", editable = "packages/redact" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.2" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
     { name = "pytest-timeout", marker = "extra == 'dev'", specifier = ">=2.3" },
 ]
 provides-extras = ["dev", "mcp"]
+
+[[package]]
+name = "devin-office"
+version = "0.1.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/ef/f9/ca5f548736ca47d8c6ce3758b76449d0c26f28e3d4f624fdfa6f2ae80a3f/devin_office-0.1.0.tar.gz", hash = "sha256:e0da1eb720249a5ff464f42e62b08cca115c2badc9d5130d7cd9e48f7c7884f5", size = 4178320, upload-time = "2026-10-20T10:29:55.615Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1a/8b/ea66be17f2fc5e9acd86f74cddd387b0cc791829722c8c31036cf62681e1/devin_office-0.1.0-py3-none-any.whl", hash = "sha256:fdab335f6f5443541926d1f0a2c484fdb746061938aaec6e0353ca67a8778259", size = 4203727, upload-time = "2026-10-20T10:29:53.028Z" },
+]
 
 [[package]]
 name = "devin-redact"
