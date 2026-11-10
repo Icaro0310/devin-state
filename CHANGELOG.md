@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **CI** — `pr-approve` caller bumped from v1.14 to v1.16 in
+  `auto-approve.yml`: v1.16 moves the auto-merge arm into a dedicated
+  `arm-auto-merge` job inside the reusable so the approve path runs
+  read-only again — `contents: write` stays on the caller for the
+  arm; `tests/integration/test_auto_approve_gate.py` pins the new
+  contract.
 - **CI** — `pr-approve` caller bumped from v1.12 to v1.14 in
   `auto-approve.yml`: v1.14 adds the auto-merge arm (`gh pr merge
   --auto` once checks pass), so the caller now grants `contents: write`
