@@ -51,3 +51,18 @@ def test_gate_permissions_allow_auto_merge_arm():
     assert "contents: write" in approve
     assert "pull-requests: write" in approve
     assert "contents: read" not in text
+
+
+def test_gate_permissions_grant_statuses_read():
+    """pr-approve.yml@v1.16 declares ``statuses: read`` internally and the
+    judge gate + arm re-verification read the ``Devin Review`` /
+    ``devin-judge/review`` commit statuses through it. ``workflow_call``
+    caps the reusable's permissions by the caller's, so the caller must
+    grant ``statuses: read`` at workflow level AND on the approve job —
+    without it every run dies in ``startup_failure`` before any job
+    starts (regression pin for the v1.16 bump that shipped without it)."""
+    text = _text()
+    head = text.split("jobs:", 1)[0]
+    approve = text.split("  approve:", 1)[1]
+    assert "statuses: read" in head
+    assert "statuses: read" in approve

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **CI** — `auto-approve.yml` caller now grants `statuses: read` at
+  workflow and job level. The v1.16 bump (#120) repinned the reusable
+  without the permission `pr-approve.yml@v1.16` requires — the judge
+  gate and arm re-verification read the `Devin Review` /
+  `devin-judge/review` commit statuses through it, and `workflow_call`
+  caps the reusable's grants by the caller's. Every `auto-approve` run
+  since the bump died in `startup_failure`, so no PR could be approved
+  or auto-merged; `devin-judge` already carried the grant.
+  `tests/integration/test_auto_approve_gate.py` pins the contract.
 - **CI** — `pr-approve` caller bumped from v1.14 to v1.16 in
   `auto-approve.yml`: v1.16 moves the auto-merge arm into a dedicated
   `arm-auto-merge` job inside the reusable so the approve path runs
