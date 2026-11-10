@@ -118,6 +118,10 @@ def classify(
             result.auto_delete.append((r, "empty"))
         elif r.id in dup_losers:
             result.auto_delete.append((r, "duplicate"))
+        elif cfg.judge_prompt_re.search(r.prompt):
+            # First user message is a verbatim scoring template → an
+            # automation judge call, whatever the descriptive title says.
+            result.auto_delete.append((r, "automation scoring prompt"))
         elif cfg.noise_re.search(title) and r.tool_calls <= cfg.noise_max_tool_calls:
             result.auto_delete.append((r, "automation/eval noise"))
         elif (

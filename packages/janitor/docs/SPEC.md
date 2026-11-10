@@ -86,7 +86,8 @@ disables it (see *Pipeline (`run`)* step 8).
   sessions.db row)
 - counters: `user_msgs`, `assistant_msgs`, `tool_calls`, `files_touched`
   (distinct path-like values in tool-call payloads — heuristic)
-- `prompt`: first user message text (feeds the judge)
+- `prompt`: first user message text (feeds the judge and the
+  scoring-prompt detector)
 - timestamps normalized ms → s; GUI rows use file mtime as `last_activity`
 
 `inventory.load_devin_artifacts(devin_dir)` lists the `.devin/` dir into
@@ -106,6 +107,10 @@ Evaluated in order; first match wins:
    - `empty`: zero user/assistant/tool activity
    - `duplicate`: same normalized title in same project; sibling with the
      highest `score = user_msgs*3 + tool_calls` survives
+   - `automation scoring prompt`: `judge_prompt_re` matches `prompt` —
+     the first user message is a verbatim automation scoring template, so
+     the session is a judge call whatever its (premise-derived,
+     descriptive) title says
    - `automation/eval noise`: `noise_re` matches title AND
      `tool_calls <= 5`
    - `ephemeral heartbeat/mailbox cycle`: `ephemeral_re` matches AND
@@ -115,7 +120,9 @@ Evaluated in order; first match wins:
 4. everything else → **KEEP** (`substantive work`)
 
 All patterns and thresholds come from `JanitorConfig` (`--config file.json`,
-merged over defaults). An empty pattern list matches nothing.
+merged over defaults) — including `judge_prompt_patterns`, the near-literal
+scoring-template fragments matched against `prompt`. An empty pattern list
+matches nothing.
 
 ### `.devin/` artifacts (`tiers.classify_devin_artifacts`)
 

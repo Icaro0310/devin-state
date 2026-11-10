@@ -30,7 +30,7 @@ and `janitor_classify` — same payloads.
 - `scan` returns `tiers.keep`, `tiers.auto_delete` and
   `tiers.judge.unresolved` — each row carries `id`, `origin`, `title`,
   `tier` and `reason` (grace window, allowlist, empty, noise,
-  ephemeral, duplicate, substantive work).
+  ephemeral, duplicate, automation scoring prompt, substantive work).
 - `classification` may be `null` with a `classification_error` when a
   store is unreadable — report that, don't guess.
 
