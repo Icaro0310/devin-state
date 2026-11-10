@@ -39,8 +39,13 @@ def add_session(
     last_activity: float = OLD_S,
     prompt: str = "",
     files: list[str] | None = None,
+    metadata: str | None = None,
 ) -> None:
-    """Insert a session with controlled activity counters."""
+    """Insert a session with controlled activity counters.
+
+    ``metadata`` is the raw sessions.db metadata JSON blob (e.g.
+    ``'{"janitor_managed":"djaevin-acp"}'``) used to stamp provenance.
+    """
     con = sqlite3.connect(str(db_path))
     with con:
         con.execute(
@@ -62,7 +67,7 @@ def add_session(
                 None,
                 json.dumps([project]),
                 0,
-                None,
+                metadata,
             ),
         )
         node = 0
@@ -110,26 +115,35 @@ def add_session(
 
 
 def add_gui_session(acp_dir: Path, sid: str, *, title: str = "",
-                    n_messages: int = 4, old: bool = True) -> Path:
+                    n_messages: int = 4, old: bool = True,
+                    janitor_managed: str | None = None,
+                    user_prompt: str | None = None) -> Path:
     """Fabricate an ``acp-messages/<sid>.db`` with synthetic messages.
 
     ``old`` backdates the mtime (used as last_activity) outside the default
-    grace window.
+    grace window. ``janitor_managed`` stamps the GUI provenance tag in the
+    meta table; ``user_prompt`` becomes the first user message's
+    ``_meta["cognition.ai/message"]`` text (the scoring-template carrier).
     """
     db = acp_dir / f"{sid}.db"
     con = sqlite3.connect(str(db))
     with con:
         con.executescript(ACP_MESSAGES_DDL)
+        meta_rows = [("fixture.session_id", sid), ("title", title)]
+        if janitor_managed:
+            meta_rows.append(("janitor_managed", janitor_managed))
         con.executemany(
-            "INSERT INTO meta(key, value) VALUES (?, ?)",
-            [("fixture.session_id", sid), ("title", title)],
-        )
+            "INSERT INTO meta(key, value) VALUES (?, ?)", meta_rows)
         kinds = ["user.prompt", "agent.delta", "tool_call", "agent.delta"]
         for pos in range(n_messages):
+            if pos == 0 and user_prompt is not None:
+                payload = {"_meta": {"cognition.ai/message": user_prompt}}
+            else:
+                payload = {"synthetic": 1}
             con.execute(
                 "INSERT INTO messages(position, kind, payload)"
                 " VALUES (?,?,?)",
-                (pos, kinds[pos % len(kinds)], json.dumps({"synthetic": 1})),
+                (pos, kinds[pos % len(kinds)], json.dumps(payload)),
             )
     con.close()
     if old:

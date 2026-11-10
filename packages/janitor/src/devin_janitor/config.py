@@ -27,13 +27,14 @@ DEFAULT_NOISE_PATTERNS = [
 # Automation scoring calls (the poordjaevin ACP judge) carry a *descriptive*
 # title taken from the premise being judged, so the title alone does not
 # reveal them — e.g. "Isolate Janitor Few-Shot Pools" is really a scoring
-# call. The giveaway is the first user message: it is a verbatim scoring
-# template, never a real task. These phrases are near-literal fragments of
-# that template, deliberately specific so a genuine user prompt won't match.
+# call. The giveaway is the first user message: it *opens with* a verbatim
+# scoring template, never a real task. These patterns match the openings of
+# the known scoring templates (matched with re.match, anchored at the start)
+# so a genuine prompt that merely quotes the template mid-sentence is safe.
 DEFAULT_JUDGE_PROMPT_PATTERNS = [
-    r"strict entailment judge used as a scoring backend",
+    r"You are a strict entailment judge",
     r"For every \[premise, hypothesis\] pair in the JSON data below",
-    r"estimate from 0 to 100 how strongly the premise entails the hypothesis",
+    r"estimate from 0 to 100 how strongly",
 ]
 
 # One-shot cycles whose durable knowledge lives elsewhere (slack-brain

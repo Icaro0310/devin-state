@@ -1,6 +1,6 @@
 import time
 
-from conftest import OLD_S, add_session
+from conftest import OLD_S, add_gui_session, add_session
 from devin_janitor.config import JanitorConfig
 from devin_janitor.inventory import SessionRow, load_inventory
 from devin_janitor.tiers import Tier, classify, norm_title
@@ -88,11 +88,56 @@ def test_duplicates_keep_most_active_sibling():
 
 
 def test_robot_prefix_title_auto_delete():
-    # Universal Robot_ prefix → automation noise regardless of the rest.
-    r = mkrow("r", title="Robot_Score entailment", user_msgs=2, tool_calls=3)
+    # Robot_ prefix WITH the bridge's janitor_managed stamp → automation
+    # noise regardless of the rest.
+    r = mkrow(
+        "r", title="Robot_Score entailment", user_msgs=2, tool_calls=3,
+        managed="djaevin-acp",
+    )
     c = classify([r])
     assert c.tier_of("r") is Tier.AUTO_DELETE
     assert c.auto_delete[0][1] == "automation/eval noise"
+
+
+def test_robot_prefix_without_provenance_not_auto_deleted():
+    # A user task that merely starts with "Robot_" has no janitor_managed
+    # stamp — the prefix alone is not automation provenance (Devin-Review
+    # finding on #121). It must not be auto-deleted on the title.
+    r = mkrow(
+        "ru", title="Robot_Arm calibration", user_msgs=40, tool_calls=3,
+        files_touched=3, managed=None,
+    )
+    c = classify([r])
+    assert c.tier_of("ru") is not Tier.AUTO_DELETE
+
+
+def test_robot_prefix_draft_or_pending_not_auto_deleted():
+    # ``janitor-pending`` and ``djaevin-draft`` stamps mean the session holds
+    # real text that must be exported first — Robot_ alone must not delete.
+    for i, tag in enumerate(("janitor-pending", "djaevin-draft")):
+        r = mkrow(
+            f"rp{i}", title=f"Robot_Draft {tag}", user_msgs=2, tool_calls=1,
+            managed=tag,
+        )
+        assert classify([r]).tier_of(r.id) is not Tier.AUTO_DELETE
+
+
+def test_judge_prompt_quoted_mid_sentence_not_flagged():
+    # A real task that *quotes* the scoring template mid-prompt is not an
+    # automation call — the template must open the message (Devin-Review
+    # finding on #121).
+    r = mkrow(
+        "q",
+        title="Edit the entailment judge template",
+        user_msgs=10,
+        tool_calls=8,
+        files_touched=2,
+        prompt=(
+            "Please edit the template that says: You are a strict "
+            "entailment judge used as a scoring backend. Keep the rest."
+        ),
+    )
+    assert classify([r]).tier_of("q") is not Tier.AUTO_DELETE
 
 
 def test_judge_prompt_auto_delete_despite_descriptive_title():
@@ -177,3 +222,40 @@ def test_inventory_roundtrip(devin_dir):
     assert r.prompt == "do the thing"
     # ms → s conversion
     assert abs(r.last_activity - OLD_S) < 2
+
+
+def test_inventory_cli_managed_stamp(devin_dir):
+    # sessions.db metadata carries the bridge's janitor_managed tag → the
+    # row exposes it so a Robot_ title can be trusted as automation.
+    add_session(
+        devin_dir.sessions_db, "robot-cli", title="Robot_Score x",
+        user_msgs=1, tool_calls=1,
+        metadata='{"janitor_managed":"djaevin-acp"}',
+    )
+    add_session(devin_dir.sessions_db, "plain", title="real work",
+                user_msgs=5, tool_calls=2)
+    rows = {r.id: r for r in load_inventory(devin_dir)}
+    assert rows["robot-cli"].managed == "djaevin-acp"
+    assert rows["plain"].managed is None
+
+
+def test_inventory_gui_managed_and_prompt(devin_dir):
+    # GUI-only sessions have no sessions.db row; provenance lives in the
+    # acp-messages meta table and the scoring template in the first
+    # user_message payload.
+    add_gui_session(
+        devin_dir.acp_messages_dir, "gui-robot", title="Robot_Score y",
+        janitor_managed="djaevin-acp",
+        user_prompt=(
+            "For every [premise, hypothesis] pair in the JSON data below, "
+            "estimate from 0 to 100 how strongly the premise entails the "
+            "hypothesis."
+        ),
+    )
+    rows = {r.id: r for r in load_inventory(devin_dir)}
+    r = rows["gui-robot"]
+    assert r.origin == "gui"
+    assert r.managed == "djaevin-acp"
+    assert r.prompt.startswith("For every [premise, hypothesis] pair")
+    # Provenance + scoring prompt → automation noise, auto-deletable.
+    assert classify([r]).tier_of("gui-robot") is Tier.AUTO_DELETE
