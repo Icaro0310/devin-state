@@ -8,8 +8,9 @@ ever drops out of ``pyproject.toml`` again.
 
 from __future__ import annotations
 
-import tomllib
 from pathlib import Path
+
+import tomllib
 
 PYPROJECT = Path(__file__).resolve().parents[1] / "pyproject.toml"
 
@@ -22,7 +23,7 @@ def _deps() -> list[str]:
 def test_reap_attribution_deps_declared() -> None:
     deps = _deps()
     for pkg in ("devin-office", "devin-redact"):
-        assert any(d == pkg or d.startswith(pkg + ">") or d.startswith(pkg + "=")
+        assert any(d == pkg or d.startswith((pkg + ">", pkg + "="))
                    for d in deps), f"{pkg} missing from project.dependencies"
 
 
