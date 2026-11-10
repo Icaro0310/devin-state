@@ -140,6 +140,25 @@ def test_judge_prompt_quoted_mid_sentence_not_flagged():
     assert classify([r]).tier_of("q") is not Tier.AUTO_DELETE
 
 
+def test_generic_score_request_not_flagged_as_scoring():
+    # A real evaluation request can legitimately *open* with score
+    # wording — "estimate from 0 to 100 how strongly …" is generic human
+    # phrasing, not the automation template (Devin-Review finding on
+    # #122). Only the two template-specific openings classify.
+    r = mkrow(
+        "e",
+        title="Estimate hypothesis strength for my essay",
+        user_msgs=12,
+        tool_calls=6,
+        files_touched=2,
+        prompt=(
+            "estimate from 0 to 100 how strongly the claim that remote "
+            "work improves retention is supported by the study."
+        ),
+    )
+    assert classify([r]).tier_of("e") is not Tier.AUTO_DELETE
+
+
 def test_judge_prompt_auto_delete_despite_descriptive_title():
     # Scoring call whose title came from the judged premise — the title
     # looks like real work, only the prompt reveals it is automation.

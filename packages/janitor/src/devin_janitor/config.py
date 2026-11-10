@@ -34,7 +34,6 @@ DEFAULT_NOISE_PATTERNS = [
 DEFAULT_JUDGE_PROMPT_PATTERNS = [
     r"You are a strict entailment judge",
     r"For every \[premise, hypothesis\] pair in the JSON data below",
-    r"estimate from 0 to 100 how strongly",
 ]
 
 # One-shot cycles whose durable knowledge lives elsewhere (slack-brain
