@@ -48,6 +48,11 @@ class SessionRow:
     files_touched: int = 0
     prompt: str = ""
     empty_flag: bool = False
+    # Provenance stamped by the automation bridge (sessions.db metadata
+    # ``janitor_managed`` — e.g. "djaevin-acp", "janitor-pending"). A
+    # ``Robot_`` title only auto-deletes when this is set; a user task that
+    # happens to start with ``Robot_`` has no stamp and is never noise.
+    managed: str | None = None
 
     @property
     def score(self) -> int:
@@ -91,6 +96,67 @@ def _text_of(payload: Any) -> str:
         if isinstance(value, str) and value.strip():
             return value
     return ""
+
+
+def _managed_of(metadata: str | None) -> str | None:
+    """``janitor_managed`` tag from a sessions.db metadata JSON blob."""
+    if not metadata:
+        return None
+    try:
+        data = json.loads(metadata)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    tag = data.get("janitor_managed") if isinstance(data, dict) else None
+    return tag if isinstance(tag, str) and tag else None
+
+
+def _acp_first_user_text(messages: Iterable[Any]) -> str:
+    """First ``user_message`` text from an acp-messages store.
+
+    The scoring template lives in the first user turn; GUI-only sessions
+    (no sessions.db row) carry it here, so the prompt-based classifier can
+    see them. Prefers the ``_meta`` full-message field, else joins the
+    content-block texts.
+    """
+    for m in messages:
+        if "user" not in m.kind.lower():
+            continue
+        try:
+            payload = json.loads(m.payload)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        meta = payload.get("_meta")
+        if isinstance(meta, dict):
+            msg = meta.get("cognition.ai/message")
+            if isinstance(msg, str) and msg.strip():
+                return msg
+        texts: list[str] = []
+        for block in payload.get("content") or []:
+            if not isinstance(block, dict):
+                continue
+            inner = block.get("content")
+            if isinstance(inner, dict):
+                t = inner.get("text")
+                if isinstance(t, str):
+                    texts.append(t)
+        joined = "".join(texts).strip()
+        if joined:
+            return joined
+    return ""
+
+
+def _gui_managed(meta: dict[str, str]) -> str | None:
+    """``janitor_managed`` tag from an acp-messages ``meta`` table.
+
+    GUI rows have no sessions.db metadata blob; the tag may still be
+    stamped as a direct meta key or inside a JSON ``metadata`` value.
+    """
+    tag = meta.get("janitor_managed")
+    if isinstance(tag, str) and tag:
+        return tag
+    return _managed_of(meta.get("metadata"))
 
 
 def _count_files_touched(tool_jsons: Iterable[str | None]) -> int:
@@ -158,6 +224,7 @@ def _cli_rows(store: SessionsStore) -> list[SessionRow]:
                 tool_calls=len(tool_states),
                 files_touched=files,
                 prompt=prompt,
+                managed=_managed_of(s.metadata),
             )
         )
     return rows
@@ -203,6 +270,8 @@ def _gui_row(db_path: Path) -> SessionRow | None:
         user_msgs=user_msgs,
         assistant_msgs=len(messages) - user_msgs,
         tool_calls=sum(1 for m in messages if "tool" in m.kind.lower()),
+        prompt=_acp_first_user_text(messages),
+        managed=_gui_managed(meta),
     )
 
 

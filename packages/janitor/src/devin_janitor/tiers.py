@@ -35,6 +35,14 @@ class Tier(Enum):
     JUDGE = "judge"
 
 
+# ``Robot_`` is a prefix a user can type — it is automation noise ONLY when
+# the session carries the bridge's pure-scoring stamp (SessionRow.managed
+# == "djaevin-acp"). Draft/pending stamps and unstamped ``Robot_`` titles
+# fall through to the judge/keep path like any other ambiguous session.
+_ROBOT_PREFIX_RE = re.compile(r"^[Rr]obot_", re.IGNORECASE)
+_PURE_SCORING_MANAGED = "djaevin-acp"
+
+
 @dataclass
 class Classification:
     """Result of one classification pass."""
@@ -74,6 +82,18 @@ def load_keep_file(path: str | Path | None) -> tuple[set[str], list[str]]:
     except (json.JSONDecodeError, OSError):
         return set(), []
     return set(data.get("ids", [])), list(data.get("title_patterns", []))
+
+
+def _judge_prompt_match(cfg: JanitorConfig, prompt: str) -> bool:
+    """True when ``prompt`` *opens with* a configured scoring template.
+
+    ``re.match`` anchors at the start (after leading whitespace), so a
+    genuine task that quotes the template mid-sentence — e.g. "edit the
+    template that says: …" — does not classify as an automation call.
+    """
+    if not prompt:
+        return False
+    return cfg.judge_prompt_re.match(prompt.lstrip()) is not None
 
 
 def classify(
@@ -118,11 +138,20 @@ def classify(
             result.auto_delete.append((r, "empty"))
         elif r.id in dup_losers:
             result.auto_delete.append((r, "duplicate"))
-        elif cfg.judge_prompt_re.search(r.prompt):
-            # First user message is a verbatim scoring template → an
+        elif _judge_prompt_match(cfg, r.prompt):
+            # First user message opens with the scoring template → an
             # automation judge call, whatever the descriptive title says.
+            # Anchored at the start: a real task that merely *quotes* the
+            # template mid-prompt is not a scoring call.
             result.auto_delete.append((r, "automation scoring prompt"))
-        elif cfg.noise_re.search(title) and r.tool_calls <= cfg.noise_max_tool_calls:
+        elif (
+            cfg.noise_re.search(title)
+            and r.tool_calls <= cfg.noise_max_tool_calls
+            and not (
+                _ROBOT_PREFIX_RE.match(title)
+                and r.managed != _PURE_SCORING_MANAGED
+            )
+        ):
             result.auto_delete.append((r, "automation/eval noise"))
         elif (
             cfg.ephemeral_re.search(title)

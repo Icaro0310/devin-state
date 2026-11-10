@@ -86,8 +86,14 @@ disables it (see *Pipeline (`run`)* step 8).
   sessions.db row)
 - counters: `user_msgs`, `assistant_msgs`, `tool_calls`, `files_touched`
   (distinct path-like values in tool-call payloads — heuristic)
-- `prompt`: first user message text (feeds the judge and the
-  scoring-prompt detector)
+- `prompt`: first user message text — CLI from `message_nodes`, GUI from
+  the first `user_message` payload in `acp-messages` (feeds the judge and
+  the scoring-prompt detector, so GUI-only scoring calls are seen too)
+- `managed`: the `janitor_managed` provenance stamp — CLI from sessions.db
+  `metadata` JSON, GUI from the acp-messages `meta` table (`djaevin-acp`,
+  `janitor-pending`, `djaevin-draft`, …). A `Robot_` title only counts as
+  automation noise when this is `djaevin-acp` (pure scoring); draft and
+  pending stamps hold real text that must be exported first.
 - timestamps normalized ms → s; GUI rows use file mtime as `last_activity`
 
 `inventory.load_devin_artifacts(devin_dir)` lists the `.devin/` dir into
@@ -107,12 +113,16 @@ Evaluated in order; first match wins:
    - `empty`: zero user/assistant/tool activity
    - `duplicate`: same normalized title in same project; sibling with the
      highest `score = user_msgs*3 + tool_calls` survives
-   - `automation scoring prompt`: `judge_prompt_re` matches `prompt` —
-     the first user message is a verbatim automation scoring template, so
-     the session is a judge call whatever its (premise-derived,
-     descriptive) title says
+   - `automation scoring prompt`: `judge_prompt_re` *opens-with* match on
+     `prompt` — the first user message begins with a verbatim automation
+     scoring template, so the session is a judge call whatever its
+     (premise-derived, descriptive) title says. Anchored at the start: a
+     real task that merely quotes the template mid-prompt is not flagged.
    - `automation/eval noise`: `noise_re` matches title AND
-     `tool_calls <= 5`
+     `tool_calls <= 5`. A `Robot_` title additionally requires
+     `managed == "djaevin-acp"` — the prefix alone is not provenance, so a
+     user task that happens to start with `Robot_` (or a draft/pending
+     stamp) is never auto-deleted on the title.
    - `ephemeral heartbeat/mailbox cycle`: `ephemeral_re` matches AND
      `user_msgs <= 75` AND `tool_calls <= 60`
 3. **JUDGE** — weak/ambiguous: `user_msgs <= 6`, `tool_calls <= 15`,
@@ -120,9 +130,9 @@ Evaluated in order; first match wins:
 4. everything else → **KEEP** (`substantive work`)
 
 All patterns and thresholds come from `JanitorConfig` (`--config file.json`,
-merged over defaults) — including `judge_prompt_patterns`, the near-literal
-scoring-template fragments matched against `prompt`. An empty pattern list
-matches nothing.
+merged over defaults) — including `judge_prompt_patterns`, the openings of
+the known scoring templates, matched against the *start* of `prompt` via
+`re.match`. An empty pattern list matches nothing.
 
 ### `.devin/` artifacts (`tiers.classify_devin_artifacts`)
 

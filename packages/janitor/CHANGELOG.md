@@ -30,6 +30,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Scoring/automation detection now requires provenance and a leading
+  template (Devin-Review findings on #121):
+  - `judge_prompt_re` now matches the *start* of `prompt` (`re.match`,
+    anchored) instead of a substring `search`, and the default patterns
+    are the openings of the known scoring templates — a real task that
+    merely quotes the template mid-prompt is no longer flagged as an
+    automation call and auto-deleted.
+  - A `Robot_` title only auto-deletes when the session carries the
+    bridge's `janitor_managed=djaevin-acp` stamp (new `SessionRow.managed`,
+    read from sessions.db `metadata` on CLI and the acp-messages `meta`
+    table on GUI). `janitor-pending`/`djaevin-draft` stamps hold real
+    text that must be exported first, and an unstamped `Robot_` title is
+    a user task — none are deleted on the title alone.
+  - GUI-only sessions now expose `prompt` (first `user_message` payload)
+    and `managed`, so scoring calls that never got a sessions.db row are
+    classified by content like CLI ones.
 - `_parse_verdict_text` is now fail-closed at the word level: a
   command judge printing a negated verdict ("do not delete", "don't
   delete", "never delete") or text mixing keep- and delete-tokens

@@ -121,11 +121,15 @@ by `report` and selectable via `run --tiers`:
   stays auditable; the verified snapshot owns payload restoration.
 
 The tier2 classifier reads more than titles. A session whose first user
-message is a verbatim automation scoring template is flagged `automation
-scoring prompt` even when its title is descriptive — judge calls inherit a
-title from the premise they scored, so a title-only check can never reveal
-them. Automation sessions branded `Robot_*` by the scoring bridge are
-always auto-delete.
+message *opens with* a verbatim automation scoring template is flagged
+`automation scoring prompt` even when its title is descriptive — judge
+calls inherit a title from the premise they scored, so a title-only check
+can never reveal them, and the match is anchored at the start so a real
+task that quotes the template mid-prompt stays safe. Automation sessions
+branded `Robot_*` by the scoring bridge are always auto-delete — but only
+when they carry the bridge's `janitor_managed=djaevin-acp` stamp, so a user
+task that happens to start with `Robot_` is never deleted on the title
+alone.
 
 ### Orphan reaper (Linux)
 
