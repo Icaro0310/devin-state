@@ -120,6 +120,13 @@ by `report` and selectable via `run --tiers`:
   marker (original key, slug, backend, size, timestamps) so the removal
   stays auditable; the verified snapshot owns payload restoration.
 
+The tier2 classifier reads more than titles. A session whose first user
+message is a verbatim automation scoring template is flagged `automation
+scoring prompt` even when its title is descriptive — judge calls inherit a
+title from the premise they scored, so a title-only check can never reveal
+them. Automation sessions branded `Robot_*` by the scoring bridge are
+always auto-delete.
+
 ### Orphan reaper (Linux)
 
 `devin-janitor reap` hunts runaway orphan processes — devin/bridge/agent
