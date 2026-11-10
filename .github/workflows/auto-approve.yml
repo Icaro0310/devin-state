@@ -25,6 +25,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  statuses: read
 
 jobs:
   approve:
@@ -38,6 +39,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      statuses: read
     # v1.16: the auto-merge arm lives in a dedicated arm-auto-merge job
     # inside the reusable — approve itself runs read-only again; the arm
     # still needs contents:write on this caller job (granted above) or
