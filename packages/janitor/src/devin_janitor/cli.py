@@ -5,7 +5,8 @@ Subcommands:
 - ``scan``    classification preview (``--json`` for machines)
 - ``run``     the safety pipeline; dry-run unless ``--apply``
 - ``pending`` inspect/retry the locked-files retry queue
-- ``report``  recoverable-space report; advisory, always exits 0
+- ``report``  recoverable-space report; advisory, exits 3 on degraded
+           output (unreadable store / unknown schema) so schedulers can alarm
 - ``install`` schedule a daily ``report`` job (F6 pattern, opt-in)
 """
 
@@ -642,7 +643,15 @@ def cmd_report(args: argparse.Namespace) -> int:
         print(json.dumps(rep, indent=2, ensure_ascii=False))
     else:
         print(render_space_report(rep))
-    return 0
+    # a degraded report (unreadable store/unknown schema/failed tier pass)
+    # must not look like success to schedulers — exit 3 keeps it advisory
+    # but alarmable
+    degraded = (
+        bool(rep.get("classification_error"))
+        or any(s.get("error") for s in rep.get("stores", []))
+        or bool((rep.get("cleanup_tiers") or {}).get("error"))
+    )
+    return 3 if degraded else 0
 
 
 # --------------------------------------------------------------- install --
