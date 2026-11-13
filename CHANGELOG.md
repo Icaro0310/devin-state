@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **devin-janitor** — `report` now exits **3** (was 0) when the report is
+  degraded: `classification_error`, any store entry carrying an `error`,
+  or a failed `cleanup_tiers` pass. Read-only contract unchanged — 0 on a
+  clean report — but schedulers can now alarm on silent degradation.
 - **CI** — `auto-approve.yml` caller now grants `statuses: read` at
   workflow and job level. The v1.16 bump (#120) repinned the reusable
   without the permission `pr-approve.yml@v1.16` requires — the judge

@@ -210,6 +210,47 @@ def test_report_cli_human_missing_store(devin_dir, tmp_path, capsys):
     assert "missing" in capsys.readouterr().out
 
 
+def test_report_cli_exits_3_on_classification_error(tmp_path, capsys):
+    """A degraded report must not look like success to a scheduler."""
+    root = tmp_path / "devin"
+    (root / "cli").mkdir(parents=True)
+    (root / "cli" / "sessions.db").write_bytes(b"not sqlite at all")
+    rc = main(["report", "--data-dir", str(root), "--json"])
+    assert rc == 3
+    assert json.loads(capsys.readouterr().out)["classification_error"]
+
+
+def test_report_cli_exits_3_on_store_error(
+    devin_dir, tmp_path, capsys, monkeypatch
+):
+    """A store failing outside session classification also gates rc."""
+    import devin_janitor.cli as cli_mod
+
+    real = cli_mod.space_report
+
+    def fake_report(paths, cfg, **kw):
+        rep = real(paths, cfg, **kw)
+        rep["stores"].append(
+            {
+                "name": "broken",
+                "path": "",
+                "exists": False,
+                "bytes": 0,
+                "recoverable_bytes": 0,
+                "error": "boom",
+            }
+        )
+        return rep
+
+    monkeypatch.setattr(cli_mod, "space_report", fake_report)
+    rc = main([
+        "report", "--data-dir", str(devin_dir.root),
+        "--pending-file", str(tmp_path / "p.json"),
+    ])
+    assert rc == 3
+    capsys.readouterr()
+
+
 def test_report_cli_writes_nothing(devin_dir, tmp_path):
     before = sorted(
         p.name for p in devin_dir.acp_messages_dir.iterdir()
