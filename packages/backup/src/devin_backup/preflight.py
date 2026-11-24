@@ -257,7 +257,7 @@ def _check_latest(out_dir: Path) -> dict:
         snaps = sorted(
             _snapshot_dirs(out_dir, with_manifest=True)
             + [f for f in out_dir.iterdir() if archive.is_archive(f)],
-            key=archive.stem_name,
+            key=lambda p: archive.stem_name(p),
         )
     except OSError as exc:
         return _result(name, UNKNOWN, f"cannot scan {out_dir}: {exc}")

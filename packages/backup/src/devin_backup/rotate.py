@@ -63,7 +63,7 @@ def _snapshot_points(backups_dir: Path) -> list[list[Path]]:
     points: list[list[Path]] = []
     manifests: list[dict | None] = []
     groups: dict[str, list[int]] = {}
-    for d in sorted(backups_dir.iterdir(), key=archive.stem_name):
+    for d in sorted(backups_dir.iterdir(), key=lambda p: archive.stem_name(p)):
         if _is_snapshot_dir(d):
             manifest = _read_manifest(d)
         elif archive.is_archive(d):
@@ -128,7 +128,9 @@ def list_snapshots(backups_dir: str | Path) -> list[dict]:
         return []
     out = []
     for child in sorted(
-        backups_dir.iterdir(), key=archive.stem_name, reverse=True
+        backups_dir.iterdir(),
+        key=lambda p: archive.stem_name(p),
+        reverse=True,
     ):
         compressed = False
         if archive.is_archive(child):
