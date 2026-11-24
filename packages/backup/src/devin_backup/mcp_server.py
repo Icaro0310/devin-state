@@ -17,6 +17,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+from devin_backup import archive
 from devin_backup.diff import diff_snapshot
 from devin_backup.rotate import list_snapshots
 from devin_backup.stores import default_backups_dir, default_data_dir
@@ -26,10 +27,14 @@ from devin_backup.verify import verify_snapshot
 def do_verify(snapshot_dir: str) -> dict:
     """Verify one snapshot against its manifest.
 
+    Accepts a snapshot dir or a ``.tar.*`` archive (materialized first).
     Returns ``{"snapshot", "ok", "checked", "failed", "results"}`` — one
     result per manifest entry with exists/size/sha256/integrity checks.
     """
-    return verify_snapshot(snapshot_dir)
+    with archive.materialized(snapshot_dir) as snap:
+        report = verify_snapshot(snap)
+    report["snapshot"] = snapshot_dir
+    return report
 
 
 def do_list(backups_dir: str = "") -> dict:
@@ -59,7 +64,10 @@ def do_diff(snapshot_dir: str, data_dir: str = "", config_dir: str = "") -> dict
     """
     live = Path(data_dir).expanduser() if data_dir else default_data_dir()
     config = Path(config_dir).expanduser() if config_dir else None
-    return diff_snapshot(snapshot_dir, live, config_dir=config)
+    with archive.materialized(snapshot_dir) as snap:
+        report = diff_snapshot(snap, live, config_dir=config)
+    report["snapshot"] = snapshot_dir
+    return report
 
 
 def _err(error: Exception) -> dict:

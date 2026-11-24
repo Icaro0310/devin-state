@@ -15,7 +15,9 @@ SQLite sidecars (``-wal``/``-shm``/``-journal``) are never copied directly —
 
 from __future__ import annotations
 
+import json
 import os
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,6 +26,13 @@ SQLITE_SUFFIXES = {".db", ".vscdb"}
 SQLITE_SIDECAR_SUFFIXES = {".db-wal", ".db-shm", ".db-journal",
                            ".vscdb-wal", ".vscdb-shm", ".vscdb-journal"}
 CONFIG_DIR_NAME = ".devin"
+MANIFEST_NAME = "manifest.json"
+PRE_RESTORE_PREFIX = "pre-restore-"
+# ``pre-restore-<YYYYMMDDTHHMMSSZ>`` plus the ``-N`` collision suffix
+# ``_unique_dir`` appends — the exact on-disk shape restore produces.
+_PRE_RESTORE_DIR_RE = re.compile(
+    rf"^{PRE_RESTORE_PREFIX}\d{{8}}T\d{{6}}Z(-\d+)?$"
+)
 
 
 class DataDirError(RuntimeError):
@@ -113,24 +122,58 @@ def _is_under(path: Path, directory: Path) -> bool:
         return False
 
 
+def _pre_restore_dir_names(root: Path) -> set[str]:
+    """Names of top-level dirs that are genuine ``pre-restore`` backups.
+
+    A dir qualifies only when its name matches the full
+    ``pre-restore-<timestamp>[-N]`` format *and* its manifest declares
+    ``kind: pre-restore`` — a user folder merely sharing the prefix
+    (``pre-restore-validation/`` etc.) keeps its stores in backups.
+    """
+    names: set[str] = set()
+    try:
+        children = list(root.iterdir())
+    except OSError:
+        return names
+    for child in children:
+        if not child.is_dir() or _PRE_RESTORE_DIR_RE.match(child.name) is None:
+            continue
+        try:
+            manifest = json.loads(
+                (child / MANIFEST_NAME).read_text(encoding="utf-8")
+            )
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(manifest, dict) and manifest.get("kind") == "pre-restore":
+            names.add(child.name)
+    return names
+
+
 def _discover_root(
     root: Path, root_name: str, excluded: list[Path]
 ) -> list[Store]:
     stores: list[Store] = []
+    pre_restore = _pre_restore_dir_names(root)
     for path in sorted(root.rglob("*")):
         if not path.is_file():
             continue
         resolved = path.resolve()
         if any(_is_under(resolved, directory) for directory in excluded):
             continue
-        rel = path.relative_to(root).as_posix()
+        rel_root = path.relative_to(root)
+        # ``pre-restore-<ts>/`` safety backups can land inside the data
+        # root itself when a restore runs on read-only media — they are
+        # artifacts of ours, never live stores, so discovery skips them.
+        if len(rel_root.parts) > 1 and rel_root.parts[0] in pre_restore:
+            continue
+        rel = rel_root.as_posix()
         if path.suffix.lower() in SQLITE_SIDECAR_SUFFIXES or path.name.endswith(
             ("-wal", "-shm", "-journal")
         ):
             continue
         if is_sqlite_store(path):
             stores.append(Store(path=path, rel_path=rel, kind="sqlite", root=root_name))
-        elif path.relative_to(root).parts[0] == CONFIG_DIR_NAME:
+        elif rel_root.parts[0] == CONFIG_DIR_NAME:
             stores.append(Store(path=path, rel_path=rel, kind="file", root=root_name))
     return stores
 

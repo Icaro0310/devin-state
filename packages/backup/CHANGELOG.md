@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `create --compress` + `devin_backup.archive`: snapshots can be packed
+  into a single `<name>.tar.zst` (or `.tar.gz` on Python < 3.14, where
+  `compression.zstd` is unavailable) holding the snapshot contents with
+  `manifest.json` as the first tar member so `list`/`preflight` stay
+  cheap. zstd runs at level 19 with a 128 MiB window. The archive is
+  self-verified before the plain directory is removed, and compression
+  failure falls back to keeping the directory. `verify`, `restore`,
+  `diff`, `rotate`, `list`, `copy-to`, `preflight`, the MCP tools and
+  `create --remote` all accept archives transparently — readers
+  materialize into a temp dir inside the backups dir so `restore`'s
+  `pre-restore-*` backups still land next to the snapshots. New
+  `compress` subcommand packs an existing snapshot dir in place
+  (`--keep` preserves the dir); `install --compress` schedules
+  `create --compress`.
 - `preflight` subcommand + `devin_backup.preflight`: per-check readiness
   report before a `create` run — `data-root`, `config-root` (when in
   scope), `stores-found` (with `--exclude`/`--exclude-secrets` applied),

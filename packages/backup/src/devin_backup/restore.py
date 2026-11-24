@@ -17,8 +17,10 @@ Safety model:
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sqlite3
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
@@ -27,13 +29,16 @@ from devin_internals.schema import SchemaError, detect_schema_version
 from devin_backup.snapshot import (
     MANIFEST_NAME,
     MANIFEST_VERSION,
-    PRE_RESTORE_PREFIX,
     _copy_store,
     _unique_dir,
     load_manifest,
     snapshot_timestamp,
 )
-from devin_backup.stores import Store, default_config_dir
+from devin_backup.stores import (
+    PRE_RESTORE_PREFIX,
+    Store,
+    default_config_dir,
+)
 
 
 class RestoreError(RuntimeError):
@@ -96,6 +101,32 @@ def _schema_warnings(entries: list[tuple[dict, Path]]) -> list[str]:
     return warnings
 
 
+def _pre_restore_parent(snapshot_dir: Path, target_dir: Path) -> Path:
+    """Where the ``pre-restore-<ts>/`` safety backup lands.
+
+    Normally next to the snapshots. The safety copy must be persistent
+    and writable — never inside a temp dir that a context manager
+    removes later — so fall back, in order:
+
+    1. the target's parent (snapshot materialized into the system temp
+       on read-only media, or the snapshots dir itself not writable);
+    2. inside the target itself (target's parent not writable either —
+       e.g. ``--to /mnt/devin`` where ``/mnt`` is protected but the
+       volume mounted there is writable).
+    """
+    parent = snapshot_dir.parent
+    tmp_root = Path(tempfile.gettempdir()).resolve()
+    try:
+        resolved = parent.resolve()
+    except OSError:
+        resolved = parent
+    if resolved != tmp_root and os.access(parent, os.W_OK):
+        return parent
+    if os.access(target_dir.parent, os.W_OK):
+        return target_dir.parent
+    return target_dir
+
+
 def _pre_restore_backup(
     snapshot_dir: Path,
     target_dir: Path,
@@ -103,7 +134,7 @@ def _pre_restore_backup(
     existing: list[tuple[dict, Path]],
 ) -> Path:
     """Copy files about to be overwritten into ``pre-restore-<ts>/``."""
-    backups_dir = snapshot_dir.parent
+    backups_dir = _pre_restore_parent(snapshot_dir, target_dir)
     pre_dir = _unique_dir(
         backups_dir, PRE_RESTORE_PREFIX + snapshot_timestamp()
     )

@@ -3,7 +3,7 @@ import os
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from devin_backup import rotate, snapshot
+from devin_backup import archive, rotate, snapshot
 
 T0 = datetime(2026, 9, 29, 12, 0, 0, tzinfo=timezone.utc)
 NOW = datetime(2026, 10, 30, 12, 0, 0, tzinfo=timezone.utc)
@@ -194,3 +194,124 @@ def test_list_snapshots_marks_pre_restore(data_dir, backups_dir):
 
 def test_list_snapshots_empty(tmp_path):
     assert rotate.list_snapshots(tmp_path / "nope") == []
+
+
+def test_rotate_ignores_unreadable_archives(data_dir, backups_dir):
+    """A ``.tar.*``-looking file with no readable manifest is neither
+    counted in the keep quota nor deleted — only real snapshots compete."""
+    snaps = _make_snapshots(data_dir, backups_dir, 2)
+    garbage = backups_dir / "20990101T000000Z.tar.gz"
+    garbage.write_bytes(b"not a tar at all")
+    deleted = rotate.rotate_snapshots(backups_dir, keep=1)
+    assert [p.name for p in deleted] == [snaps[0].name]
+    assert snaps[1].is_dir()
+    assert garbage.is_file()
+
+
+def test_rotate_same_second_archive_orders_by_stem(
+    data_dir, backups_dir
+):
+    """Two archives created in the same second get ``<ts>`` and
+    ``<ts>-2`` — the ``-2`` one is newer and must survive keep=1."""
+    first = snapshot.create_snapshot(
+        data_dir, backups_dir, now=T0, compress=True
+    )
+    second = snapshot.create_snapshot(
+        data_dir, backups_dir, now=T0, compress=True
+    )
+    assert "-2." in second.name
+    deleted = rotate.rotate_snapshots(backups_dir, keep=1)
+    assert [p.name for p in deleted] == [first.name]
+    assert second.is_file()
+
+
+def test_rotate_compress_keep_counts_as_one_point(data_dir, backups_dir):
+    """``compress --keep`` leaves dir + archive — one recovery point,
+    not two snapshots in the keep quota."""
+    snap = snapshot.create_snapshot(data_dir, backups_dir, now=T0)
+    arc = archive.write_archive(snap)  # dir kept, same manifest
+    newer = snapshot.create_snapshot(
+        data_dir, backups_dir, now=T0 + timedelta(hours=1)
+    )
+    assert rotate.rotate_snapshots(backups_dir, keep=2) == []
+    deleted = rotate.rotate_snapshots(backups_dir, keep=1)
+    assert sorted(p.name for p in deleted) == sorted(
+        [snap.name, arc.name]
+    )
+    assert newer.is_dir()
+
+
+def test_rotate_differing_manifest_same_stem_counts_twice(
+    data_dir, backups_dir
+):
+    """Same stem but different manifests → two different snapshots
+    sharing a name, counted separately."""
+    snap = snapshot.create_snapshot(data_dir, backups_dir, now=T0)
+    arc = archive.write_archive(snap)
+    # same name, different content — hand-edited manifest in the dir
+    manifest = snap / "manifest.json"
+    data = json.loads(manifest.read_text(encoding="utf-8"))
+    data["files"].append({"path": "extra.db", "size": 0})
+    manifest.write_text(json.dumps(data), encoding="utf-8")
+    newer = snapshot.create_snapshot(
+        data_dir, backups_dir, now=T0 + timedelta(hours=1)
+    )
+    # 3 distinct recovery points → keep=2 drops exactly one path: one of
+    # the same-stem twins. If the pair were wrongly merged into a single
+    # point there would be only 2 points and zero deletions.
+    deleted = rotate.rotate_snapshots(backups_dir, keep=2)
+    assert len(deleted) == 1
+    assert deleted[0].name in {snap.name, arc.name}
+    assert newer.is_dir()
+    surviving = {p.name for p in (snap, arc) if p.exists()}
+    assert len(surviving) == 1
+
+
+def test_list_snapshots_orders_same_second_archives(
+    data_dir, backups_dir
+):
+    first = snapshot.create_snapshot(
+        data_dir, backups_dir, now=T0, compress=True
+    )
+    second = snapshot.create_snapshot(
+        data_dir, backups_dir, now=T0, compress=True
+    )
+    names = [s["name"] for s in rotate.list_snapshots(backups_dir)]
+    assert names == [second.name, first.name]
+
+
+def test_rotate_skips_archive_with_nonobject_manifest(
+    data_dir, backups_dir
+):
+    """A ``.tar.*`` whose manifest.json is valid JSON but not an object
+    (``[]``) must not crash rotation — it is skipped like any other
+    unidentifiable file."""
+    import io
+    import tarfile
+
+    snaps = _make_snapshots(data_dir, backups_dir, 2)
+    bad = backups_dir / "20990101T000000Z.tar.gz"
+    payload = b"[]"
+    with tarfile.open(bad, "w:gz") as tf:
+        ti = tarfile.TarInfo("manifest.json")
+        ti.size = len(payload)
+        tf.addfile(ti, io.BytesIO(payload))
+    deleted = rotate.rotate_snapshots(backups_dir, keep=1)
+    assert [p.name for p in deleted] == [snaps[0].name]
+    assert snaps[1].is_dir()
+    assert bad.is_file()
+
+
+def test_rotate_dir_with_nonobject_manifest(data_dir, backups_dir):
+    """A snapshot dir whose manifest.json is ``[]`` is not a recovery
+    point: it is neither counted toward ``keep`` nor deleted — same rule
+    as archives with unreadable manifests. ``keep=1`` must preserve the
+    newest *valid* snapshot even when a newer-named dir is invalid."""
+    snaps = _make_snapshots(data_dir, backups_dir, 2)
+    weird = backups_dir / "20990101T000000Z"  # sorts newest by name
+    weird.mkdir()
+    (weird / "manifest.json").write_text("[]", encoding="utf-8")
+    deleted = rotate.rotate_snapshots(backups_dir, keep=1)
+    assert [p.name for p in deleted] == [snaps[0].name]
+    assert snaps[1].is_dir()
+    assert weird.is_dir()

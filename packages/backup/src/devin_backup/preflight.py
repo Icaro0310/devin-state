@@ -46,6 +46,7 @@ import sqlite3
 import tempfile
 from pathlib import Path
 
+from devin_backup import archive
 from devin_backup import remote as _remote
 from devin_backup.snapshot import (
     MANIFEST_NAME,
@@ -253,7 +254,11 @@ def _check_latest(out_dir: Path) -> dict:
         if not out_dir.is_dir():
             return _result(name, PASSED,
                            "no previous snapshot — first backup")
-        snaps = sorted(_snapshot_dirs(out_dir, with_manifest=True))
+        snaps = sorted(
+            _snapshot_dirs(out_dir, with_manifest=True)
+            + [f for f in out_dir.iterdir() if archive.is_archive(f)],
+            key=lambda p: archive.stem_name(p),
+        )
     except OSError as exc:
         return _result(name, UNKNOWN, f"cannot scan {out_dir}: {exc}")
     if not snaps:

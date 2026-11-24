@@ -79,7 +79,8 @@ Requires Python ≥ 3.10. Install with `pipx install devin-backup`, `uv tool ins
 ## Usage
 
 ```bash
-devin-backup create  [--data-dir <session-data-root>] [--config-dir <ui-config-root>] [--out <backups-dir>] [--remote <dest>] [--move]
+devin-backup create  [--data-dir <session-data-root>] [--config-dir <ui-config-root>] [--out <backups-dir>] [--remote <dest>] [--move] [--compress]
+devin-backup compress <snapshot-dir> [--keep]
 devin-backup preflight [--data-dir <session-data-root>] [--config-dir <ui-config-root>] [--out <backups-dir>] [--remote <dest>] [--json]
 devin-backup verify  <snapshot-dir>
 devin-backup diff    <snapshot-dir> [--data-dir <session-data-root>] [--config-dir <ui-config-root>] [--json]
@@ -90,7 +91,17 @@ devin-backup rotate  [--keep N] [--older-than <dur>] --yes
 
 - `create` snapshots `sessions.db`, ACP message databases, `state.vscdb` and
   `.devin/` files when present. A v2 manifest records which source root each
-  file came from; old v1 snapshots remain readable.
+  file came from; old v1 snapshots remain readable. `--compress` stores the
+  snapshot as a single `<name>.tar.zst` archive (or `.tar.gz` when
+  `compression.zstd` is unavailable — Python < 3.14); the manifest stays
+  the first tar member so `list`/`preflight` read it without a
+  full extraction.
+- `compress` converts an existing snapshot dir in place (verifies the
+  archive, then removes the dir); `--keep` leaves the dir alongside the
+  archive. Every archive-aware command — `verify`, `diff`, `restore`,
+  `list`, `rotate`, the MCP tools — accepts a `.tar.zst`/`.tar.gz` file
+  anywhere it accepts a snapshot dir, materializing it into a private
+  temp dir (the archive's parent, or the system temp on read-only media).
 - On Linux, the CLI data root and UI config root are separate. The default
   `create` detects both. If you pass `--data-dir`, also pass `--config-dir`
   to include the UI stores.
@@ -114,7 +125,9 @@ devin-backup rotate  [--keep N] [--older-than <dur>] --yes
   snapshots by age — `30d`, `12h`, `4w` — using the snapshot dir's mtime;
   combined, `--keep` acts as a floor so rotation never leaves fewer than N
   behind (a set `$DEVIN_BACKUP_KEEP` floors `--older-than` runs too).
-  `pre-restore-*` dirs are never rotated.
+  `pre-restore-*` dirs are never rotated; a `compress --keep` dir+archive
+  pair counts as one snapshot, and `.tar.*` files without a readable
+  manifest are left alone entirely.
 - `preflight` checks operational readiness **before** a `create` run —
   one `PASS`/`FAIL`/`UNKNOWN` line per check, never a single aggregate:
   `data-root` exists, `config-root` exists (when `create` would include

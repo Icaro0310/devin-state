@@ -5,7 +5,7 @@ import stat
 import sys
 
 import pytest
-from devin_backup import cli, preflight, snapshot
+from devin_backup import archive, cli, preflight, snapshot
 
 
 def _run(data_dir, backups_dir, *extra):
@@ -279,3 +279,33 @@ def test_preflight_help_documents_exit_codes(capsys):
     out = capsys.readouterr().out
     assert "0 = all checks pass" in out
     assert "usage" in out.lower()
+
+
+def test_preflight_latest_uses_stem_order(data_dir, backups_dir):
+    """Two same-second archives: ``<ts>-2`` is the newest — preflight
+    must check it, not the lexicographically-later ``<ts>.tar.gz``."""
+    import io
+    import tarfile
+    from datetime import datetime, timezone
+
+    backups_dir.mkdir(parents=True)
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    snapshot.create_snapshot(data_dir, backups_dir, now=now, compress=True)
+    second = snapshot.create_snapshot(
+        data_dir, backups_dir, now=now, compress=True
+    )
+    assert "-2." in second.name
+    report = preflight.run_preflight(data_dir, backups_dir)
+    check = _check(report, "latest-snapshot")
+    assert check["status"] == preflight.PASSED
+    # corrupt the *newest* archive's manifest — preflight must flag it,
+    # not pass on the older file
+    payload = b"{corrupt"
+    second.unlink()
+    with archive._open_writer(second, archive.preferred_suffix()) as tf:
+        ti = tarfile.TarInfo("manifest.json")
+        ti.size = len(payload)
+        tf.addfile(ti, io.BytesIO(payload))
+    report = preflight.run_preflight(data_dir, backups_dir)
+    check = _check(report, "latest-snapshot")
+    assert check["status"] == preflight.FAIL
