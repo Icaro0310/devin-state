@@ -303,11 +303,15 @@ def test_rotate_skips_archive_with_nonobject_manifest(
 
 
 def test_rotate_dir_with_nonobject_manifest(data_dir, backups_dir):
-    """A snapshot dir whose manifest.json is ``[]`` keeps the dir-only
-    semantics: it counts for rotation but must not crash."""
-    _make_snapshots(data_dir, backups_dir, 2)
-    weird = backups_dir / "20990101T000000Z"
+    """A snapshot dir whose manifest.json is ``[]`` is not a recovery
+    point: it is neither counted toward ``keep`` nor deleted — same rule
+    as archives with unreadable manifests. ``keep=1`` must preserve the
+    newest *valid* snapshot even when a newer-named dir is invalid."""
+    snaps = _make_snapshots(data_dir, backups_dir, 2)
+    weird = backups_dir / "20990101T000000Z"  # sorts newest by name
     weird.mkdir()
     (weird / "manifest.json").write_text("[]", encoding="utf-8")
     deleted = rotate.rotate_snapshots(backups_dir, keep=1)
-    assert len(deleted) == 2
+    assert [p.name for p in deleted] == [snaps[0].name]
+    assert snaps[1].is_dir()
+    assert weird.is_dir()

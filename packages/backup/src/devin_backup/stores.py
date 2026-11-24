@@ -24,6 +24,7 @@ SQLITE_SUFFIXES = {".db", ".vscdb"}
 SQLITE_SIDECAR_SUFFIXES = {".db-wal", ".db-shm", ".db-journal",
                            ".vscdb-wal", ".vscdb-shm", ".vscdb-journal"}
 CONFIG_DIR_NAME = ".devin"
+PRE_RESTORE_PREFIX = "pre-restore-"
 
 
 class DataDirError(RuntimeError):
@@ -123,14 +124,22 @@ def _discover_root(
         resolved = path.resolve()
         if any(_is_under(resolved, directory) for directory in excluded):
             continue
-        rel = path.relative_to(root).as_posix()
+        rel_root = path.relative_to(root)
+        # ``pre-restore-<ts>/`` safety backups can land inside the data
+        # root itself when a restore runs on read-only media — they are
+        # artifacts of ours, never live stores, so discovery skips them.
+        if len(rel_root.parts) > 1 and rel_root.parts[0].startswith(
+            PRE_RESTORE_PREFIX
+        ):
+            continue
+        rel = rel_root.as_posix()
         if path.suffix.lower() in SQLITE_SIDECAR_SUFFIXES or path.name.endswith(
             ("-wal", "-shm", "-journal")
         ):
             continue
         if is_sqlite_store(path):
             stores.append(Store(path=path, rel_path=rel, kind="sqlite", root=root_name))
-        elif path.relative_to(root).parts[0] == CONFIG_DIR_NAME:
+        elif rel_root.parts[0] == CONFIG_DIR_NAME:
             stores.append(Store(path=path, rel_path=rel, kind="file", root=root_name))
     return stores
 

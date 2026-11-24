@@ -1,5 +1,6 @@
 import json
 import sqlite3
+from pathlib import Path
 
 import pytest
 from devin_backup import restore, snapshot
@@ -168,3 +169,30 @@ def test_restore_into_original_data_dir(data_dir, backups_dir):
     assert (data_dir / ".devin" / "config.json").read_bytes() == (
         snap / ".devin" / "config.json"
     ).read_bytes()
+
+
+def test_pre_restore_inside_data_dir_not_resnapshotted(
+    data_dir, backups_dir, tmp_path, monkeypatch
+):
+    """When the pre-restore safety copy falls back inside the data root
+    (read-only media case), later snapshots must not pick up the stale
+    databases it holds."""
+    snap = snapshot.create_snapshot(data_dir, backups_dir)
+    target = tmp_path / "restore-target"
+    restore.restore_snapshot(snap, target, dry_run=False)
+
+    monkeypatch.setattr(
+        restore, "_pre_restore_parent", lambda _snap, tgt: tgt
+    )
+    (target / ".devin" / "config.json").write_text(
+        '{"edited": true}\n', encoding="utf-8"
+    )
+    plan = restore.restore_snapshot(snap, target, dry_run=False)
+    pre_dir = Path(plan["pre_restore_backup"])
+    assert pre_dir.parent == target
+    assert (pre_dir / "cli" / "sessions.db").is_file()
+
+    snap2 = snapshot.create_snapshot(target, backups_dir)
+    paths = [f["path"] for f in _manifest(snap2)["files"]]
+    assert "cli/sessions.db" in paths
+    assert not any(p.startswith("pre-restore-") for p in paths)

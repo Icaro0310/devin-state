@@ -32,7 +32,6 @@ from devin_backup.stores import DataDirError, Store, discover_stores
 MANIFEST_VERSION = 2
 MANIFEST_NAME = "manifest.json"
 SNAPSHOT_NAME_RE = re.compile(r"^\d{8}T\d{6}Z(-\d+)?$")
-PRE_RESTORE_PREFIX = "pre-restore-"
 
 # Stores known to carry credentials / PII — skipped by ``--exclude-secrets``.
 # A vscdb-scan audit of a live state.vscdb confirmed OAuth tokens (GitHub,

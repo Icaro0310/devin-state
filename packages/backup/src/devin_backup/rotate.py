@@ -16,10 +16,10 @@ from pathlib import Path
 from devin_backup import archive
 from devin_backup.snapshot import (
     MANIFEST_NAME,
-    PRE_RESTORE_PREFIX,
     SNAPSHOT_NAME_RE,
     SnapshotError,
 )
+from devin_backup.stores import PRE_RESTORE_PREFIX
 
 _DURATION_RE = re.compile(r"^(\d+)\s*([hdw])$", re.IGNORECASE)
 _DURATION_UNITS = {
@@ -58,7 +58,10 @@ def _snapshot_points(backups_dir: Path) -> list[list[Path]]:
 
     Archives must carry a readable manifest to be counted *or* deleted —
     a file that only looks like one is left alone, same rule
-    ``list_snapshots`` applies.
+    ``list_snapshots`` applies. Snapshot dirs whose ``manifest.json`` is
+    unreadable or malformed are skipped the same way: they are neither
+    counted toward ``keep`` nor deleted, so rotation can never keep only
+    an unrestorable directory.
     """
     points: list[list[Path]] = []
     manifests: list[dict | None] = []
@@ -66,6 +69,8 @@ def _snapshot_points(backups_dir: Path) -> list[list[Path]]:
     for d in sorted(backups_dir.iterdir(), key=lambda p: archive.stem_name(p)):
         if _is_snapshot_dir(d):
             manifest = _read_manifest(d)
+            if manifest is None:
+                continue
         elif archive.is_archive(d):
             try:
                 manifest = archive.load_manifest_file(d)

@@ -5,7 +5,7 @@ import stat
 import sys
 
 import pytest
-from devin_backup import cli, preflight, snapshot
+from devin_backup import archive, cli, preflight, snapshot
 
 
 def _run(data_dir, backups_dir, *extra):
@@ -302,7 +302,7 @@ def test_preflight_latest_uses_stem_order(data_dir, backups_dir):
     # not pass on the older file
     payload = b"{corrupt"
     second.unlink()
-    with tarfile.open(second, "w:gz") as tf:
+    with archive._open_writer(second, archive.preferred_suffix()) as tf:
         ti = tarfile.TarInfo("manifest.json")
         ti.size = len(payload)
         tf.addfile(ti, io.BytesIO(payload))

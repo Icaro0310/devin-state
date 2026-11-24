@@ -29,13 +29,16 @@ from devin_internals.schema import SchemaError, detect_schema_version
 from devin_backup.snapshot import (
     MANIFEST_NAME,
     MANIFEST_VERSION,
-    PRE_RESTORE_PREFIX,
     _copy_store,
     _unique_dir,
     load_manifest,
     snapshot_timestamp,
 )
-from devin_backup.stores import Store, default_config_dir
+from devin_backup.stores import (
+    PRE_RESTORE_PREFIX,
+    Store,
+    default_config_dir,
+)
 
 
 class RestoreError(RuntimeError):
