@@ -27,6 +27,8 @@
   at workflow level and on the `approve` job — the permission the arm
   requires; `tests/integration/test_auto_approve_gate.py` pins the new
   contract.
+- **CI** — `Icaro0310/devin-powerups/.github/workflows/verify-wheel-version.yml`
+  repin from `7db1276` to `9249702` in `pypi-publish.yml` (dependabot).
 - **devin-redact** — adversarial secret-detection hardening: new
   `connection_uri`/`webhook_url` secret categories, expanded token
   prefixes (GitLab/npm/PyPI/SendGrid/Square/Shopify/…), UTF-16 and
