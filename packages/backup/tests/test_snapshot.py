@@ -59,6 +59,24 @@ def test_discover_stores_keeps_user_dir_sharing_pre_restore_prefix(
     assert "pre-restore-validation/state.vscdb" in rels
 
 
+def test_snapshot_leaves_no_sqlite_sidecars(data_dir, backups_dir, tmp_path):
+    """Opening the copied WAL-mode db (schema detection) must not leave
+    ``-wal``/``-shm``/``-journal`` files in the snapshot dir — they are
+    runtime artifacts, not snapshot content."""
+    src = tmp_path / "wal-data" / "cli"
+    src.mkdir(parents=True)
+    with sqlite3.connect(src / "sessions.db") as conn:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("CREATE TABLE t (v TEXT)")
+    snap = snapshot.create_snapshot(tmp_path / "wal-data", backups_dir)
+    leftovers = [
+        p
+        for p in snap.rglob("*")
+        if p.name.endswith(("-wal", "-shm", "-journal"))
+    ]
+    assert leftovers == []
+
+
 def test_snapshot_copies_all_stores_with_manifest(data_dir, backups_dir):
     snap = snapshot.create_snapshot(data_dir, backups_dir)
     manifest = json.loads((snap / "manifest.json").read_text(encoding="utf-8"))

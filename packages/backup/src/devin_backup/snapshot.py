@@ -154,7 +154,7 @@ def _copy_store(store: Store, snap_dir: Path) -> dict:
         os.chmod(dst, 0o600)
     except OSError:
         pass  # Windows ACLs — mode bits are advisory there
-    return {
+    entry = {
         "path": store.rel_path,
         "root": store.root,
         "snapshot_path": snapshot_path,
@@ -164,6 +164,14 @@ def _copy_store(store: Store, snap_dir: Path) -> dict:
         "sha256": sha256_file(dst),
         "schema_version": _detect_schema(dst) if store.kind == "sqlite" else None,
     }
+    if store.kind == "sqlite":
+        # Opening the WAL-mode copy (backup API or schema detection)
+        # leaves -wal/-shm/-journal sidecars next to it — runtime
+        # artifacts, never snapshot content; drop them so the dir holds
+        # exactly what the manifest lists.
+        for suffix in ("-wal", "-shm", "-journal"):
+            Path(str(dst) + suffix).unlink(missing_ok=True)
+    return entry
 
 
 def create_snapshot(
