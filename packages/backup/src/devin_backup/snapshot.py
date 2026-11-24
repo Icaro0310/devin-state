@@ -86,6 +86,21 @@ def _copy_sqlite(src: Path, dst: Path) -> None:
         source.close()
 
 
+def _convert_journal_delete(path: Path) -> None:
+    """Checkpoint a copied WAL database and switch it to rollback journal.
+
+    The copy becomes self-contained — no ``-wal``/``-shm`` needed to read
+    it — so it verifies even on read-only media where SQLite cannot
+    recreate those sidecars. Applies to the snapshot copy only, never
+    the live source.
+    """
+    con = sqlite3.connect(str(path))
+    try:
+        con.execute("PRAGMA journal_mode=DELETE")
+    finally:
+        con.close()
+
+
 def _detect_schema(dst: Path) -> int | None:
     try:
         return int(detect_schema_version(dst)["schema_version"])
@@ -154,6 +169,13 @@ def _copy_store(store: Store, snap_dir: Path) -> dict:
         os.chmod(dst, 0o600)
     except OSError:
         pass  # Windows ACLs — mode bits are advisory there
+    journal_converted = False
+    if store.kind == "sqlite":
+        try:
+            _convert_journal_delete(dst)
+            journal_converted = True
+        except (sqlite3.Error, OSError):
+            pass  # keep whatever sidecars exist rather than lose frames
     entry = {
         "path": store.rel_path,
         "root": store.root,
@@ -164,11 +186,10 @@ def _copy_store(store: Store, snap_dir: Path) -> dict:
         "sha256": sha256_file(dst),
         "schema_version": _detect_schema(dst) if store.kind == "sqlite" else None,
     }
-    if store.kind == "sqlite":
-        # Opening the WAL-mode copy (backup API or schema detection)
-        # leaves -wal/-shm/-journal sidecars next to it — runtime
-        # artifacts, never snapshot content; drop them so the dir holds
-        # exactly what the manifest lists.
+    if journal_converted:
+        # the mode change checkpoints and drops the sidecars itself;
+        # remove any stragglers so the dir holds exactly what the
+        # manifest lists
         for suffix in ("-wal", "-shm", "-journal"):
             Path(str(dst) + suffix).unlink(missing_ok=True)
     return entry

@@ -59,22 +59,32 @@ def test_discover_stores_keeps_user_dir_sharing_pre_restore_prefix(
     assert "pre-restore-validation/state.vscdb" in rels
 
 
-def test_snapshot_leaves_no_sqlite_sidecars(data_dir, backups_dir, tmp_path):
-    """Opening the copied WAL-mode db (schema detection) must not leave
-    ``-wal``/``-shm``/``-journal`` files in the snapshot dir — they are
-    runtime artifacts, not snapshot content."""
+def test_snapshot_leaves_no_sqlite_sidecars_and_preserves_wal(
+    data_dir, backups_dir, tmp_path
+):
+    """The copied db is converted to rollback journal — no
+    ``-wal``/``-shm``/``-journal`` leftovers — while data committed to
+    the source's WAL (not yet checkpointed) still lands in the snapshot."""
     src = tmp_path / "wal-data" / "cli"
     src.mkdir(parents=True)
-    with sqlite3.connect(src / "sessions.db") as conn:
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("CREATE TABLE t (v TEXT)")
+    con = sqlite3.connect(src / "sessions.db")
+    con.execute("PRAGMA journal_mode=WAL")
+    con.execute("CREATE TABLE t (v TEXT)")
+    con.execute("INSERT INTO t VALUES ('in-wal')")
+    con.commit()  # committed but not checkpointed — lives only in -wal
     snap = snapshot.create_snapshot(tmp_path / "wal-data", backups_dir)
+    con.close()
     leftovers = [
         p
         for p in snap.rglob("*")
         if p.name.endswith(("-wal", "-shm", "-journal"))
     ]
     assert leftovers == []
+    check = sqlite3.connect(snap / "cli" / "sessions.db")
+    try:
+        assert check.execute("SELECT v FROM t").fetchall() == [("in-wal",)]
+    finally:
+        check.close()
 
 
 def test_snapshot_copies_all_stores_with_manifest(data_dir, backups_dir):

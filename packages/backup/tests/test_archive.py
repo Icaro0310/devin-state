@@ -51,6 +51,22 @@ def test_compress_ignores_sqlite_sidecar_leftovers(data_dir, backups_dir):
     assert report["ok"], report["results"]
 
 
+def test_compress_keeps_manifest_listed_sidecar_named_file(
+    data_dir, backups_dir
+):
+    """A manifest-listed file whose name looks like a sqlite sidecar
+    (``.devin/.db-WAL`` — dotfile, no suffix) must still be archived:
+    the sidecar filter only applies to unlisted leftovers."""
+    (data_dir / ".devin" / ".db-WAL").write_bytes(b"hidden-config")
+    snap = _make_snapshot(data_dir, backups_dir)
+    out = archive.compress_snapshot_dir(snap)
+    report = archive.verify_archive(out)
+    assert report["ok"], report["results"]
+    with archive._open_reader(out) as tf:
+        names = [m.name for m in tf]
+    assert ".devin/.db-WAL" in names
+
+
 def test_verify_archive_detects_corruption(data_dir, backups_dir):
     snap = _make_snapshot(data_dir, backups_dir, compress=True)
     data = bytearray(snap.read_bytes())
