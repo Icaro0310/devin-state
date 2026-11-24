@@ -28,7 +28,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from devin_backup import secondary
+from devin_backup import archive, secondary
 from devin_backup.snapshot import SnapshotError, load_manifest
 from devin_backup.verify import verify_snapshot
 
@@ -65,9 +65,11 @@ def _offload_rsync(src: Path, dest: str) -> dict:
             "a mounted/local path instead"
         )
     remote_dest = _remote_dest(src, dest)
+    # trailing '/' means "contents of dir" — a file (archive) ships as-is
+    src_arg = f"{src}/" if src.is_dir() else str(src)
     cmd = [
         "rsync", "-a", "--protect-args", "--",
-        f"{src}/", remote_dest,
+        src_arg, remote_dest,
     ]
     proc = subprocess.run(
         cmd, check=False, capture_output=True, text=True)
@@ -101,7 +103,13 @@ def offload_snapshot(
     manifest = load_manifest(src)
     total = sum(f.get("size", 0) for f in manifest["files"])
 
-    report = verify_snapshot(src)
+    is_arch = archive.is_archive(src)
+    if is_arch:
+        # hash-level check — sqlite integrity_check needs real files and
+        # 'verify' on the archive materializes first anyway
+        report = archive.verify_archive(src)
+    else:
+        report = verify_snapshot(src)
     if not report["ok"]:
         raise SnapshotError(
             f"{src}: failed verification "
@@ -117,6 +125,9 @@ def offload_snapshot(
     result["bytes"] = total
     result["moved"] = False
     if move:
-        shutil.rmtree(src)
+        if is_arch:
+            src.unlink()
+        else:
+            shutil.rmtree(src)
         result["moved"] = True
     return result

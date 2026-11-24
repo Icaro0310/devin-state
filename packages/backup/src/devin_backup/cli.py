@@ -10,6 +10,7 @@ from pathlib import Path
 
 from devin_backup import (
     __version__,
+    archive,
     diff,
     preflight,
     restore,
@@ -53,6 +54,7 @@ def _cmd_create(args) -> int:
         data_dir, out, config_dir=config_dir,
         exclude=tuple(args.exclude or ()),
         exclude_secrets=bool(args.exclude_secrets),
+        compress=bool(args.compress),
     )
     manifest = snapshot.load_manifest(snap)
     total = sum(f.get("size", 0) for f in manifest["files"])
@@ -77,7 +79,9 @@ def _cmd_create(args) -> int:
 
 
 def _cmd_verify(args) -> int:
-    report = verify.verify_snapshot(args.snapshot_dir)
+    with archive.materialized(args.snapshot_dir) as snap_dir:
+        report = verify.verify_snapshot(snap_dir)
+    report["snapshot"] = args.snapshot_dir
     for r in report["results"]:
         mark = "ok  " if r["ok"] else "FAIL"
         line = f"  {mark} {r['path']}"
@@ -135,39 +139,40 @@ def _print_smoke(report: dict, scope: str) -> None:
 
 
 def _cmd_restore(args) -> int:
-    plan = restore.restore_snapshot(
-        args.snapshot_dir,
-        args.to,
-        config_dir=args.config_to or default_config_dir(),
-        dry_run=args.dry_run,
-        backup=not args.no_backup,
-    )
-    for w in plan["warnings"]:
-        print(f"warning: {w}", file=sys.stderr)
-    if plan["dry_run"]:
-        print("dry-run - no files written (pass --apply to restore)")
-        for rel in plan["would_write"]:
-            print(f"  would write {rel}")
-        for rel in plan["would_overwrite"]:
-            print(f"  would overwrite {rel}")
-        if plan["would_backup"]:
-            print("  current files would first be saved to a pre-restore backup")
-    else:
-        if plan["pre_restore_backup"]:
-            print(f"pre-restore backup: {plan['pre_restore_backup']}")
-        print(f"restored {len(plan['written'])} file(s) to {plan['target']}")
-    if not args.smoke:
-        return 0
-    if plan["dry_run"]:
-        report = smoke.smoke_snapshot(args.snapshot_dir)
-        scope = "snapshot sources (dry-run — nothing was written)"
-    else:
-        report = smoke.smoke_restored(
-            args.snapshot_dir, plan["target"], plan["config_target"]
+    with archive.materialized(args.snapshot_dir) as snap_dir:
+        plan = restore.restore_snapshot(
+            snap_dir,
+            args.to,
+            config_dir=args.config_to or default_config_dir(),
+            dry_run=args.dry_run,
+            backup=not args.no_backup,
         )
-        scope = "restored stores"
-    _print_smoke(report, scope)
-    return 0 if report["ok"] else 1
+        for w in plan["warnings"]:
+            print(f"warning: {w}", file=sys.stderr)
+        if plan["dry_run"]:
+            print("dry-run - no files written (pass --apply to restore)")
+            for rel in plan["would_write"]:
+                print(f"  would write {rel}")
+            for rel in plan["would_overwrite"]:
+                print(f"  would overwrite {rel}")
+            if plan["would_backup"]:
+                print("  current files would first be saved to a pre-restore backup")
+        else:
+            if plan["pre_restore_backup"]:
+                print(f"pre-restore backup: {plan['pre_restore_backup']}")
+            print(f"restored {len(plan['written'])} file(s) to {plan['target']}")
+        if not args.smoke:
+            return 0
+        if plan["dry_run"]:
+            report = smoke.smoke_snapshot(snap_dir)
+            scope = "snapshot sources (dry-run — nothing was written)"
+        else:
+            report = smoke.smoke_restored(
+                snap_dir, plan["target"], plan["config_target"]
+            )
+            scope = "restored stores"
+        _print_smoke(report, scope)
+        return 0 if report["ok"] else 1
 
 
 def _fmt_size(size) -> str:
@@ -183,9 +188,11 @@ def _cmd_diff(args) -> int:
     config_dir = (
         Path(args.config_dir).expanduser() if args.config_dir else None
     )
-    report = diff.diff_snapshot(
-        args.snapshot_dir, data_dir, config_dir=config_dir
-    )
+    with archive.materialized(args.snapshot_dir) as snap_dir:
+        report = diff.diff_snapshot(
+            snap_dir, data_dir, config_dir=config_dir
+        )
+    report["snapshot"] = args.snapshot_dir
     if args.json:
         print(json.dumps(report, indent=2))
         return 0
@@ -327,6 +334,12 @@ def build_parser() -> argparse.ArgumentParser:
         "(state.vscdb, credentials.toml, *.pem, *.key)",
     )
     p_create.add_argument(
+        "--compress", action="store_true",
+        help="pack the snapshot into a .tar.zst/.tar.gz archive "
+        "(manifest.json stays first so 'list' stays cheap); "
+        "verify/restore/diff/rotate/copy-to accept archives transparently",
+    )
+    p_create.add_argument(
         "--remote", metavar="DEST",
         help="after creating and re-verifying the snapshot, offload it to "
         "DEST — an rsync-style '[user@]host:path' ssh target (needs rsync "
@@ -461,6 +474,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_copy.add_argument("--json", action="store_true")
     p_copy.set_defaults(func=_cmd_copy_to)
 
+    p_comp = sub.add_parser(
+        "compress",
+        help="pack an existing snapshot dir into a .tar.zst/.tar.gz "
+        "archive in place (verified before the dir is removed)")
+    p_comp.add_argument("snapshot_dir")
+    p_comp.add_argument(
+        "--keep", action="store_true",
+        help="keep the original dir (default removes it after the "
+        "archive verifies)")
+    p_comp.add_argument("--json", action="store_true")
+    p_comp.set_defaults(func=_cmd_compress)
+
     p_inst = sub.add_parser(
         "install", help="schedule a daily 'create' job "
         "(cron / Task Scheduler / elapsed hook — F6, opt-in)")
@@ -469,6 +494,10 @@ def build_parser() -> argparse.ArgumentParser:
                         "(where .devin-ecosystem/scheduled.json lives)")
     p_inst.add_argument("--backend", default="auto",
                         choices=["auto", "tasksch", "cron", "elapsed"])
+    p_inst.add_argument(
+        "--compress", action="store_true",
+        help="schedule 'create --compress' (snapshots stored as "
+        ".tar.zst/.tar.gz archives)")
     p_inst.add_argument("--json", action="store_true")
     p_inst.set_defaults(func=_cmd_install)
 
@@ -488,10 +517,50 @@ def _cmd_copy_to(args) -> int:
     return 0
 
 
+def _cmd_compress(args) -> int:
+    snap = Path(args.snapshot_dir).expanduser()
+    if archive.is_archive(snap):
+        print(f"error: {snap} is already an archive", file=sys.stderr)
+        return 2
+    if not snap.is_dir():
+        print(f"error: {snap}: no such directory", file=sys.stderr)
+        return 2
+    if snapshot.SNAPSHOT_NAME_RE.match(snap.name) is None:
+        print(
+            f"error: {snap.name}: only timestamp-named snapshot dirs "
+            "can be compressed (pre-restore-* and other dirs are left "
+            "alone)",
+            file=sys.stderr,
+        )
+        return 2
+    snapshot.load_manifest(snap)  # validates it is a snapshot
+    if args.keep:
+        out = archive.write_archive(snap)
+        report = archive.verify_archive(out)
+        if not report["ok"]:
+            out.unlink(missing_ok=True)
+            print(
+                f"error: {out}: archive failed self-verification "
+                f"({report['failed']}/{report['checked']} files)",
+                file=sys.stderr,
+            )
+            return 1
+    else:
+        out = archive.compress_snapshot_dir(snap)  # verifies, then rmtrees
+    if args.json:
+        print(json.dumps({"archive": str(out), "kept_dir": bool(args.keep)},
+                         indent=2))
+    else:
+        print(f"compressed → {out}")
+        if args.keep:
+            print(f"  original kept: {snap}")
+    return 0
+
+
 def _cmd_install(args) -> int:
     from devin_backup.install import install_daily
     result = install_daily(out_dir=args.out, config_dir=args.config_dir,
-                           backend=args.backend)
+                           backend=args.backend, compress=args.compress)
     if args.json:
         print(json.dumps(result, indent=2))
     else:

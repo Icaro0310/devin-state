@@ -97,10 +97,22 @@ def snapshot_timestamp(now: datetime | None = None) -> str:
     return now.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 
-def _unique_dir(parent: Path, name: str) -> Path:
+def _name_taken(candidate: Path, *, compress: bool) -> bool:
+    if candidate.exists():
+        return True
+    if compress:
+        # a compressed snapshot leaves <name>.<suffix> behind, not the dir
+        from devin_backup import archive
+        return (
+            candidate.parent / (candidate.name + archive.preferred_suffix())
+        ).exists()
+    return False
+
+
+def _unique_dir(parent: Path, name: str, *, compress: bool = False) -> Path:
     candidate = parent / name
     n = 1
-    while candidate.exists():
+    while _name_taken(candidate, compress=compress):
         n += 1
         candidate = parent / f"{name}-{n}"
     return candidate
@@ -159,12 +171,17 @@ def create_snapshot(
     now: datetime | None = None,
     exclude: tuple[str, ...] = (),
     exclude_secrets: bool = False,
+    compress: bool = False,
 ) -> Path:
     """Snapshot Devin stores from its data and optional config roots.
 
     ``exclude`` filters stores by substring/fnmatch match on the relative
     path; ``exclude_secrets`` additionally skips stores known to carry
     credentials or PII (``state.vscdb``, ``credentials.toml``, key files).
+    ``compress`` packs the finished snapshot into a ``.tar.zst``/``.tar.gz``
+    archive (see ``archive.py``) and returns the archive path instead of
+    the directory — best-effort: on compression failure the plain
+    directory snapshot is kept and returned.
     Snapshot dirs are created owner-only (0700) and files 0600 — a
     snapshot is a copy of every secret the stores hold.
     """
@@ -183,7 +200,8 @@ def create_snapshot(
     if not stores:
         raise SnapshotError(f"{data_dir}: no Devin stores found to back up")
 
-    snap_dir = _unique_dir(out_dir, snapshot_timestamp(now))
+    snap_dir = _unique_dir(
+        out_dir, snapshot_timestamp(now), compress=compress)
     snap_dir.mkdir(parents=True, mode=0o700, exist_ok=True)
     try:
         os.chmod(snap_dir, 0o700)
@@ -219,6 +237,13 @@ def create_snapshot(
             os.chmod(manifest_path, 0o600)
         except OSError:
             pass
+        if compress:
+            from contextlib import suppress
+
+            from devin_backup import archive
+            with suppress(Exception):
+                # best-effort: on compression failure keep the plain dir
+                return archive.compress_snapshot_dir(snap_dir)
     except Exception:
         shutil.rmtree(snap_dir, ignore_errors=True)
         raise
@@ -226,8 +251,16 @@ def create_snapshot(
 
 
 def load_manifest(snapshot_dir: str | Path) -> dict:
-    """Read and minimally validate a snapshot's ``manifest.json``."""
+    """Read and minimally validate a snapshot's ``manifest.json``.
+
+    Accepts a snapshot directory or a compressed ``.tar.*`` archive —
+    for archives the manifest is read straight from the tar stream
+    (``manifest.json`` is the first member) without extraction.
+    """
     snapshot_dir = Path(snapshot_dir)
+    if not snapshot_dir.is_dir():
+        from devin_backup import archive
+        return archive.load_manifest_file(snapshot_dir)
     manifest_path = snapshot_dir / MANIFEST_NAME
     if not manifest_path.is_file():
         raise SnapshotError(f"{snapshot_dir}: no {MANIFEST_NAME} — not a snapshot?")

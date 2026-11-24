@@ -13,10 +13,12 @@ import shutil
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from devin_backup import archive
 from devin_backup.snapshot import (
     MANIFEST_NAME,
     PRE_RESTORE_PREFIX,
     SNAPSHOT_NAME_RE,
+    SnapshotError,
 )
 
 _DURATION_RE = re.compile(r"^(\d+)\s*([hdw])$", re.IGNORECASE)
@@ -45,6 +47,11 @@ def _is_snapshot_dir(path: Path) -> bool:
         and SNAPSHOT_NAME_RE.match(path.name) is not None
         and (path / MANIFEST_NAME).is_file()
     )
+
+
+def _is_snapshot(path: Path) -> bool:
+    """Timestamp-named snapshot dir *or* ``.tar.*`` archive file."""
+    return _is_snapshot_dir(path) or archive.is_archive(path)
 
 
 def _is_pre_restore_dir(path: Path) -> bool:
@@ -86,22 +93,32 @@ def list_snapshots(backups_dir: str | Path) -> list[dict]:
         return []
     out = []
     for child in sorted(backups_dir.iterdir(), key=lambda p: p.name, reverse=True):
-        if not child.is_dir():
-            continue
-        manifest = _read_manifest(child)
-        if manifest is None:
-            continue
-        if _is_pre_restore_dir(child) or manifest.get("kind") == "pre-restore":
-            kind = "pre-restore"
-        elif SNAPSHOT_NAME_RE.match(child.name):
+        compressed = False
+        if archive.is_archive(child):
+            try:
+                manifest = archive.load_manifest_file(child)
+            except SnapshotError:
+                continue
             kind = "snapshot"
+            compressed = True
         else:
-            kind = "unknown"
+            if not child.is_dir():
+                continue
+            manifest = _read_manifest(child)
+            if manifest is None:
+                continue
+            if _is_pre_restore_dir(child) or manifest.get("kind") == "pre-restore":
+                kind = "pre-restore"
+            elif SNAPSHOT_NAME_RE.match(child.name):
+                kind = "snapshot"
+            else:
+                kind = "unknown"
         out.append(
             {
                 "name": child.name,
                 "path": str(child),
                 "kind": kind,
+                "compressed": compressed,
                 "created_at": manifest.get("created_at"),
                 "files": len(manifest["files"]),
                 "size": sum(f.get("size", 0) for f in manifest["files"]),
@@ -141,7 +158,7 @@ def rotate_snapshots(
         return []
 
     regular = sorted(
-        (d for d in backups_dir.iterdir() if _is_snapshot_dir(d)),
+        (d for d in backups_dir.iterdir() if _is_snapshot(d)),
         key=lambda p: p.name,
     )
     if older_than is None:
@@ -153,5 +170,8 @@ def rotate_snapshots(
     budget = len(regular) - keep if keep is not None else len(candidates)
     doomed = candidates[: max(0, budget)]
     for d in doomed:
-        shutil.rmtree(d)
+        if d.is_dir():
+            shutil.rmtree(d)
+        else:
+            d.unlink()
     return doomed

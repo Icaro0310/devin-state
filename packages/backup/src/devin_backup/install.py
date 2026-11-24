@@ -21,16 +21,19 @@ from devin_install_scheduler import install_daily as _install_daily
 JOB_NAME = "devin-backup-daily"
 
 
-def _create_command(out_dir: str | None) -> str:
+def _create_command(out_dir: str | None, compress: bool = False) -> str:
     cmd = f'"{sys.executable}" -m devin_backup.cli create'
     if out_dir:
         cmd += f' --out "{out_dir}"'
+    if compress:
+        cmd += " --compress"
     return cmd
 
 
 def install_daily(out_dir: str | None = None,
                   config_dir: str | None = None,
-                  backend: str = "auto") -> dict:
+                  backend: str = "auto",
+                  compress: bool = False) -> dict:
     """Register the daily backup job; returns what was done."""
-    return _install_daily(JOB_NAME, _create_command(out_dir),
+    return _install_daily(JOB_NAME, _create_command(out_dir, compress),
                           config_dir=config_dir, backend=backend)
