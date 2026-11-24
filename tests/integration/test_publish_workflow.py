@@ -187,3 +187,16 @@ def test_gate_passes_for_scriptless_package(tmp_path):
         capture_output=True, text=True, cwd=tmp_path, check=False,
     )
     assert res.returncode == 0, res.stderr
+
+
+def test_verify_gate_pin_is_current():
+    """The verify job calls the reusable ``verify-wheel-version`` gate
+    in devin-powerups by commit SHA. Pin the repin (7db1276 → 9249702)
+    so a silent revert to the older validator — or a missing update —
+    fails here instead of shipping with a stale twine check."""
+    text = WORKFLOW.read_text(encoding="utf-8")
+    assert (
+        "uses: Icaro0310/devin-powerups/.github/workflows/"
+        "verify-wheel-version.yml@"
+        "9249702da6820ca14a1d15c7e80982dd72fdd339"
+    ) in text
