@@ -1,7 +1,7 @@
 """Static pins for .github/workflows/auto-approve.yml.
 
 The caller is thin by design: it triggers the reusable ``pr-approve``
-gate in devin-powerups. These checks pin the v1.16 caller contract —
+gate in devin-powerups. These checks pin the v1.17 caller contract —
 the gate pin, the ``pull_request_review_comment`` trigger that lets a
 fix-commit reply re-run the gate without waiting for a push, and the
 scoped permissions — without requiring PyYAML.
@@ -22,13 +22,13 @@ def _text() -> str:
     return WORKFLOW.read_text(encoding="utf-8")
 
 
-def test_gate_pin_is_v1_16():
-    """The v1.16 gate splits the auto-merge arm into a dedicated
+def test_gate_pin_is_v1_17():
+    """The v1.17 gate splits the auto-merge arm into a dedicated
     ``arm-auto-merge`` job so approve runs read-only again; the arm
     still requires ``contents: write`` in the caller. A silent repin
     back to an older tag must fail here."""
     text = _text()
-    assert GATE_USES + "v1.16" in text
+    assert GATE_USES + "v1.17" in text
 
 
 def test_review_comment_trigger_re_evaluates_gate():
@@ -40,7 +40,7 @@ def test_review_comment_trigger_re_evaluates_gate():
 
 
 def test_gate_permissions_allow_auto_merge_arm():
-    """v1.16 arms ``gh pr merge --auto`` from the dedicated
+    """v1.17 arms ``gh pr merge --auto`` from the dedicated
     ``arm-auto-merge`` job once checks pass — the caller must grant
     ``contents: write`` at workflow level AND on the approve job, or
     the arm warns and skips the merge."""
@@ -54,7 +54,7 @@ def test_gate_permissions_allow_auto_merge_arm():
 
 
 def test_gate_permissions_grant_statuses_read():
-    """pr-approve.yml@v1.16 declares ``statuses: read`` internally and the
+    """pr-approve.yml@v1.17 declares ``statuses: read`` internally and the
     judge gate + arm re-verification read the ``Devin Review`` /
     ``devin-judge/review`` commit statuses through it. ``workflow_call``
     caps the reusable's permissions by the caller's, so the caller must
