@@ -17,8 +17,10 @@ Safety model:
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sqlite3
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
@@ -96,6 +98,28 @@ def _schema_warnings(entries: list[tuple[dict, Path]]) -> list[str]:
     return warnings
 
 
+def _pre_restore_parent(snapshot_dir: Path, target_dir: Path) -> Path:
+    """Where the ``pre-restore-<ts>/`` safety backup lands.
+
+    Normally next to the snapshots. Two cases get the target's parent
+    instead (the safety copy must be persistent and writable — never
+    inside a temp dir that a context manager removes later):
+
+    - the snapshot was materialized into the system temp (archive on
+      read-only media), so ``snapshot_dir.parent`` *is* the temp root;
+    - the snapshots dir itself is not writable.
+    """
+    parent = snapshot_dir.parent
+    tmp_root = Path(tempfile.gettempdir()).resolve()
+    try:
+        resolved = parent.resolve()
+    except OSError:
+        resolved = parent
+    if resolved == tmp_root or not os.access(parent, os.W_OK):
+        return target_dir.parent
+    return parent
+
+
 def _pre_restore_backup(
     snapshot_dir: Path,
     target_dir: Path,
@@ -103,7 +127,7 @@ def _pre_restore_backup(
     existing: list[tuple[dict, Path]],
 ) -> Path:
     """Copy files about to be overwritten into ``pre-restore-<ts>/``."""
-    backups_dir = snapshot_dir.parent
+    backups_dir = _pre_restore_parent(snapshot_dir, target_dir)
     pre_dir = _unique_dir(
         backups_dir, PRE_RESTORE_PREFIX + snapshot_timestamp()
     )

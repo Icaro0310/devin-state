@@ -49,9 +49,42 @@ def _is_snapshot_dir(path: Path) -> bool:
     )
 
 
-def _is_snapshot(path: Path) -> bool:
-    """Timestamp-named snapshot dir *or* ``.tar.*`` archive file."""
-    return _is_snapshot_dir(path) or archive.is_archive(path)
+def _snapshot_points(backups_dir: Path) -> list[list[Path]]:
+    """Recovery points (oldest first), each a list of backing paths.
+
+    A snapshot dir and a ``.tar.*`` archive with the same stem are one
+    recovery point — ``compress --keep`` leaves both — unless their
+    manifests differ (same name, different content → separate points).
+
+    Archives must carry a readable manifest to be counted *or* deleted —
+    a file that only looks like one is left alone, same rule
+    ``list_snapshots`` applies.
+    """
+    points: list[list[Path]] = []
+    manifests: list[dict | None] = []
+    groups: dict[str, list[int]] = {}
+    for d in sorted(backups_dir.iterdir(), key=archive.stem_name):
+        if _is_snapshot_dir(d):
+            manifest = _read_manifest(d)
+        elif archive.is_archive(d):
+            try:
+                manifest = archive.load_manifest_file(d)
+            except SnapshotError:
+                continue
+        else:
+            continue
+        stem = archive.stem_name(d)
+        for i in groups.get(stem, []):
+            if manifests[i] is None or manifest is None or manifests[i] == manifest:
+                points[i].append(d)
+                if manifests[i] is None:
+                    manifests[i] = manifest
+                break
+        else:
+            groups.setdefault(stem, []).append(len(points))
+            points.append([d])
+            manifests.append(manifest)
+    return points
 
 
 def _is_pre_restore_dir(path: Path) -> bool:
@@ -92,7 +125,9 @@ def list_snapshots(backups_dir: str | Path) -> list[dict]:
     if not backups_dir.is_dir():
         return []
     out = []
-    for child in sorted(backups_dir.iterdir(), key=lambda p: p.name, reverse=True):
+    for child in sorted(
+        backups_dir.iterdir(), key=archive.stem_name, reverse=True
+    ):
         compressed = False
         if archive.is_archive(child):
             try:
@@ -157,18 +192,21 @@ def rotate_snapshots(
     if not backups_dir.is_dir():
         return []
 
-    regular = sorted(
-        (d for d in backups_dir.iterdir() if _is_snapshot(d)),
-        key=lambda p: p.name,
-    )
+    regular = _snapshot_points(backups_dir)
     if older_than is None:
         candidates = regular
     else:
         ref = now or datetime.now(timezone.utc)
         cutoff = ref.timestamp() - older_than.total_seconds()
-        candidates = [d for d in regular if d.stat().st_mtime < cutoff]
+        # a point's age is its oldest representation — compressing an old
+        # snapshot does not rejuvenate it
+        candidates = [
+            pt
+            for pt in regular
+            if min(d.stat().st_mtime for d in pt) < cutoff
+        ]
     budget = len(regular) - keep if keep is not None else len(candidates)
-    doomed = candidates[: max(0, budget)]
+    doomed = [d for pt in candidates[: max(0, budget)] for d in pt]
     for d in doomed:
         if d.is_dir():
             shutil.rmtree(d)

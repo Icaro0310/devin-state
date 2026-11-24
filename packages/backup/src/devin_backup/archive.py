@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 import tarfile
 import tempfile
@@ -77,6 +78,18 @@ def is_archive(path: str | Path) -> bool:
         if p.name.endswith(suf):
             return SNAPSHOT_NAME_RE.match(p.name[: -len(suf)]) is not None
     return False
+
+
+def stem_name(path: str | Path) -> str:
+    """Snapshot name without any ``.tar.*`` suffix — the shared ordering
+    key. ``<ts>-2`` sorts after the bare ``<ts>``, whereas comparing full
+    archive names would order it *before* (``-`` < ``.``) and treat the
+    newer same-second snapshot as the older one."""
+    name = Path(path).name
+    for suf in ARCHIVE_SUFFIXES:
+        if name.endswith(suf):
+            return name[: -len(suf)]
+    return name
 
 
 @contextmanager
@@ -145,6 +158,11 @@ def write_archive(snap_dir: str | Path, dest: str | Path | None = None) -> Path:
     if out.exists():
         raise SnapshotError(f"{out}: already exists — refusing to overwrite")
     tmp = out.with_name(out.name + ".tmp")
+    # Snapshots can carry credentials — create the temp file 0600 upfront
+    # so the archive is never world-readable mid-write (umask 022 would
+    # otherwise leave it open until the post-rename chmod).
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    os.close(fd)
     try:
         with _open_writer(tmp, suffix) as tf:
             for arcname, fs_path in _iter_members(snap_dir):
@@ -227,12 +245,11 @@ def _extract_into(archive_path: Path, dest: Path) -> None:
                     src = tf.extractfile(member)
                     if src is None:
                         continue
-                    with open(target, "wb") as out:
+                    fd = os.open(
+                        target, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600
+                    )
+                    with os.fdopen(fd, "wb") as out:
                         shutil.copyfileobj(src, out, length=1 << 20)
-                    try:
-                        target.chmod(0o600)
-                    except OSError:
-                        pass
                 # other member types (links, devices) are skipped
     except SnapshotError:
         shutil.rmtree(dest, ignore_errors=True)
@@ -255,6 +272,10 @@ def extract_archive(archive_path: str | Path, dest_parent: str | Path) -> Path:
             stem = stem[: -len(suf)]
             break
     dest = Path(dest_parent) / stem
+    if dest.exists():
+        raise SnapshotError(
+            f"{dest}: already exists — refusing to overwrite"
+        )
     _extract_into(archive_path, dest)
     return dest
 
@@ -268,15 +289,19 @@ def materialized(path: str | Path) -> Iterator[Path]:
     yielded as the snapshot root — so ``snapshot_dir.parent`` stays the
     real backups dir and ``restore``'s ``pre-restore-*`` safety backups
     land next to the snapshots instead of inside the temp dir (which is
-    removed on exit).
+    removed on exit). On read-only media the parent is not writable —
+    extraction then falls back to a private dir under the system temp and
+    ``restore`` writes the safety backup next to the restore target
+    instead.
     """
     p = Path(path).expanduser()
     if not is_archive(p):
         yield p
         return
     parent = p.resolve().parent
+    tmp_parent = parent if os.access(parent, os.W_OK) else None
     with tempfile.TemporaryDirectory(
-        prefix=".extract-", dir=parent, ignore_cleanup_errors=True
+        prefix=".extract-", dir=tmp_parent, ignore_cleanup_errors=True
     ) as td:
         _extract_into(p, Path(td))
         yield Path(td)
