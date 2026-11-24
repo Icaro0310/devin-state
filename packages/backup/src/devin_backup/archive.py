@@ -31,6 +31,7 @@ from devin_backup.snapshot import (
     SNAPSHOT_NAME_RE,
     SnapshotError,
 )
+from devin_backup.stores import SQLITE_SIDECAR_SUFFIXES
 
 ARCHIVE_SUFFIXES = (".tar.zst", ".tar.gz")
 _ZSTD_LEVEL = 19
@@ -132,18 +133,51 @@ def _open_reader(path: Path):
             yield tf
 
 
+def _is_sqlite_sidecar(path: Path) -> bool:
+    """``-wal``/``-shm``/``-journal`` companions of a ``.db``/``.vscdb``.
+
+    Snapshot dirs can carry these as runtime leftovers from opening the
+    copied WAL-mode databases — they are never manifest content (store
+    discovery skips them) and hold no data of their own.
+    """
+    return path.name.lower().endswith(tuple(SQLITE_SIDECAR_SUFFIXES))
+
+
+def _manifest_paths(snap_dir: Path) -> set[str]:
+    """``snapshot_path`` values the manifest requires in the archive."""
+    try:
+        manifest = json.loads(
+            (snap_dir / MANIFEST_NAME).read_text(encoding="utf-8")
+        )
+    except (OSError, json.JSONDecodeError):
+        return set()
+    if not isinstance(manifest, dict):
+        return set()
+    return {
+        e.get("snapshot_path") or e.get("path")
+        for e in manifest.get("files", [])
+        if isinstance(e, dict) and (e.get("snapshot_path") or e.get("path"))
+    }
+
+
 def _iter_members(snap_dir: Path):
     """(arcname, fs_path) pairs: manifest.json first, then sorted files."""
-    files = [
-        p for p in snap_dir.rglob("*")
-        if p.is_file() and p.name != MANIFEST_NAME
-    ]
-    files.sort(key=lambda p: p.relative_to(snap_dir).as_posix())
+    keep = _manifest_paths(snap_dir)
+    files = []
+    for p in snap_dir.rglob("*"):
+        if not p.is_file() or p.name == MANIFEST_NAME:
+            continue
+        arcname = p.relative_to(snap_dir).as_posix()
+        # sidecars are leftovers, never content — unless the manifest
+        # explicitly lists the path (e.g. a .devin file named like one)
+        if arcname not in keep and _is_sqlite_sidecar(p):
+            continue
+        files.append((arcname, p))
+    files.sort(key=lambda t: t[0])
     manifest = snap_dir / MANIFEST_NAME
     if manifest.is_file():
         yield MANIFEST_NAME, manifest
-    for p in files:
-        yield p.relative_to(snap_dir).as_posix(), p
+    yield from files
 
 
 def write_archive(snap_dir: str | Path, dest: str | Path | None = None) -> Path:

@@ -36,6 +36,37 @@ def test_verify_archive_ok_and_manifest(data_dir, backups_dir):
     assert report["checked"] == len(load_manifest(snap)["files"])
 
 
+def test_compress_ignores_sqlite_sidecar_leftovers(data_dir, backups_dir):
+    """Real snapshot dirs carry ``-wal``/``-shm``/``-journal`` leftovers
+    from opening the copied WAL-mode databases — they are not manifest
+    content and must not fail archive self-verification."""
+    snap = _make_snapshot(data_dir, backups_dir)
+    for entry in load_manifest(snap)["files"]:
+        if entry["kind"] == "sqlite":
+            sp = snap / entry["snapshot_path"]
+            sp.with_name(sp.name + "-wal").write_bytes(b"")
+            sp.with_name(sp.name + "-shm").write_bytes(b"\x00" * 128)
+    out = archive.compress_snapshot_dir(snap)
+    report = archive.verify_archive(out)
+    assert report["ok"], report["results"]
+
+
+def test_compress_keeps_manifest_listed_sidecar_named_file(
+    data_dir, backups_dir
+):
+    """A manifest-listed file whose name looks like a sqlite sidecar
+    (``.devin/.db-WAL`` — dotfile, no suffix) must still be archived:
+    the sidecar filter only applies to unlisted leftovers."""
+    (data_dir / ".devin" / ".db-WAL").write_bytes(b"hidden-config")
+    snap = _make_snapshot(data_dir, backups_dir)
+    out = archive.compress_snapshot_dir(snap)
+    report = archive.verify_archive(out)
+    assert report["ok"], report["results"]
+    with archive._open_reader(out) as tf:
+        names = [m.name for m in tf]
+    assert ".devin/.db-WAL" in names
+
+
 def test_verify_archive_detects_corruption(data_dir, backups_dir):
     snap = _make_snapshot(data_dir, backups_dir, compress=True)
     data = bytearray(snap.read_bytes())
