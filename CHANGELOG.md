@@ -29,6 +29,8 @@
   contract.
 - **CI** — `Icaro0310/devin-powerups/.github/workflows/verify-wheel-version.yml`
   repin from `7db1276` to `9249702` in `pypi-publish.yml` (dependabot).
+- **CI** — `docker-publish.yml` `sigstore/cosign-installer` bumped
+  4.1.2 → 4.1.3 (Dependabot PR #117); signing path unchanged.
 - **devin-redact** — adversarial secret-detection hardening: new
   `connection_uri`/`webhook_url` secret categories, expanded token
   prefixes (GitLab/npm/PyPI/SendGrid/Square/Shopify/…), UTF-16 and
