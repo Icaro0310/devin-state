@@ -29,6 +29,36 @@ def test_discover_stores_finds_all(data_dir):
     assert kinds[".devin/config.json"] == "file"
 
 
+def test_discover_stores_skips_genuine_pre_restore_backup(data_dir):
+    """A ``pre-restore-<ts>`` dir with a ``kind: pre-restore`` manifest
+    inside the data root is a restore artifact — its stale databases
+    must not be discovered as live stores."""
+    pre = data_dir / "pre-restore-20260101T000000Z"
+    (pre / "cli").mkdir(parents=True)
+    (pre / "manifest.json").write_text(
+        json.dumps({"kind": "pre-restore", "files": []}), encoding="utf-8"
+    )
+    with sqlite3.connect(pre / "cli" / "sessions.db") as conn:
+        conn.execute("CREATE TABLE t (v TEXT)")
+    rels = {s.rel_path for s in discover_stores(data_dir)}
+    assert "cli/sessions.db" in rels
+    assert not any(r.startswith("pre-restore-") for r in rels)
+
+
+def test_discover_stores_keeps_user_dir_sharing_pre_restore_prefix(
+    data_dir,
+):
+    """A user folder that merely starts with ``pre-restore-`` but lacks
+    the timestamped name/manifest shape is live data — it must be
+    discovered, not silently skipped."""
+    user_db = data_dir / "pre-restore-validation" / "state.vscdb"
+    user_db.parent.mkdir(parents=True)
+    with sqlite3.connect(user_db) as conn:
+        conn.execute("CREATE TABLE t (v TEXT)")
+    rels = {s.rel_path for s in discover_stores(data_dir)}
+    assert "pre-restore-validation/state.vscdb" in rels
+
+
 def test_snapshot_copies_all_stores_with_manifest(data_dir, backups_dir):
     snap = snapshot.create_snapshot(data_dir, backups_dir)
     manifest = json.loads((snap / "manifest.json").read_text(encoding="utf-8"))

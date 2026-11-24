@@ -27,10 +27,14 @@ from urllib.parse import quote
 from devin_internals.schema import SchemaError, detect_schema_version
 
 from devin_backup import __version__, identity
-from devin_backup.stores import DataDirError, Store, discover_stores
+from devin_backup.stores import (
+    MANIFEST_NAME,
+    DataDirError,
+    Store,
+    discover_stores,
+)
 
 MANIFEST_VERSION = 2
-MANIFEST_NAME = "manifest.json"
 SNAPSHOT_NAME_RE = re.compile(r"^\d{8}T\d{6}Z(-\d+)?$")
 
 # Stores known to carry credentials / PII — skipped by ``--exclude-secrets``.
