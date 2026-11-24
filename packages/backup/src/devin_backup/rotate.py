@@ -99,9 +99,9 @@ def _manifest_kind(path: Path) -> str | None:
         manifest = json.loads(
             (path / MANIFEST_NAME).read_text(encoding="utf-8")
         )
-        return manifest.get("kind")
     except (OSError, json.JSONDecodeError):
         return None
+    return manifest.get("kind") if isinstance(manifest, dict) else None
 
 
 def _read_manifest(path: Path) -> dict | None:
@@ -110,6 +110,8 @@ def _read_manifest(path: Path) -> dict | None:
             (path / MANIFEST_NAME).read_text(encoding="utf-8")
         )
     except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(manifest, dict):
         return None
     return manifest if isinstance(manifest.get("files"), list) else None
 

@@ -101,13 +101,15 @@ def _schema_warnings(entries: list[tuple[dict, Path]]) -> list[str]:
 def _pre_restore_parent(snapshot_dir: Path, target_dir: Path) -> Path:
     """Where the ``pre-restore-<ts>/`` safety backup lands.
 
-    Normally next to the snapshots. Two cases get the target's parent
-    instead (the safety copy must be persistent and writable — never
-    inside a temp dir that a context manager removes later):
+    Normally next to the snapshots. The safety copy must be persistent
+    and writable — never inside a temp dir that a context manager
+    removes later — so fall back, in order:
 
-    - the snapshot was materialized into the system temp (archive on
-      read-only media), so ``snapshot_dir.parent`` *is* the temp root;
-    - the snapshots dir itself is not writable.
+    1. the target's parent (snapshot materialized into the system temp
+       on read-only media, or the snapshots dir itself not writable);
+    2. inside the target itself (target's parent not writable either —
+       e.g. ``--to /mnt/devin`` where ``/mnt`` is protected but the
+       volume mounted there is writable).
     """
     parent = snapshot_dir.parent
     tmp_root = Path(tempfile.gettempdir()).resolve()
@@ -115,9 +117,11 @@ def _pre_restore_parent(snapshot_dir: Path, target_dir: Path) -> Path:
         resolved = parent.resolve()
     except OSError:
         resolved = parent
-    if resolved == tmp_root or not os.access(parent, os.W_OK):
+    if resolved != tmp_root and os.access(parent, os.W_OK):
+        return parent
+    if os.access(target_dir.parent, os.W_OK):
         return target_dir.parent
-    return parent
+    return target_dir
 
 
 def _pre_restore_backup(

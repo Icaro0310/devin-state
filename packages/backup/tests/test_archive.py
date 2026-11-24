@@ -167,9 +167,12 @@ def test_compress_cmd_rejects_nontimestamp(data_dir, backups_dir, tmp_path):
 def test_write_archive_creates_private_file(data_dir, backups_dir):
     """The finished archive (and the temp file it renames from) is 0600 —
     snapshots can carry credentials."""
+    import os
+
     snap = _make_snapshot(data_dir, backups_dir)
     out = archive.write_archive(snap)
-    assert out.stat().st_mode & 0o777 == 0o600
+    if os.name == "posix":
+        assert out.stat().st_mode & 0o777 == 0o600
 
 
 def test_extract_archive_refuses_existing_dest(
@@ -228,5 +231,40 @@ def test_restore_from_readonly_media_backups_land_by_target(
         backups_dir.chmod(0o755)
     pre = Path(second["pre_restore_backup"])
     assert pre.parent == target.parent
+    assert pre.is_dir()
+    assert (pre / "manifest.json").is_file()
+
+
+def test_restore_pre_restore_inside_target_when_parents_ro(
+    data_dir, backups_dir, tmp_path
+):
+    """Chain: snapshot parent unwritable → target parent unwritable →
+    the safety backup lands *inside* the writable target."""
+    import os
+    from pathlib import Path
+
+    ro_backups = tmp_path / "ro-backups"
+    ro_backups.mkdir()
+    snap = _make_snapshot(data_dir, ro_backups, compress=True)
+    target = tmp_path / "tgt"
+    target.mkdir()  # the writable mount point exists before parents lock
+    ro_backups.chmod(0o555)
+    tmp_path.chmod(0o555)
+    try:
+        if os.access(ro_backups, os.W_OK) or os.access(tmp_path, os.W_OK):
+            pytest.skip("parents stay writable (e.g. running as root)")
+        with archive.materialized(snap) as snap_dir:
+            first = restore.restore_snapshot(
+                snap_dir, target, dry_run=False
+            )
+            assert first["pre_restore_backup"] is None
+            second = restore.restore_snapshot(
+                snap_dir, target, dry_run=False
+            )
+    finally:
+        tmp_path.chmod(0o755)
+        ro_backups.chmod(0o755)
+    pre = Path(second["pre_restore_backup"])
+    assert pre.parent == target
     assert pre.is_dir()
     assert (pre / "manifest.json").is_file()

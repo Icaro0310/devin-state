@@ -94,7 +94,7 @@ devin-backup rotate  [--keep N] [--older-than <dur>] --yes
   file came from; old v1 snapshots remain readable. `--compress` stores the
   snapshot as a single `<name>.tar.zst` archive (or `.tar.gz` when
   `compression.zstd` is unavailable — Python < 3.14); the manifest stays
-  the first tar member so `list`/`verify`/`preflight` read it without a
+  the first tar member so `list`/`preflight` read it without a
   full extraction.
 - `compress` converts an existing snapshot dir in place (verifies the
   archive, then removes the dir); `--keep` leaves the dir alongside the

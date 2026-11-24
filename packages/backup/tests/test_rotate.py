@@ -256,15 +256,15 @@ def test_rotate_differing_manifest_same_stem_counts_twice(
     newer = snapshot.create_snapshot(
         data_dir, backups_dir, now=T0 + timedelta(hours=1)
     )
-    # 3 distinct recovery points → keep=2 drops only the oldest point,
-    # which is ambiguous between the stem twins; both still exist or
-    # exactly one of the twins is gone — the invariant is that `newer`
-    # and at least one representation survive.
+    # 3 distinct recovery points → keep=2 drops exactly one path: one of
+    # the same-stem twins. If the pair were wrongly merged into a single
+    # point there would be only 2 points and zero deletions.
     deleted = rotate.rotate_snapshots(backups_dir, keep=2)
+    assert len(deleted) == 1
+    assert deleted[0].name in {snap.name, arc.name}
     assert newer.is_dir()
     surviving = {p.name for p in (snap, arc) if p.exists()}
-    assert surviving
-    assert len(deleted) <= 2
+    assert len(surviving) == 1
 
 
 def test_list_snapshots_orders_same_second_archives(
@@ -278,3 +278,36 @@ def test_list_snapshots_orders_same_second_archives(
     )
     names = [s["name"] for s in rotate.list_snapshots(backups_dir)]
     assert names == [second.name, first.name]
+
+
+def test_rotate_skips_archive_with_nonobject_manifest(
+    data_dir, backups_dir
+):
+    """A ``.tar.*`` whose manifest.json is valid JSON but not an object
+    (``[]``) must not crash rotation — it is skipped like any other
+    unidentifiable file."""
+    import io
+    import tarfile
+
+    snaps = _make_snapshots(data_dir, backups_dir, 2)
+    bad = backups_dir / "20990101T000000Z.tar.gz"
+    payload = b"[]"
+    with tarfile.open(bad, "w:gz") as tf:
+        ti = tarfile.TarInfo("manifest.json")
+        ti.size = len(payload)
+        tf.addfile(ti, io.BytesIO(payload))
+    deleted = rotate.rotate_snapshots(backups_dir, keep=1)
+    assert [p.name for p in deleted] == [snaps[0].name]
+    assert snaps[1].is_dir()
+    assert bad.is_file()
+
+
+def test_rotate_dir_with_nonobject_manifest(data_dir, backups_dir):
+    """A snapshot dir whose manifest.json is ``[]`` keeps the dir-only
+    semantics: it counts for rotation but must not crash."""
+    _make_snapshots(data_dir, backups_dir, 2)
+    weird = backups_dir / "20990101T000000Z"
+    weird.mkdir()
+    (weird / "manifest.json").write_text("[]", encoding="utf-8")
+    deleted = rotate.rotate_snapshots(backups_dir, keep=1)
+    assert len(deleted) == 2

@@ -179,6 +179,8 @@ def write_archive(snap_dir: str | Path, dest: str | Path | None = None) -> Path:
 
 
 def _validate_manifest(manifest: dict, source: str) -> dict:
+    if not isinstance(manifest, dict):
+        raise SnapshotError(f"{source}: manifest is not a JSON object")
     if manifest.get("manifest_version") not in {1, MANIFEST_VERSION}:
         raise SnapshotError(
             f"{source}: unsupported manifest_version "
