@@ -45,6 +45,9 @@ from .semantic import analyze_tool_call_json
 _DB_SUFFIXES = {".db", ".sqlite", ".sqlite3"}
 _SQLITE_MAGIC = b"SQLite format 3\x00"
 _SKIP_DIRS = {".git", ".hg", ".svn", "node_modules", "__pycache__", ".venv", "venv"}
+# Generated packaging metadata — never source, and its long-description
+# prose trips env_assignment on doc text (issue #108 residual FP).
+_SKIP_DIR_SUFFIXES = (".egg-info", ".dist-info")
 _BINARY_SNIFF_BYTES = 8192
 _DB_SIDECAR_SUFFIXES = ("-wal", "-shm", "-journal")
 _REDACTED_TAG = "<REDACTED:"
@@ -1174,7 +1177,11 @@ def _iter_files(paths: list[Path]) -> list[Path]:
     for p in paths:
         if p.is_dir():
             for root, dirs, names in os.walk(p):
-                dirs[:] = sorted(d for d in dirs if d not in _SKIP_DIRS)
+                dirs[:] = sorted(
+                    d
+                    for d in dirs
+                    if d not in _SKIP_DIRS and not d.endswith(_SKIP_DIR_SUFFIXES)
+                )
                 for name in sorted(names):
                     files.add(Path(root) / name)
         elif p.is_file():
