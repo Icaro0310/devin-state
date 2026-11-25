@@ -22,9 +22,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from devin_internals.parsers import AcpMessagesStore, SessionsStore
-from devin_internals.schema import SchemaError
+from devin_internals.parsers import SessionsStore
 
+from devin_janitor.cleanup import _SIZE_QUERIES, _connect_ro
 from devin_janitor.paths import DevinPaths
 
 _MS = 1000.0
@@ -110,6 +110,35 @@ def _managed_of(metadata: str | None) -> str | None:
     return tag if isinstance(tag, str) and tag else None
 
 
+def _acp_payload_text(payload: str) -> str:
+    """Non-empty user text from one acp-messages payload, else ``""``.
+
+    Prefers the ``_meta`` full-message field, else joins the content-block
+    texts — same decoding as ``_acp_first_user_text``.
+    """
+    try:
+        data = json.loads(payload)
+    except (json.JSONDecodeError, TypeError):
+        return ""
+    if not isinstance(data, dict):
+        return ""
+    meta = data.get("_meta")
+    if isinstance(meta, dict):
+        msg = meta.get("cognition.ai/message")
+        if isinstance(msg, str) and msg.strip():
+            return msg
+    texts: list[str] = []
+    for block in data.get("content") or []:
+        if not isinstance(block, dict):
+            continue
+        inner = block.get("content")
+        if isinstance(inner, dict):
+            t = inner.get("text")
+            if isinstance(t, str):
+                texts.append(t)
+    return "".join(texts).strip()
+
+
 def _acp_first_user_text(messages: Iterable[Any]) -> str:
     """First ``user_message`` text from an acp-messages store.
 
@@ -121,29 +150,9 @@ def _acp_first_user_text(messages: Iterable[Any]) -> str:
     for m in messages:
         if "user" not in m.kind.lower():
             continue
-        try:
-            payload = json.loads(m.payload)
-        except (json.JSONDecodeError, TypeError):
-            continue
-        if not isinstance(payload, dict):
-            continue
-        meta = payload.get("_meta")
-        if isinstance(meta, dict):
-            msg = meta.get("cognition.ai/message")
-            if isinstance(msg, str) and msg.strip():
-                return msg
-        texts: list[str] = []
-        for block in payload.get("content") or []:
-            if not isinstance(block, dict):
-                continue
-            inner = block.get("content")
-            if isinstance(inner, dict):
-                t = inner.get("text")
-                if isinstance(t, str):
-                    texts.append(t)
-        joined = "".join(texts).strip()
-        if joined:
-            return joined
+        text = _acp_payload_text(m.payload)
+        if text:
+            return text
     return ""
 
 
@@ -159,56 +168,214 @@ def _gui_managed(meta: dict[str, str]) -> str | None:
     return _managed_of(meta.get("metadata"))
 
 
+def _walk_json_paths(node: Any, path_key: bool, found: set[str]) -> None:
+    if isinstance(node, dict):
+        for k, v in node.items():
+            _walk_json_paths(
+                v, path_key or bool(_PATH_KEY_RE.search(str(k))), found
+            )
+    elif isinstance(node, list):
+        for v in node:
+            _walk_json_paths(v, path_key, found)
+    elif isinstance(node, str) and path_key and _PATH_VALUE_RE.search(node):
+        found.add(node)
+
+
+def _walk_paths(raw: str | None, found: set[str]) -> None:
+    if not raw:
+        return
+    try:
+        node = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return
+    _walk_json_paths(node, False, found)
+
+
 def _count_files_touched(tool_jsons: Iterable[str | None]) -> int:
     """Distinct path-like values found in tool-call payloads (heuristic)."""
     found: set[str] = set()
-
-    def walk(node: Any, path_key: bool) -> None:
-        if isinstance(node, dict):
-            for k, v in node.items():
-                walk(v, path_key or bool(_PATH_KEY_RE.search(str(k))))
-        elif isinstance(node, list):
-            for v in node:
-                walk(v, path_key)
-        elif isinstance(node, str) and path_key and _PATH_VALUE_RE.search(node):
-            found.add(node)
-
     for raw in tool_jsons:
-        if not raw:
-            continue
-        try:
-            walk(json.loads(raw), False)
-        except (json.JSONDecodeError, TypeError):
-            continue
+        _walk_paths(raw, found)
     return len(found)
 
 
-def _cli_rows(store: SessionsStore) -> list[SessionRow]:
+# ``_role_of`` as a SQL expression over ``chat_message``: the first of the
+# role/type/kind/author keys holding a TEXT value — same key priority and
+# same "user"/"human" substrings as the Python version. One GROUP BY pass
+# replaces the per-session queries that used to pull every chat payload
+# into Python just to count roles.
+_ROLE_VALUE_SQL = (
+    "CASE"
+    " WHEN json_type(chat_message,'$.role')='text'"
+    " THEN json_extract(chat_message,'$.role')"
+    " WHEN json_type(chat_message,'$.type')='text'"
+    " THEN json_extract(chat_message,'$.type')"
+    " WHEN json_type(chat_message,'$.kind')='text'"
+    " THEN json_extract(chat_message,'$.kind')"
+    " WHEN json_type(chat_message,'$.author')='text'"
+    " THEN json_extract(chat_message,'$.author')"
+    " END"
+)
+_IS_USER_SQL = (
+    f"(instr(lower(COALESCE({_ROLE_VALUE_SQL}, '')), 'user') > 0"
+    f" OR instr(lower(COALESCE({_ROLE_VALUE_SQL}, '')), 'human') > 0)"
+)
+
+
+@dataclass(frozen=True)
+class SessionsDbScan:
+    """Single-pass aggregates over a ``sessions.db``.
+
+    ``load_inventory`` builds one (or reuses a caller-provided one) and the
+    space report derives byte estimates + orphan counts from it — one scan
+    over the payload tables instead of three.
+    """
+
+    session_ids: frozenset[str]
+    # message_nodes: rows, payload bytes and user-role rows per session
+    node_count: dict[str, int]
+    node_bytes: dict[str, int]
+    user_msgs: dict[str, int]
+    # tool_call_state: rows, payload bytes, files_touched per session
+    tool_count: dict[str, int]
+    tool_bytes: dict[str, int]
+    files_touched: dict[str, int]
+    # remaining _SIZE_QUERIES tables: table -> sid -> (rows, bytes)
+    other_tables: dict[str, dict[str, tuple[int, int]]]
+
+
+def scan_sessions_db(con: sqlite3.Connection) -> SessionsDbScan:
+    """Aggregate every per-session stat in one pass per table.
+
+    ``message_nodes`` role counting runs as ``json_extract`` inside the
+    GROUP BY — C-side parsing that stops at the early ``role`` key instead
+    of materialising the whole payload column into Python. A malformed
+    ``chat_message`` aborts the query (``malformed JSON``); the fallback
+    then replays the old exact Python parse so such a store is still
+    counted correctly.
+    """
+    session_ids = {
+        str(r[0]) for r in con.execute("SELECT id FROM sessions")
+    }
+    node_count: dict[str, int] = {}
+    node_bytes: dict[str, int] = {}
+    user_msgs: dict[str, int] = {}
+    try:
+        for sid, n, b, u in con.execute(
+            f"SELECT session_id, COUNT(*),"
+            f" COALESCE(SUM(LENGTH(chat_message)), 0),"
+            f" COALESCE(SUM({_IS_USER_SQL}), 0)"
+            f" FROM message_nodes GROUP BY session_id"
+        ):
+            sid = str(sid)
+            node_count[sid] = int(n or 0)
+            node_bytes[sid] = int(b or 0)
+            user_msgs[sid] = int(u or 0)
+    except sqlite3.Error:
+        # fallback: exact Python role parse, one pass, same semantics
+        node_count.clear()
+        node_bytes.clear()
+        user_msgs.clear()
+        for sid, raw in con.execute(
+            "SELECT session_id, chat_message FROM message_nodes"
+        ):
+            sid = str(sid)
+            node_count[sid] = node_count.get(sid, 0) + 1
+            node_bytes[sid] = node_bytes.get(sid, 0) + len(raw or "")
+            try:
+                payload = json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                payload = raw
+            if _role_of(payload) == "user":
+                user_msgs[sid] = user_msgs.get(sid, 0) + 1
+
+    tool_count: dict[str, int] = {}
+    tool_bytes: dict[str, int] = {}
+    file_sets: dict[str, set[str]] = {}
+    try:
+        for sid, j1, j2 in con.execute(
+            "SELECT session_id, tool_call_json, tool_call_update_json"
+            " FROM tool_call_state"
+        ):
+            sid = str(sid)
+            tool_count[sid] = tool_count.get(sid, 0) + 1
+            tool_bytes[sid] = (
+                tool_bytes.get(sid, 0)
+                + len(j1 or "")
+                + len(j2 or "")
+            )
+            found = file_sets.setdefault(sid, set())
+            _walk_paths(j1, found)
+            _walk_paths(j2, found)
+    except sqlite3.Error:
+        pass  # table absent in older schemas — zero tools everywhere
+    files_touched = {sid: len(s) for sid, s in file_sets.items()}
+
+    other_tables: dict[str, dict[str, tuple[int, int]]] = {}
+    for table, expr in _SIZE_QUERIES:
+        if table in ("message_nodes", "tool_call_state"):
+            continue  # already covered by the dedicated passes above
+        try:
+            other_tables[table] = {
+                str(sid): (int(n or 0), int(b or 0))
+                for sid, n, b in con.execute(
+                    f"SELECT session_id, COUNT(*),"
+                    f" COALESCE(SUM({expr}), 0)"
+                    f" FROM {table} GROUP BY session_id"
+                )
+            }
+        except sqlite3.Error:
+            continue  # absent in older schemas — same as the estimators
+    return SessionsDbScan(
+        session_ids=frozenset(session_ids),
+        node_count=node_count,
+        node_bytes=node_bytes,
+        user_msgs=user_msgs,
+        tool_count=tool_count,
+        tool_bytes=tool_bytes,
+        files_touched=files_touched,
+        other_tables=other_tables,
+    )
+
+
+def _first_user_prompt(
+    con: sqlite3.Connection, session_id: str
+) -> str:
+    """First non-empty ``_text_of`` across a session's user-role nodes.
+
+    Reads only the user payloads (one early-breaking pass in ``node_id``
+    order) — the aggregate scan already established there is at least one.
+    """
+    try:
+        cur = con.execute(
+            f"SELECT chat_message FROM message_nodes"
+            f" WHERE session_id = ? AND {_IS_USER_SQL} ORDER BY node_id",
+            (session_id,),
+        )
+        for (raw,) in cur:
+            try:
+                payload = json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                payload = raw
+            if _role_of(payload) != "user":
+                continue
+            text = _text_of(payload)
+            if text:
+                return text
+    except sqlite3.Error:
+        pass
+    return ""
+
+
+def _cli_rows(
+    store: SessionsStore,
+    con: sqlite3.Connection,
+    scan: SessionsDbScan,
+) -> list[SessionRow]:
     rows = []
     for s in store.sessions():
-        nodes = store.message_nodes(s.id)
-        user_msgs = assistant_msgs = 0
-        prompt = ""
-        for n in nodes:
-            try:
-                payload = json.loads(n.chat_message)
-            except (json.JSONDecodeError, TypeError):
-                payload = n.chat_message
-            role = _role_of(payload)
-            if role == "user":
-                user_msgs += 1
-                if not prompt:
-                    prompt = _text_of(payload)
-            elif role == "assistant":
-                assistant_msgs += 1
-            else:
-                assistant_msgs += 1  # unknown role still proves activity
-
-        tool_states = store.tool_call_state(s.id)
-        files = _count_files_touched(
-            [t.tool_call_json for t in tool_states]
-            + [t.tool_call_update_json for t in tool_states]
-        )
+        user_msgs = scan.user_msgs.get(s.id, 0)
+        nodes = scan.node_count.get(s.id, 0)
         rows.append(
             SessionRow(
                 id=s.id,
@@ -220,10 +387,12 @@ def _cli_rows(store: SessionsStore) -> list[SessionRow]:
                     s.last_activity_at / _MS if s.last_activity_at else None
                 ),
                 user_msgs=user_msgs,
-                assistant_msgs=assistant_msgs,
-                tool_calls=len(tool_states),
-                files_touched=files,
-                prompt=prompt,
+                assistant_msgs=nodes - user_msgs,
+                tool_calls=scan.tool_count.get(s.id, 0),
+                files_touched=scan.files_touched.get(s.id, 0),
+                prompt=(
+                    _first_user_prompt(con, s.id) if user_msgs else ""
+                ),
                 managed=_managed_of(s.metadata),
             )
         )
@@ -238,11 +407,45 @@ def _gui_row(db_path: Path) -> SessionRow | None:
         return None
     sid = db_path.name.split(".db", 1)[0]
     try:
-        with AcpMessagesStore(db_path) as store:
-            meta = store.meta()
-            messages = store.messages()
-    except (SchemaError, sqlite3.Error, OSError):
+        con = _connect_ro(db_path)
+    except sqlite3.Error:
         return None
+    try:
+        tables = {
+            r[0]
+            for r in con.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+        if not {"meta", "messages"} <= tables:
+            return None  # not an acp-messages store (or unknown layout)
+        meta = {
+            str(k): v
+            for k, v in con.execute(
+                "SELECT key, value FROM meta ORDER BY key"
+            )
+        }
+        total, users, tools = con.execute(
+            "SELECT COUNT(*),"
+            " COALESCE(SUM(instr(lower(kind), 'user') > 0), 0),"
+            " COALESCE(SUM(instr(lower(kind), 'tool') > 0), 0)"
+            " FROM messages"
+        ).fetchone()
+        # first user payload with text — early break, no full table read
+        prompt = ""
+        cur = con.execute(
+            "SELECT payload FROM messages"
+            " WHERE instr(lower(kind), 'user') > 0 ORDER BY position"
+        )
+        for (payload,) in cur:
+            text = _acp_payload_text(payload)
+            if text:
+                prompt = text
+                break
+    except (sqlite3.Error, OSError):
+        return None
+    finally:
+        con.close()
 
     title = ""
     created = None
@@ -259,7 +462,6 @@ def _gui_row(db_path: Path) -> SessionRow | None:
         created /= _MS
 
     mtime = db_path.stat().st_mtime
-    user_msgs = sum(1 for m in messages if "user" in m.kind.lower())
     return SessionRow(
         id=sid,
         origin="gui",
@@ -267,23 +469,35 @@ def _gui_row(db_path: Path) -> SessionRow | None:
         project=str(meta.get("cwd", "")),
         created=created or mtime,
         last_activity=mtime,
-        user_msgs=user_msgs,
-        assistant_msgs=len(messages) - user_msgs,
-        tool_calls=sum(1 for m in messages if "tool" in m.kind.lower()),
-        prompt=_acp_first_user_text(messages),
+        user_msgs=int(users),
+        assistant_msgs=int(total) - int(users),
+        tool_calls=int(tools),
+        prompt=prompt,
         managed=_gui_managed(meta),
     )
 
 
-def load_inventory(paths: DevinPaths) -> list[SessionRow]:
-    """All sessions visible to the janitor, both stores merged by id."""
+def load_inventory(
+    paths: DevinPaths, *, scan: SessionsDbScan | None = None
+) -> list[SessionRow]:
+    """All sessions visible to the janitor, both stores merged by id.
+
+    ``scan`` lets the space report reuse one aggregate pass it already
+    built for the byte estimates; ``None`` builds it here.
+    """
     rows: list[SessionRow] = []
     seen: set[str] = set()
     if paths.sessions_db.is_file():
         with SessionsStore(paths.sessions_db) as store:
-            for row in _cli_rows(store):
-                rows.append(row)
-                seen.add(row.id)
+            con = _connect_ro(paths.sessions_db)
+            try:
+                if scan is None:
+                    scan = scan_sessions_db(con)
+                for row in _cli_rows(store, con, scan):
+                    rows.append(row)
+                    seen.add(row.id)
+            finally:
+                con.close()
     if paths.acp_messages_dir.is_dir():
         for db in sorted(paths.acp_messages_dir.glob("*.db")):
             row = _gui_row(db)
