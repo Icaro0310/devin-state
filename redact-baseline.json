@@ -2,7 +2,7 @@
   "version": 1,
   "tool": "devin-redact",
   "generated_by": "devin-redact 0.2.6",
-  "note": "devin-state@main baseline \u2014 findings already triaged as accepted/false-positive (mostly env_assignment hits on scanner patterns, test fixtures and docs; see devin-state#108). Regenerate with `devin-redact gate --update-baseline .` and review the diff before committing. `.git` internals are intentionally absent.",
+  "note": "devin-state@main baseline \u2014 findings already triaged as accepted/false-positive (mostly env_assignment hits on scanner patterns, test fixtures, docs and generated packaging metadata; see devin-state#108). Regenerate with `devin-redact gate --update-baseline .` and review the diff before committing. `.git` internals are intentionally absent.",
   "findings": [
     {
       "file": ".github/workflows/ci.yml",
@@ -111,6 +111,15 @@
       "fingerprint": "2bba98c28db46ebb",
       "count": 1,
       "location": "text:line 126"
+    },
+    {
+      "file": "packages/backup/src/devin_backup.egg-info/PKG-INFO",
+      "category": "env_assignment",
+      "pattern": "env_assignment[2]",
+      "kind": "pattern",
+      "fingerprint": "414e98ebb7411b3e",
+      "count": 1,
+      "location": "text:line 134"
     },
     {
       "file": "packages/backup/tests/test_cli.py",
@@ -695,7 +704,7 @@
       "kind": "pattern",
       "fingerprint": "738df5e9cfe14e81",
       "count": 1,
-      "location": "text:line 2052"
+      "location": "text:line 2065"
     },
     {
       "file": "packages/redact/src/devin_redact/engine.py",
@@ -704,7 +713,7 @@
       "kind": "pattern",
       "fingerprint": "8b9f1623ad868605",
       "count": 2,
-      "location": "text:line 2024"
+      "location": "text:line 2037"
     },
     {
       "file": "packages/redact/src/devin_redact/engine.py",
@@ -713,7 +722,7 @@
       "kind": "pattern",
       "fingerprint": "1b19b0da70ea508b",
       "count": 1,
-      "location": "text:line 1027"
+      "location": "text:line 1030"
     },
     {
       "file": "packages/redact/src/devin_redact/engine.py",
@@ -722,7 +731,7 @@
       "kind": "pattern",
       "fingerprint": "be237feac6b1266b",
       "count": 1,
-      "location": "text:line 1027"
+      "location": "text:line 1030"
     },
     {
       "file": "packages/redact/src/devin_redact/engine.py",
@@ -731,7 +740,7 @@
       "kind": "pattern",
       "fingerprint": "731326d18bfd699c",
       "count": 1,
-      "location": "text:line 1896"
+      "location": "text:line 1909"
     },
     {
       "file": "packages/redact/src/devin_redact/engine.py",
@@ -740,7 +749,7 @@
       "kind": "pattern",
       "fingerprint": "ac71add77f154193",
       "count": 1,
-      "location": "text:line 1756"
+      "location": "text:line 1769"
     },
     {
       "file": "packages/redact/src/devin_redact/engine.py",
@@ -749,7 +758,7 @@
       "kind": "pattern",
       "fingerprint": "6cdf6e103a7aaf3b",
       "count": 1,
-      "location": "text:line 1106"
+      "location": "text:line 1109"
     },
     {
       "file": "packages/redact/src/devin_redact/engine.py",
@@ -758,7 +767,7 @@
       "kind": "pattern",
       "fingerprint": "8b65cdf460d78c79",
       "count": 1,
-      "location": "text:line 554"
+      "location": "text:line 557"
     },
     {
       "file": "packages/redact/src/devin_redact/engine.py",
@@ -767,7 +776,7 @@
       "kind": "pattern",
       "fingerprint": "739c267285f35efc",
       "count": 1,
-      "location": "text:line 904"
+      "location": "text:line 907"
     },
     {
       "file": "packages/redact/src/devin_redact/engine.py",
@@ -776,7 +785,7 @@
       "kind": "pattern",
       "fingerprint": "8d410b0b4639e4dc",
       "count": 2,
-      "location": "text:line 910"
+      "location": "text:line 913"
     },
     {
       "file": "packages/redact/src/devin_redact/engine.py",
@@ -785,7 +794,7 @@
       "kind": "pattern",
       "fingerprint": "dfd93ee658716d6a",
       "count": 1,
-      "location": "text:line 100"
+      "location": "text:line 103"
     },
     {
       "file": "packages/redact/src/devin_redact/engine.py",
@@ -794,7 +803,7 @@
       "kind": "pattern",
       "fingerprint": "16db6cfa74836d73",
       "count": 1,
-      "location": "text:line 1591"
+      "location": "text:line 1604"
     },
     {
       "file": "packages/redact/src/devin_redact/engine.py",
@@ -803,7 +812,7 @@
       "kind": "pattern",
       "fingerprint": "77aad9f29f38f7c7",
       "count": 1,
-      "location": "text:line 72"
+      "location": "text:line 75"
     },
     {
       "file": "packages/redact/src/devin_redact/engine.py",
@@ -812,7 +821,7 @@
       "kind": "pattern",
       "fingerprint": "0701233f54414ed9",
       "count": 1,
-      "location": "text:line 1635"
+      "location": "text:line 1648"
     },
     {
       "file": "packages/redact/src/devin_redact/engine.py",
@@ -821,7 +830,7 @@
       "kind": "pattern",
       "fingerprint": "32ebb1abcc1c601c",
       "count": 1,
-      "location": "text:line 549"
+      "location": "text:line 552"
     },
     {
       "file": "packages/redact/src/devin_redact/engine.py",
@@ -830,7 +839,7 @@
       "kind": "pattern",
       "fingerprint": "3c53db4409ad7524",
       "count": 1,
-      "location": "text:line 574"
+      "location": "text:line 577"
     },
     {
       "file": "packages/redact/src/devin_redact/engine.py",
@@ -839,7 +848,7 @@
       "kind": "pattern",
       "fingerprint": "40e641192f22db47",
       "count": 1,
-      "location": "text:line 576"
+      "location": "text:line 579"
     },
     {
       "file": "packages/redact/src/devin_redact/engine.py",
@@ -848,7 +857,7 @@
       "kind": "pattern",
       "fingerprint": "70a261357bc99be6",
       "count": 1,
-      "location": "text:line 540"
+      "location": "text:line 543"
     },
     {
       "file": "packages/redact/src/devin_redact/engine.py",
@@ -857,7 +866,7 @@
       "kind": "pattern",
       "fingerprint": "929ef875f3ed0658",
       "count": 1,
-      "location": "text:line 539"
+      "location": "text:line 542"
     },
     {
       "file": "packages/redact/src/devin_redact/engine.py",
@@ -866,7 +875,7 @@
       "kind": "pattern",
       "fingerprint": "a7ae405c454082fe",
       "count": 1,
-      "location": "text:line 540"
+      "location": "text:line 543"
     },
     {
       "file": "packages/redact/src/devin_redact/engine.py",
@@ -875,7 +884,7 @@
       "kind": "pattern",
       "fingerprint": "afbc202f4e0725b1",
       "count": 1,
-      "location": "text:line 1211"
+      "location": "text:line 1224"
     },
     {
       "file": "packages/redact/src/devin_redact/engine.py",
@@ -884,7 +893,7 @@
       "kind": "pattern",
       "fingerprint": "be7f3e2dab6a32d4",
       "count": 1,
-      "location": "text:line 1130"
+      "location": "text:line 1133"
     },
     {
       "file": "packages/redact/src/devin_redact/engine.py",
@@ -893,7 +902,7 @@
       "kind": "pattern",
       "fingerprint": "d7439bee24773bcb",
       "count": 1,
-      "location": "text:line 576"
+      "location": "text:line 579"
     },
     {
       "file": "packages/redact/src/devin_redact/engine.py",
@@ -902,7 +911,7 @@
       "kind": "pattern",
       "fingerprint": "f2632559182abc7b",
       "count": 1,
-      "location": "text:line 1136"
+      "location": "text:line 1139"
     },
     {
       "file": "packages/redact/src/devin_redact/engine.py",
@@ -911,7 +920,7 @@
       "kind": "pattern",
       "fingerprint": "1fb680aa1ed965bc",
       "count": 1,
-      "location": "text:line 865"
+      "location": "text:line 868"
     },
     {
       "file": "packages/redact/src/devin_redact/patterns.py",

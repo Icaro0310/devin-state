@@ -45,6 +45,9 @@ from .semantic import analyze_tool_call_json
 _DB_SUFFIXES = {".db", ".sqlite", ".sqlite3"}
 _SQLITE_MAGIC = b"SQLite format 3\x00"
 _SKIP_DIRS = {".git", ".hg", ".svn", "node_modules", "__pycache__", ".venv", "venv"}
+# Generated packaging metadata — never source, and its long-description
+# prose trips env_assignment on doc text (issue #108 residual FP).
+_SKIP_DIR_SUFFIXES = (".egg-info", ".dist-info")
 _BINARY_SNIFF_BYTES = 8192
 _DB_SIDECAR_SUFFIXES = ("-wal", "-shm", "-journal")
 _REDACTED_TAG = "<REDACTED:"
@@ -1169,12 +1172,22 @@ def redact_text(
     return new_text, edits
 
 
-def _iter_files(paths: list[Path]) -> list[Path]:
+def _iter_files(
+    paths: list[Path], *, skip_packaging: bool = True
+) -> list[Path]:
     files: set[Path] = set()
     for p in paths:
         if p.is_dir():
             for root, dirs, names in os.walk(p):
-                dirs[:] = sorted(d for d in dirs if d not in _SKIP_DIRS)
+                dirs[:] = sorted(
+                    d
+                    for d in dirs
+                    if d not in _SKIP_DIRS
+                    and (
+                        not skip_packaging
+                        or not d.endswith(_SKIP_DIR_SUFFIXES)
+                    )
+                )
                 for name in sorted(names):
                     files.add(Path(root) / name)
         elif p.is_file():
@@ -2053,12 +2066,18 @@ def rebuild_report(report: dict, findings: list[Finding]) -> dict:
     return rebuilt
 
 
-def scan(paths) -> dict:
+def scan(paths, *, skip_packaging: bool = True) -> dict:
     """Scan files/directories and return the report contract (SPEC §6).
 
     Deterministic: identical input yields identical output.
+    ``skip_packaging=False`` walks ``*.egg-info``/``*.dist-info`` too —
+    the publication gate uses it so generated metadata cannot hide a
+    real credential (the ``--staged`` path already scans them via
+    ``git ls-files``).
     """
-    files = _iter_files([Path(p) for p in paths])
+    files = _iter_files(
+        [Path(p) for p in paths], skip_packaging=skip_packaging
+    )
     all_findings: list[Finding] = []
     errors: list[dict[str, str]] = []
     scanned = 0

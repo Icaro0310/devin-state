@@ -479,10 +479,10 @@ def main(argv: list[str] | None = None) -> int:
                     # would replace the baseline with an empty finding
                     # set and look like success.
                     return 2
-                report = engine.scan(args.paths)
+                report = engine.scan(args.paths, skip_packaging=False)
                 file_base = Path.cwd()
                 scanned_files = engine._iter_files(
-                    [Path(p) for p in args.paths]
+                    [Path(p) for p in args.paths], skip_packaging=False
                 )
                 if target is None:
                     target = Path.cwd() / baseline.BASELINE_FILENAME
@@ -524,7 +524,7 @@ def main(argv: list[str] | None = None) -> int:
             report = engine.scan_blobs(blobs, errors=errs)
             file_base = staged.repo_root()
         else:
-            report = engine.scan(args.paths)
+            report = engine.scan(args.paths, skip_packaging=False)
             file_base = Path.cwd()
         hard = _blocking_errors(report)
         if hard:

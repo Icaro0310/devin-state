@@ -168,6 +168,41 @@ def test_cli_redact_apply_refused(capsys):
     assert cli.main(["redact", str(FIXTURES / ".env"), "--apply"]) == 3
 
 
+def test_scan_skips_packaging_metadata_dirs(tmp_path):
+    """``*.egg-info``/``*.dist-info`` are generated build metadata — the
+    default scan skips them (issue #108 residual: PKG-INFO prose trips
+    env_assignment on doc text like ``$DEVIN_BACKUP_KEEP``)."""
+    pkg = tmp_path / "pkg"
+    (pkg / "src" / "demo-1.0.egg-info").mkdir(parents=True)
+    (pkg / "src" / "demo.dist-info").mkdir(parents=True)
+    secret = "OPENAI_API" + "_KEY=" + FAKE_API_KEY
+    (pkg / "src" / "demo-1.0.egg-info" / "PKG-INFO").write_text(
+        "Metadata\n\n" + secret + "\n", encoding="utf-8"
+    )
+    (pkg / "src" / "demo.dist-info" / "METADATA").write_text(
+        secret + "\n", encoding="utf-8"
+    )
+    (pkg / "module.py").write_text(secret + "\n", encoding="utf-8")
+    report = devin_redact.scan([pkg])
+    files = {str(f["file"]) for f in report["findings"]}
+    assert files == {str(pkg / "module.py")}
+
+
+def test_scan_packaging_metadata_dirs_when_not_skipped(tmp_path):
+    """The publication gate passes ``skip_packaging=False`` — generated
+    metadata must not become a blind spot for a real credential (the
+    ``--staged`` path already scans these files via ``git ls-files``)."""
+    pkg = tmp_path / "pkg"
+    (pkg / "demo.egg-info").mkdir(parents=True)
+    secret = "OPENAI_API" + "_KEY=" + FAKE_API_KEY
+    (pkg / "demo.egg-info" / "PKG-INFO").write_text(
+        "Metadata\n\n" + secret + "\n", encoding="utf-8"
+    )
+    report = devin_redact.scan([pkg], skip_packaging=False)
+    files = {str(f["file"]) for f in report["findings"]}
+    assert str(pkg / "demo.egg-info" / "PKG-INFO") in files
+
+
 def test_scan_text_unit():
     findings = scan_text("key: " + FAKE_TEXT_API_KEY, file="x", location="text")
     assert findings and findings[0]["category"] == "api_key"
