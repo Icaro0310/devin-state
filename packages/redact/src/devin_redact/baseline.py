@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -58,6 +59,12 @@ class Baseline:
     path: Path
     counts: Counter = field(compare=False)  # key tuple -> occurrences left
     entries: int = 0  # distinct keys recorded (for reporting)
+    # Audit-echo attribution: the file's raw text plus the recorded
+    # ``file``/``location`` entry values. A self-scan finding is echo
+    # only when its line flags nothing once the recorded values are
+    # removed — see :func:`_is_audit_echo`.
+    raw_text: str = ""
+    meta_values: frozenset = frozenset()
 
 
 def normalize_file(
@@ -158,7 +165,20 @@ def _parse_baseline(raw: str, path: Path) -> Baseline:
                 f"baseline {path}: findings[{i}] 'count' must be >= 1"
             )
         counts[_entry_key(entry)] += count
-    return Baseline(path=path, counts=counts, entries=len(findings))
+    meta_values = {
+        str(e.get(f, ""))
+        for e in findings
+        if isinstance(e, dict)
+        for f in ("file", "location")
+    }
+    meta_values.discard("")
+    return Baseline(
+        path=path,
+        counts=counts,
+        entries=len(findings),
+        raw_text=raw,
+        meta_values=frozenset(meta_values),
+    )
 
 
 def load_staged_baseline(name: str, root: Path) -> "Baseline | None":
@@ -195,6 +215,26 @@ def _is_self_finding(key: tuple, baseline_path: Path) -> bool:
     :func:`apply_baseline`.
     """
     return key[0] == baseline_path.name
+
+
+def _is_audit_echo(baseline: Baseline, line_no: int) -> bool:
+    """The flagged line is only recorded metadata, nothing more.
+
+    Entries store ``file``/``location`` values verbatim, so secret-
+    shaped filenames legitimately re-trigger the patterns when the
+    baseline itself is scanned. Subtracting every recorded value from
+    the finding's line and rescanning the residue attributes the
+    finding precisely: an empty residue is echo, anything still
+    flagging is foreign content planted in the artifact.
+    """
+    lines = baseline.raw_text.splitlines()
+    if not 1 <= line_no <= len(lines):
+        return False
+    residue = lines[line_no - 1]
+    for v in baseline.meta_values:
+        residue = residue.replace(v, "")
+    rep = engine.scan_blobs([("residue", residue.encode("utf-8"))])
+    return rep["findings_total"] == 0
 
 
 def discover_baseline(cwd: Path) -> Path | None:
@@ -241,8 +281,14 @@ def apply_baseline(
     for finding in report.get("findings", []):
         key = finding_key(finding, file_base=file_base, base_dir=base_dir)
         if _is_self_finding(key, baseline.path):
-            # The baseline file can never suppress findings on itself —
-            # drop them instead of letting the artifact block the gate.
+            # Findings on the artifact itself are audit echo ONLY when
+            # the flagged line holds nothing secret-shaped beyond the
+            # recorded values — a credential planted in other metadata
+            # must still block (devin-state#132 re-review).
+            m = re.search(r"line (\d+)", str(finding.get("location", "")))
+            if m and _is_audit_echo(baseline, int(m.group(1))):
+                continue
+            active.append(finding)
             continue
         if remaining.get(key, 0) > 0:
             remaining[key] -= 1

@@ -134,3 +134,11 @@ while stdout stays the single-word verdict. `--no-baseline` disables
 discovery, and `--update-baseline` regenerates the file from the
 current scan — review its diff before committing, since whatever is
 recorded stops blocking.
+
+With `gate --staged` the baseline is read from the git **index**, not
+the working tree — the exceptions must be part of the commit they
+suppress. `--update-baseline` writes the file to disk, so after
+reviewing the diff run `git add redact-baseline.json` *before* the
+next staged gate: without it the hook exits 2 (baseline not in the
+index), and an edited-but-unstaged baseline silently keeps the gate
+using the previous indexed version.

@@ -644,3 +644,82 @@ def test_write_baseline_skips_findings_on_itself(tmp_path):
     baseline.write_baseline(target, report, file_base=tmp_path)
     doc = json.loads(target.read_text())
     assert doc["findings"] == []
+
+
+# --- devin-state#132 re-review (wave 2) --------------------------------------
+
+@needs_git
+def test_gate_staged_subdir_decoy_prefers_root_index(repo, capsys, monkeypatch):
+    """A worktree-only baseline in a subdir must not shadow the staged
+    root baseline — index candidates resolve cwd-local then root."""
+    _leaky_file(repo)
+    _git(repo, "add", "app.py")
+    assert cli.main(["gate", "--staged", "--update-baseline", "app.py"]) == 0
+    capsys.readouterr()
+    _git(repo, "add", "redact-baseline.json")
+    sub = repo / "src"
+    sub.mkdir()
+    # Unstaged decoy — never committed to the index.
+    (sub / "redact-baseline.json").write_text(
+        '{"version": 1, "findings": []}', encoding="utf-8"
+    )
+    monkeypatch.chdir(sub)
+    assert cli.main(["gate", "--staged", "../app.py"]) == 0
+    out = capsys.readouterr()
+    assert out.out.strip() == "CLEAN"
+    assert "suppressed" in out.err
+
+
+@needs_git
+def test_gate_staged_explicit_baseline_not_indexed(repo, capsys):
+    """Explicit --baseline that is not in the index errors (exit 2)."""
+    _leaky_file(repo)
+    _git(repo, "add", "app.py")
+    (repo / "x.json").write_text(
+        json.dumps({"version": 1, "findings": []}), encoding="utf-8"
+    )
+    assert cli.main(["gate", "--staged", "--baseline", "x.json", "app.py"]) == 2
+    assert "not in the index" in capsys.readouterr().err
+
+
+@needs_git
+def test_gate_staged_baseline_outside_repo(repo, capsys):
+    """--baseline outside the repository cannot come from the index."""
+    _leaky_file(repo)
+    _git(repo, "add", "app.py")
+    outside = repo.parent / "outside.json"
+    outside.write_text(
+        json.dumps({"version": 1, "findings": []}), encoding="utf-8"
+    )
+    assert (
+        cli.main(["gate", "--staged", "--baseline", str(outside), "app.py"])
+        == 2
+    )
+    assert "outside the repository" in capsys.readouterr().err
+
+
+def test_gate_baseline_foreign_credential_blocks(tmp_path, monkeypatch, capsys):
+    """A credential planted in baseline metadata OUTSIDE the recorded
+    file/location values must still flag — self-exclusion only covers
+    the lines holding registered paths (SEC, review #132)."""
+    monkeypatch.chdir(tmp_path)
+    doc = {
+        "version": 1,
+        "tool": "devin-redact",
+        "note": f'backup_key = "{FAKE_AWS_KEY}"',
+        "findings": [
+            {
+                "file": "app.py",
+                "category": "x",
+                "pattern": "y",
+                "kind": "z",
+                "fingerprint": "f",
+                "count": 1,
+                "location": "",
+                "preview": "",
+            }
+        ],
+    }
+    (tmp_path / "redact-baseline.json").write_text(json.dumps(doc))
+    assert cli.main(["gate", "."]) == 1
+    assert capsys.readouterr().out.strip() == "BLOCKED"

@@ -244,6 +244,62 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _index_baseline(args, repo_root: Path):
+    """The ``--staged`` gate's baseline, read from the INDEX.
+
+    Exceptions must come from the commit they suppress — a worktree
+    baseline edit would hide staged findings without ever appearing in
+    the diff under review. Auto-discovery mirrors the worktree order
+    (cwd-local first, then repo root) but resolves each candidate via
+    ``git cat-file :0:``: a worktree-only local file never shadows a
+    root baseline that IS in the index. An explicit ``--baseline`` that
+    is not in the index is an error, and so is an auto-discovered
+    worktree file nothing staged — with guidance, not silent.
+    """
+    if args.baseline is not None:
+        try:
+            rel = os.path.relpath(args.baseline, repo_root)
+        except (OSError, ValueError):
+            # Windows: relpath across drives raises ValueError.
+            rel = ".."
+        if rel == ".." or rel.startswith(f"..{os.sep}"):
+            raise baseline.BaselineError(
+                f"baseline {args.baseline} is outside the repository — "
+                f"cannot read it from the index"
+            )
+        loaded = baseline.load_staged_baseline(
+            Path(rel).as_posix(), repo_root
+        )
+        if loaded is None:
+            raise baseline.BaselineError(
+                f"baseline {args.baseline} is not in the index — "
+                f"stage it (git add) to use it with --staged"
+            )
+        return loaded
+    if args.no_baseline:
+        return None
+    cand = []
+    try:
+        rel = os.path.relpath(
+            Path.cwd() / baseline.BASELINE_FILENAME, repo_root
+        )
+        if rel != ".." and not rel.startswith(f"..{os.sep}"):
+            cand.append(rel)
+    except (OSError, ValueError):
+        pass
+    cand.append(baseline.BASELINE_FILENAME)
+    for name in dict.fromkeys(Path(c).as_posix() for c in cand):
+        loaded = baseline.load_staged_baseline(name, repo_root)
+        if loaded is not None:
+            return loaded
+    if baseline.discover_baseline(Path.cwd()) is not None:
+        raise baseline.BaselineError(
+            "baseline discovered in the working tree but not in the "
+            "index — stage it (git add) to use it with --staged"
+        )
+    return None
+
+
 def _blocking_errors(report: dict) -> list[dict]:
     """Errors meaning a target could not be scanned at all.
 
@@ -444,45 +500,28 @@ def main(argv: list[str] | None = None) -> int:
             for e in hard:
                 print(f"devin-redact: {e['file']}: {e['error']}", file=sys.stderr)
             return 2
-        if baseline_path is not None:
+        if args.staged or baseline_path is not None:
             try:
                 if args.staged:
-                    # The staged gate verifies the commit's content, so
-                    # the exceptions must be read from the commit too —
-                    # a worktree baseline edit would suppress findings
-                    # without appearing in the diff under review.
-                    rel = os.path.relpath(baseline_path, file_base)
-                    if rel == ".." or rel.startswith(f"..{os.sep}"):
-                        raise baseline.BaselineError(
-                            f"baseline {baseline_path} is outside the "
-                            f"repository — cannot read it from the index"
-                        )
-                    loaded = baseline.load_staged_baseline(
-                        Path(rel).as_posix(), file_base
-                    )
-                    if loaded is None:
-                        raise baseline.BaselineError(
-                            f"baseline {baseline_path} is not in the "
-                            f"index — stage it (git add) to use it "
-                            f"with --staged"
-                        )
+                    loaded = _index_baseline(args, file_base)
                 else:
                     loaded = baseline.load_baseline(baseline_path)
             except baseline.BaselineError as exc:
                 print(f"devin-redact: {exc}", file=sys.stderr)
                 return 2
-            report, stats = baseline.apply_baseline(
-                report, loaded, file_base=file_base
-            )
-            note = (
-                f"devin-redact: baseline {stats['baseline']}: "
-                f"suppressed {stats['suppressed']} finding(s) "
-                f"({stats['entries']} baseline keys"
-            )
-            if stats["stale"]:
-                note += f", {stats['stale']} stale"
-            note += ")"
-            print(note, file=sys.stderr)
+            if loaded is not None:
+                report, stats = baseline.apply_baseline(
+                    report, loaded, file_base=file_base
+                )
+                note = (
+                    f"devin-redact: baseline {stats['baseline']}: "
+                    f"suppressed {stats['suppressed']} finding(s) "
+                    f"({stats['entries']} baseline keys"
+                )
+                if stats["stale"]:
+                    note += f", {stats['stale']} stale"
+                note += ")"
+                print(note, file=sys.stderr)
         status = str(report["publication_status"])
         print(status)
         return 1 if status == "BLOCKED" else 0
