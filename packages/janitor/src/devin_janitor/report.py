@@ -20,6 +20,7 @@ from pathlib import Path
 from devin_internals.schema import SchemaError
 
 from devin_janitor.cleanup import (
+    _SESSION_ROW_BYTES,
     SIDECAR_SUFFIXES,
     _connect_ro,
     _session_byte_estimates,
@@ -31,8 +32,10 @@ from devin_janitor.config import JanitorConfig
 from devin_janitor.inventory import (
     DevinArtifactError,
     SessionRow,
+    SessionsDbScan,
     live_session_ids,
     load_inventory,
+    scan_sessions_db,
 )
 from devin_janitor.labels import (
     automatic_sessions,
@@ -196,11 +199,52 @@ def _span(values) -> tuple[float | None, float | None]:
     return (min(vals), max(vals)) if vals else (None, None)
 
 
+def _estimates_from_scan(scan: SessionsDbScan) -> dict[str, int]:
+    """``_session_byte_estimates`` equivalent from a shared one-pass scan."""
+    est: dict[str, int] = {
+        sid: _SESSION_ROW_BYTES for sid in scan.session_ids
+    }
+    for sid, n in scan.node_bytes.items():
+        est[sid] = est.get(sid, 0) + n
+    for sid, n in scan.tool_bytes.items():
+        est[sid] = est.get(sid, 0) + n
+    for per_sid in scan.other_tables.values():
+        for sid, (_n_rows, n) in per_sid.items():
+            est[sid] = est.get(sid, 0) + n
+    return est
+
+
+def _orphans_from_scan(scan: SessionsDbScan) -> tuple[int, int]:
+    """``orphan_row_bytes`` equivalent — ``(bytes, rows)`` for session_ids
+    absent from the ``sessions`` table."""
+    live = scan.session_ids
+    per_table = [scan.node_count, scan.tool_count]
+    per_table_b = [scan.node_bytes, scan.tool_bytes]
+    rows = sum(
+        n for m in per_table for sid, n in m.items() if sid not in live
+    ) + sum(
+        v[0]
+        for per_sid in scan.other_tables.values()
+        for sid, v in per_sid.items()
+        if sid not in live
+    )
+    bytes_ = sum(
+        n for m in per_table_b for sid, n in m.items() if sid not in live
+    ) + sum(
+        v[1]
+        for per_sid in scan.other_tables.values()
+        for sid, v in per_sid.items()
+        if sid not in live
+    )
+    return bytes_, rows
+
+
 def _sessions_db_entry(
     paths: DevinPaths,
     rows: list[SessionRow],
     classification: Classification | None,
     deletable: set[str],
+    scan: SessionsDbScan | None = None,
 ) -> dict:
     db = paths.sessions_db
     sidecars = _sidecar_bytes(db)
@@ -226,7 +270,11 @@ def _sessions_db_entry(
     if classification is None or not db.is_file():
         # schema unreadable → the vacuum gate fails → nothing is freed
         return entry
-    est = _session_byte_estimates(db)
+    est = (
+        _estimates_from_scan(scan)
+        if scan is not None
+        else _session_byte_estimates(db)
+    )
     tier_of = {sid: "keep" for sid in classification.kept}
     tier_of.update(
         {r.id: "auto_delete" for r, _ in classification.auto_delete}
@@ -450,6 +498,7 @@ def _cleanup_tier_summary(
     stores: list[dict],
     deletable: set[str],
     now: float | None,
+    scan: SessionsDbScan | None = None,
 ) -> dict:
     """Per-tier recoverable bytes (JA-2).
 
@@ -484,7 +533,9 @@ def _cleanup_tier_summary(
             leftover_t1_n += 1
 
     orphan_bytes = orphan_rows = 0
-    if paths.sessions_db.is_file():
+    if scan is not None:
+        orphan_bytes, orphan_rows = _orphans_from_scan(scan)
+    elif paths.sessions_db.is_file():
         try:
             orphan_bytes, orphan_rows = orphan_row_bytes(paths.sessions_db)
         except (sqlite3.Error, OSError):
@@ -674,12 +725,26 @@ def space_report(
     )
     labels = load_labels(labels_p)
 
+    # one aggregate pass over sessions.db — reused by load_inventory for
+    # the classification rows and below for byte estimates + orphans, so
+    # the report does not rescan the payload tables three times
+    scan: SessionsDbScan | None = None
+    if paths.sessions_db.is_file():
+        try:
+            con = _connect_ro(paths.sessions_db)
+            try:
+                scan = scan_sessions_db(con)
+            finally:
+                con.close()
+        except (SchemaError, sqlite3.Error, OSError):
+            scan = None  # degraded — entries below fall back per-store
+
     rows: list[SessionRow] = []
     automatic: list[dict] = []
     classification: Classification | None = None
     error = None
     try:
-        rows = load_inventory(paths)
+        rows = load_inventory(paths, scan=scan)
         automatic = automatic_sessions(rows, labels)
         labeled = {s["id"] for s in automatic}
         cls_rows = (
@@ -708,7 +773,7 @@ def space_report(
     stores = []
     for name, builder in (
         ("sessions.db", lambda: _sessions_db_entry(
-            paths, rows, classification, deletable)),
+            paths, rows, classification, deletable, scan=scan)),
         ("acp-messages", lambda: _acp_entry(paths, deletable)),
         ("state.vscdb", lambda: _vscdb_entry(paths)),
         ("session_locks", lambda: _locks_entry(paths)),
@@ -728,7 +793,9 @@ def space_report(
                 }
             )
     try:
-        tiers = _cleanup_tier_summary(paths, cfg, stores, deletable, now)
+        tiers = _cleanup_tier_summary(
+            paths, cfg, stores, deletable, now, scan=scan
+        )
     except (SchemaError, sqlite3.Error, OSError) as exc:
         tiers = {"error": str(exc)}
 
