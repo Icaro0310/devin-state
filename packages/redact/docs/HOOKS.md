@@ -105,6 +105,7 @@ cross-references when gating a `devin-history` export dir.
 | `session-end` | side file `<data-dir>/redact/<id>.json` (+ summary line) | always (incl. SKIPPED/BLOCKED) | — | usage error |
 | `gate <targets…>` | `CLEAN` / `REVIEW` / `BLOCKED` | CLEAN or REVIEW | BLOCKED | hard error |
 | `gate --staged <paths…>` | same, but scans the *staged index blobs* | CLEAN or REVIEW | BLOCKED | unreadable index |
+| `gate --update-baseline <paths…>` | writes `redact-baseline.json` | always | — | hard error |
 | `verify <targets…>` | human summary (`--json` for the report) | CLEAN only | any finding | — |
 | `verify-publish <export-dir>` | per-session verdicts for a `devin-history` export | CLEAN only | any session not CLEAN | usage error |
 
@@ -120,3 +121,16 @@ working tree is not authoritative for a commit: content staged and then
 edited or deleted still ships, so the gate reads the index rather than
 the file on disk. A path with no staged blob (staged deletion, never
 `git add`ed) is skipped — nothing staged means nothing is committed.
+
+`gate` also supports a committed **baseline**: when a
+`redact-baseline.json` sits in the cwd or the repo root (or is passed
+via `--baseline FILE`), findings matching a baseline entry are
+suppressed and only *new* findings can produce `BLOCKED` — the
+mechanism for pre-existing engine false positives that would otherwise
+leave every consumer's lane permanently red (devin-state#108).
+Entries match on `(file, category, pattern, kind, fingerprint)` with
+per-key counts; suppressed and stale counts are reported on stderr
+while stdout stays the single-word verdict. `--no-baseline` disables
+discovery, and `--update-baseline` regenerates the file from the
+current scan — review its diff before committing, since whatever is
+recorded stops blocking.

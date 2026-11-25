@@ -47,6 +47,17 @@ def _repo_root(cwd: Path) -> Path:
     return Path(proc.stdout.decode("utf-8", "replace").strip())
 
 
+def repo_root(cwd=None) -> Path:
+    """The enclosing repository's top-level directory.
+
+    Public wrapper for :func:`_repo_root` — baseline discovery uses it
+    to find a ``redact-baseline.json`` at the repo root when the cwd
+    does not carry one. Raises :class:`StagedScanError` outside a
+    repository, same as the staged-blob path.
+    """
+    return _repo_root(Path(cwd) if cwd is not None else Path.cwd())
+
+
 def staged_blobs(paths, cwd=None) -> tuple[list[Blob], list[dict]]:
     """Read each path's staged blob (``:0:<path>``) from the index.
 

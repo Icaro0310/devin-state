@@ -8,7 +8,17 @@ import sys
 import tempfile
 from pathlib import Path
 
-from . import __version__, cflite, diffhtml, engine, paths, publish, session_end, staged
+from . import (
+    __version__,
+    baseline,
+    cflite,
+    diffhtml,
+    engine,
+    paths,
+    publish,
+    session_end,
+    staged,
+)
 from .sarif import report_to_sarif
 
 
@@ -77,6 +87,31 @@ def _build_parser() -> argparse.ArgumentParser:
         help="scan each path's staged index blob (git :0:<path>) instead "
         "of the working-tree file — the pre-commit mode, so edits or "
         "deletions after `git add` cannot bypass the gate",
+    )
+    gate_p.add_argument(
+        "--baseline",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help="JSON baseline of already-triaged findings — the gate then "
+        "fails only on NEW findings; suppressed/stale counts are "
+        "reported on stderr (default: auto-discover "
+        "redact-baseline.json in the cwd or the repo root; "
+        "--no-baseline disables discovery)",
+    )
+    gate_p.add_argument(
+        "--no-baseline",
+        action="store_true",
+        help="ignore any discoverable redact-baseline.json — every "
+        "finding counts, exactly as without the mechanism",
+    )
+    gate_p.add_argument(
+        "--update-baseline",
+        action="store_true",
+        help="write the current findings to the baseline file (the "
+        "--baseline path, a discovered one, or "
+        "redact-baseline.json in the cwd) and exit 0 — review the diff "
+        "before committing it: whatever is recorded stops blocking",
     )
 
     hook_p = sub.add_parser(
@@ -316,6 +351,58 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if report["publication_status"] == "CLEAN" else 1
 
     if args.command == "gate":
+        if args.no_baseline and args.baseline is not None:
+            print(
+                "devin-redact: --no-baseline conflicts with --baseline",
+                file=sys.stderr,
+            )
+            return 2
+        baseline_path = args.baseline
+        if baseline_path is None and not args.no_baseline:
+            baseline_path = baseline.discover_baseline(Path.cwd())
+
+        if args.update_baseline:
+            # Maintenance mode: record the current findings verbatim.
+            # The file is the audit trail — nothing is suppressed until
+            # a human reviews the diff and commits it.
+            target = baseline_path or (Path.cwd() / baseline.BASELINE_FILENAME)
+            if args.staged:
+                try:
+                    blobs, errs = staged.staged_blobs(args.paths)
+                except staged.StagedScanError as exc:
+                    print(f"devin-redact: {exc}", file=sys.stderr)
+                    return 2
+                report = engine.scan_blobs(blobs, errors=errs)
+                file_base = staged.repo_root()
+            else:
+                report = engine.scan(args.paths)
+                file_base = Path.cwd()
+            hard = _blocking_errors(report)
+            if hard:
+                for e in hard:
+                    print(
+                        f"devin-redact: {e['file']}: {e['error']}",
+                        file=sys.stderr,
+                    )
+                return 2
+            try:
+                summary = baseline.write_baseline(
+                    target, report, file_base=file_base
+                )
+            except OSError as exc:
+                print(
+                    f"devin-redact: cannot write baseline {target}: {exc}",
+                    file=sys.stderr,
+                )
+                return 2
+            print(
+                f"devin-redact: wrote baseline {summary['baseline']} "
+                f"({summary['entries']} keys, "
+                f"{summary['findings']} findings)",
+                file=sys.stderr,
+            )
+            return 0
+
         if args.staged:
             try:
                 blobs, errs = staged.staged_blobs(args.paths)
@@ -323,13 +410,33 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"devin-redact: {exc}", file=sys.stderr)
                 return 2
             report = engine.scan_blobs(blobs, errors=errs)
+            file_base = staged.repo_root()
         else:
             report = engine.scan(args.paths)
+            file_base = Path.cwd()
         hard = _blocking_errors(report)
         if hard:
             for e in hard:
                 print(f"devin-redact: {e['file']}: {e['error']}", file=sys.stderr)
             return 2
+        if baseline_path is not None:
+            try:
+                loaded = baseline.load_baseline(baseline_path)
+            except baseline.BaselineError as exc:
+                print(f"devin-redact: {exc}", file=sys.stderr)
+                return 2
+            report, stats = baseline.apply_baseline(
+                report, loaded, file_base=file_base
+            )
+            note = (
+                f"devin-redact: baseline {stats['baseline']}: "
+                f"suppressed {stats['suppressed']} finding(s) "
+                f"({stats['entries']} baseline keys"
+            )
+            if stats["stale"]:
+                note += f", {stats['stale']} stale"
+            note += ")"
+            print(note, file=sys.stderr)
         status = str(report["publication_status"])
         print(status)
         return 1 if status == "BLOCKED" else 0

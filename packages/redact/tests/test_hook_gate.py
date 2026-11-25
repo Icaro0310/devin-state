@@ -49,7 +49,11 @@ def test_publication_status_top_level_for_history():
 
 
 def test_gate_blocked(capsys):
-    assert cli.main(["gate", str(DB)]) == 1
+    # --no-baseline: this test asserts the raw gate verdict — the repo's
+    # committed redact-baseline.json would otherwise suppress the
+    # fixture's already-triaged findings (baseline coverage lives in
+    # test_baseline.py).
+    assert cli.main(["gate", "--no-baseline", str(DB)]) == 1
     assert capsys.readouterr().out.strip() == "BLOCKED"
 
 

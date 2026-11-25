@@ -1,0 +1,492 @@
+"""Baseline mode for ``gate`` — suppress already-triaged findings.
+
+A committed ``redact-baseline.json`` records the findings a repo has
+already accepted (engine false positives on legitimate code —
+devin-state#108). The gate then fails only on *new* findings: match
+keys are ``(file, category, pattern, kind, fingerprint)`` with
+per-key counts, ``location`` is audit metadata only, and suppressed /
+stale counts surface on stderr while stdout stays the single-word
+verdict contract.
+"""
+
+import json
+import shutil
+import subprocess
+from pathlib import Path
+
+import pytest
+from devin_redact import baseline, cli, engine
+from test_chunked import FAKE_AWS_KEY
+
+needs_git = pytest.mark.skipif(
+    shutil.which("git") is None, reason="git binary required"
+)
+
+
+def _git(repo: Path, *args: str):
+    proc = subprocess.run(
+        ["git", "-C", str(repo), *args], capture_output=True, check=False
+    )
+    assert proc.returncode == 0, proc.stderr
+    return proc
+
+
+@pytest.fixture
+def repo(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    monkeypatch.chdir(repo)
+    return repo
+
+
+def _leaky_file(directory: Path, name: str = "app.py") -> Path:
+    p = directory / name
+    p.write_text(f'token = "{FAKE_AWS_KEY}"\n', encoding="utf-8")
+    return p
+
+
+def _scan_cwd(tmp_path, monkeypatch, name: str = "app.py") -> dict:
+    """Scan ``name`` via a cwd-relative path — the same display form the
+    gate produces when invoked from the gated root."""
+    monkeypatch.chdir(tmp_path)
+    return engine.scan([name])
+
+
+def _write_baseline(path: Path, entries: list[dict]) -> Path:
+    path.write_text(
+        json.dumps(
+            {
+                "version": baseline.BASELINE_VERSION,
+                "tool": "devin-redact",
+                "findings": entries,
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def _entry_for(report: dict, index: int = 0, **overrides) -> dict:
+    f = report["findings"][index]
+    entry = {
+        "file": f["file"],
+        "category": f["category"],
+        "pattern": f["pattern"],
+        "kind": f["kind"],
+        "fingerprint": f["fingerprint"],
+        "count": 1,
+        "location": f["location"],
+        "preview": f["preview"],
+    }
+    entry.update(overrides)
+    return entry
+
+
+# --- normalize_file / finding_key ----------------------------------------
+
+
+def test_normalize_file_relative_to_base(tmp_path):
+    base = tmp_path / "repo"
+    key = baseline.normalize_file(
+        "packages/x.py", file_base=base, base_dir=base
+    )
+    assert key == "packages/x.py"
+
+
+def test_normalize_file_dot_prefix_and_dotdot(tmp_path):
+    base = tmp_path / "repo"
+    assert (
+        baseline.normalize_file("./a/b.py", file_base=base, base_dir=base)
+        == "a/b.py"
+    )
+    # ``sub/../a.py`` collapses through relpath normalization.
+    assert (
+        baseline.normalize_file("sub/../a.py", file_base=base, base_dir=base)
+        == "a.py"
+    )
+
+
+def test_normalize_file_absolute_relativized(tmp_path):
+    base = tmp_path / "repo"
+    inside = base / "pkg" / "m.py"
+    assert (
+        baseline.normalize_file(str(inside), file_base=base, base_dir=base)
+        == "pkg/m.py"
+    )
+
+
+def test_normalize_file_escaping_stays_absolute(tmp_path):
+    base = tmp_path / "repo"
+    outside = tmp_path / "other" / "m.py"
+    key = baseline.normalize_file(
+        str(outside), file_base=base, base_dir=base
+    )
+    assert key == outside.as_posix()
+
+
+def test_normalize_file_relative_resolution_uses_file_base(tmp_path):
+    """Staged names are repo-root-relative: resolving them against the
+    repo root (not the caller's cwd) lands on the same key a worktree
+    scan from the root produces."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    sub = repo / "sub"
+    sub.mkdir()
+    base_dir = repo
+    staged_key = baseline.normalize_file(
+        "pkg/m.py", file_base=repo, base_dir=base_dir
+    )
+    worktree_key = baseline.normalize_file(
+        "../pkg/m.py", file_base=sub, base_dir=base_dir
+    )
+    assert staged_key == worktree_key == "pkg/m.py"
+
+
+def test_finding_key_ignores_location():
+    """Line drift must not resurrect a suppressed finding."""
+    f1 = {
+        "file": "a.py",
+        "category": "env_assignment",
+        "pattern": "env_assignment[2]",
+        "kind": "pattern",
+        "fingerprint": "abc123",
+        "location": "text:line 10",
+    }
+    f2 = dict(f1, location="text:line 99")
+    base = Path("/repo")
+    assert baseline.finding_key(
+        f1, file_base=base, base_dir=base
+    ) == baseline.finding_key(f2, file_base=base, base_dir=base)
+
+
+# --- load_baseline ---------------------------------------------------------
+
+
+def test_load_baseline_valid(tmp_path):
+    path = _write_baseline(
+        tmp_path / "redact-baseline.json",
+        [
+            {
+                "file": "a.py",
+                "category": "env_assignment",
+                "pattern": "env_assignment",
+                "kind": "pattern",
+                "fingerprint": "f" * 16,
+                "count": 2,
+            },
+            {
+                "file": "b.py",
+                "category": "email",
+                "pattern": "email",
+                "fingerprint": "e" * 16,
+            },
+        ],
+    )
+    bl = baseline.load_baseline(path)
+    assert bl.entries == 2
+    assert sum(bl.counts.values()) == 3
+
+
+def test_load_baseline_missing_file(tmp_path):
+    with pytest.raises(baseline.BaselineError):
+        baseline.load_baseline(tmp_path / "nope.json")
+
+
+def test_load_baseline_malformed_json(tmp_path):
+    path = tmp_path / "bad.json"
+    path.write_text("{not json", encoding="utf-8")
+    with pytest.raises(baseline.BaselineError):
+        baseline.load_baseline(path)
+
+
+def test_load_baseline_wrong_version(tmp_path):
+    path = tmp_path / "v2.json"
+    path.write_text(
+        json.dumps({"version": 2, "findings": []}), encoding="utf-8"
+    )
+    with pytest.raises(baseline.BaselineError):
+        baseline.load_baseline(path)
+
+
+def test_load_baseline_missing_field(tmp_path):
+    path = _write_baseline(
+        tmp_path / "b.json",
+        [{"file": "a.py", "category": "email"}],  # no fingerprint
+    )
+    with pytest.raises(baseline.BaselineError):
+        baseline.load_baseline(path)
+
+
+def test_load_baseline_bad_count(tmp_path):
+    path = _write_baseline(
+        tmp_path / "b.json",
+        [
+            {
+                "file": "a.py",
+                "category": "email",
+                "pattern": "email",
+                "fingerprint": "f" * 16,
+                "count": 0,
+            }
+        ],
+    )
+    with pytest.raises(baseline.BaselineError):
+        baseline.load_baseline(path)
+
+
+# --- discover_baseline ------------------------------------------------------
+
+
+def test_discover_baseline_cwd_hit(tmp_path, monkeypatch):
+    (tmp_path / baseline.BASELINE_FILENAME).write_text("{}", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    assert baseline.discover_baseline(tmp_path) == tmp_path / baseline.BASELINE_FILENAME
+
+
+def test_discover_baseline_repo_root(repo):
+    (repo / baseline.BASELINE_FILENAME).write_text("{}", encoding="utf-8")
+    sub = repo / "sub"
+    sub.mkdir()
+    # cwd is a subdir with no baseline of its own → repo root wins.
+    assert baseline.discover_baseline(sub) == repo / baseline.BASELINE_FILENAME
+
+
+def test_discover_baseline_none_outside_repo(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    # No baseline file and (on machines with git) tmp_path is not a repo
+    # root containing one — but tmp_path may sit inside a repo parent on
+    # some setups, so only assert the file itself is not found by name.
+    found = baseline.discover_baseline(tmp_path)
+    if found is not None:
+        assert found.name == baseline.BASELINE_FILENAME
+
+
+# --- apply_baseline ---------------------------------------------------------
+
+
+def test_apply_baseline_suppresses_and_recomputes(tmp_path, monkeypatch):
+    _leaky_file(tmp_path)
+    report = _scan_cwd(tmp_path, monkeypatch)
+    assert report["publication_status"] == "BLOCKED"
+    bl_path = _write_baseline(
+        tmp_path / "redact-baseline.json",
+        [_entry_for(report)],
+    )
+    bl = baseline.load_baseline(bl_path)
+    filtered, stats = baseline.apply_baseline(
+        report, bl, file_base=tmp_path
+    )
+    # The leaky file yields several findings (api_key + env_assignment…);
+    # baselining only the first leaves the rest active.
+    assert stats["suppressed"] == 1
+    assert filtered["findings_total"] < report["findings_total"]
+    assert filtered["baseline"]["suppressed"] == 1
+    # status recomputed from the remaining findings
+    assert filtered["publication_status"] in {"BLOCKED", "REVIEW", "CLEAN"}
+
+
+def test_apply_baseline_full_suppression_gives_clean(tmp_path, monkeypatch):
+    _leaky_file(tmp_path)
+    report = _scan_cwd(tmp_path, monkeypatch)
+    entries = []
+    # Baseline EVERY current finding → all suppressed → CLEAN.
+    seen = set()
+    for f in report["findings"]:
+        key = (
+            str(f["file"]), str(f["category"]), str(f["pattern"]),
+            str(f["kind"]), str(f["fingerprint"]),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        entries.append(_entry_for(report, report["findings"].index(f)))
+    bl_path = _write_baseline(tmp_path / "b.json", entries)
+    bl = baseline.load_baseline(bl_path)
+    filtered, stats = baseline.apply_baseline(
+        report, bl, file_base=tmp_path
+    )
+    assert stats["suppressed"] == report["findings_total"]
+    assert filtered["publication_status"] == "CLEAN"
+    assert filtered["findings"] == []
+
+
+def test_apply_baseline_count_multiplicity(tmp_path, monkeypatch):
+    """Baseline count=1 suppresses ONE occurrence — a second identical
+    finding is new and stays active."""
+    target = tmp_path / "dup.py"
+    # Two identical secret lines → same key, two occurrences.
+    target.write_text(
+        f'a = "{FAKE_AWS_KEY}"\nb = "{FAKE_AWS_KEY}"\n', encoding="utf-8"
+    )
+    report = _scan_cwd(tmp_path, monkeypatch, "dup.py")
+    key_findings = [
+        f
+        for f in report["findings"]
+        if f["category"] == "api_key"
+    ]
+    assert len(key_findings) >= 2
+    entry = _entry_for(report, report["findings"].index(key_findings[0]))
+    entry["count"] = 1
+    bl_path = _write_baseline(tmp_path / "b.json", [entry])
+    bl = baseline.load_baseline(bl_path)
+    filtered, stats = baseline.apply_baseline(
+        report, bl, file_base=tmp_path
+    )
+    remaining_api = [
+        f for f in filtered["findings"] if f["category"] == "api_key"
+    ]
+    assert len(remaining_api) == len(key_findings) - 1
+    assert stats["suppressed"] == 1
+
+
+def test_apply_baseline_stale_entries_reported(tmp_path, monkeypatch):
+    _leaky_file(tmp_path)
+    report = _scan_cwd(tmp_path, monkeypatch)
+    entry = _entry_for(report)
+    entry["file"] = "ghost.py"  # never seen in this scan
+    bl_path = _write_baseline(tmp_path / "b.json", [entry])
+    bl = baseline.load_baseline(bl_path)
+    _, stats = baseline.apply_baseline(report, bl, file_base=tmp_path)
+    assert stats["suppressed"] == 0
+    assert stats["stale"] == 1
+
+
+def test_apply_baseline_preserves_extra_report_keys(tmp_path, monkeypatch):
+    _leaky_file(tmp_path)
+    report = _scan_cwd(tmp_path, monkeypatch)
+    report["session_id"] = "s1"  # e.g. scan_session-shaped report
+    bl_path = _write_baseline(tmp_path / "b.json", [])
+    bl = baseline.load_baseline(bl_path)
+    filtered, _ = baseline.apply_baseline(report, bl, file_base=tmp_path)
+    assert filtered["session_id"] == "s1"
+    assert filtered["tool"] == "devin-redact"
+
+
+# --- write_baseline -----------------------------------------------------------
+
+
+def test_write_baseline_roundtrip(tmp_path, monkeypatch):
+    _leaky_file(tmp_path)
+    report = _scan_cwd(tmp_path, monkeypatch)
+    out = tmp_path / "redact-baseline.json"
+    summary = baseline.write_baseline(out, report, file_base=tmp_path)
+    assert summary["findings"] == report["findings_total"]
+    doc = json.loads(out.read_text(encoding="utf-8"))
+    assert doc["version"] == baseline.BASELINE_VERSION
+    # every recorded file key is relative to the baseline dir
+    for e in doc["findings"]:
+        assert not Path(e["file"]).is_absolute()
+        assert ".." not in Path(e["file"]).parts
+    # and the written baseline suppresses the same scan
+    bl = baseline.load_baseline(out)
+    filtered, stats = baseline.apply_baseline(
+        report, bl, file_base=tmp_path
+    )
+    assert stats["suppressed"] == report["findings_total"]
+    assert filtered["publication_status"] == "CLEAN"
+
+
+# --- gate CLI integration -----------------------------------------------------
+
+
+def test_gate_baseline_suppresses_known(repo, capsys):
+    _leaky_file(repo)
+    assert cli.main(["gate", "--update-baseline", "app.py"]) == 0
+    capsys.readouterr()
+    assert cli.main(["gate", "app.py"]) == 0
+    out = capsys.readouterr()
+    assert out.out.strip() == "CLEAN"
+    assert "suppressed" in out.err
+
+
+def test_gate_baseline_new_secret_still_blocked(repo, capsys):
+    _leaky_file(repo)
+    assert cli.main(["gate", "--update-baseline", "app.py"]) == 0
+    capsys.readouterr()
+    with open(repo / "app.py", "a", encoding="utf-8") as fh:
+        fh.write(f'other = "{FAKE_AWS_KEY}"\n')
+    assert cli.main(["gate", "app.py"]) == 1
+    out = capsys.readouterr()
+    assert out.out.strip() == "BLOCKED"
+    assert "suppressed" in out.err
+
+
+def test_gate_no_baseline_ignores_file(repo, capsys):
+    _leaky_file(repo)
+    assert cli.main(["gate", "--update-baseline", "app.py"]) == 0
+    capsys.readouterr()
+    assert cli.main(["gate", "--no-baseline", "app.py"]) == 1
+    assert capsys.readouterr().out.strip() == "BLOCKED"
+
+
+def test_gate_explicit_baseline_path(repo, tmp_path, capsys):
+    _leaky_file(repo)
+    other = tmp_path / "elsewhere.json"
+    report = engine.scan([repo / "app.py"])
+    baseline.write_baseline(other, report, file_base=repo)
+    assert cli.main(["gate", "--baseline", str(other), "app.py"]) == 0
+    out = capsys.readouterr()
+    assert out.out.strip() == "CLEAN"
+    assert "suppressed" in out.err
+
+
+def test_gate_baseline_and_no_baseline_conflict(repo, capsys):
+    _leaky_file(repo)
+    assert (
+        cli.main(["gate", "--baseline", "x.json", "--no-baseline", "app.py"])
+        == 2
+    )
+    assert "devin-redact:" in capsys.readouterr().err
+
+
+def test_gate_corrupt_baseline_fails_closed(repo, capsys):
+    _leaky_file(repo)
+    (repo / "redact-baseline.json").write_text("{oops", encoding="utf-8")
+    assert cli.main(["gate", "app.py"]) == 2
+    assert "devin-redact:" in capsys.readouterr().err
+
+
+def test_gate_missing_explicit_baseline_fails_closed(repo, capsys):
+    _leaky_file(repo)
+    assert cli.main(["gate", "--baseline", "missing.json", "app.py"]) == 2
+    assert "devin-redact:" in capsys.readouterr().err
+
+
+def test_gate_update_baseline_writes_file(repo, capsys):
+    _leaky_file(repo)
+    assert cli.main(["gate", "--update-baseline", "app.py"]) == 0
+    out = capsys.readouterr()
+    assert "wrote baseline" in out.err
+    doc = json.loads((repo / "redact-baseline.json").read_text())
+    assert doc["findings"]
+
+
+@needs_git
+def test_gate_staged_baseline_suppresses(repo, capsys):
+    """``gate --staged`` matches repo-relative baseline keys: a staged
+    blob's findings suppress exactly like the worktree scan's."""
+    _leaky_file(repo)
+    _git(repo, "add", "app.py")
+    # Baseline from the staged view so keys are repo-relative.
+    assert cli.main(["gate", "--staged", "--update-baseline", "app.py"]) == 0
+    capsys.readouterr()
+    assert cli.main(["gate", "--staged", "app.py"]) == 0
+    out = capsys.readouterr()
+    assert out.out.strip() == "CLEAN"
+    assert "suppressed" in out.err
+
+
+@needs_git
+def test_gate_staged_new_secret_blocked_despite_baseline(repo, capsys):
+    _leaky_file(repo)
+    _git(repo, "add", "app.py")
+    assert cli.main(["gate", "--staged", "--update-baseline", "app.py"]) == 0
+    capsys.readouterr()
+    # A second staged file was never baselined → its findings are NEW.
+    _leaky_file(repo, "other.py")
+    _git(repo, "add", "other.py")
+    assert cli.main(["gate", "--staged", "app.py", "other.py"]) == 1
+    out = capsys.readouterr()
+    assert out.out.strip() == "BLOCKED"
+    assert "suppressed" in out.err

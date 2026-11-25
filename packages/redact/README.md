@@ -135,6 +135,15 @@ devin-redact gate sessions.db exports/
 # deleted after `git add` (this is what .pre-commit-hooks.yaml runs)
 devin-redact gate --staged file1.py path/to/file2.env
 
+# Baseline mode: a committed redact-baseline.json records findings
+# already triaged (engine false positives on legit code) — the gate
+# then fails only on NEW findings. Auto-discovered in the cwd or repo
+# root; suppressed/stale counts print on stderr.
+devin-redact gate --update-baseline src/   # record current findings
+#   …review the diff, then commit redact-baseline.json…
+devin-redact gate --baseline path/to/file.json src/   # explicit file
+devin-redact gate --no-baseline src/                 # ignore any file
+
 # SessionEnd hook handler: read-only scan of the default sessions.db,
 # one compact verdict line, exit 0 unless a hard error occurs
 devin-redact sessionend-scan
