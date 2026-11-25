@@ -170,7 +170,7 @@ def test_cli_redact_apply_refused(capsys):
 
 def test_scan_skips_packaging_metadata_dirs(tmp_path):
     """``*.egg-info``/``*.dist-info`` are generated build metadata — the
-    gate must not scan them (issue #108 residual: PKG-INFO prose trips
+    default scan skips them (issue #108 residual: PKG-INFO prose trips
     env_assignment on doc text like ``$DEVIN_BACKUP_KEEP``)."""
     pkg = tmp_path / "pkg"
     (pkg / "src" / "demo-1.0.egg-info").mkdir(parents=True)
@@ -186,6 +186,21 @@ def test_scan_skips_packaging_metadata_dirs(tmp_path):
     report = devin_redact.scan([pkg])
     files = {str(f["file"]) for f in report["findings"]}
     assert files == {str(pkg / "module.py")}
+
+
+def test_scan_packaging_metadata_dirs_when_not_skipped(tmp_path):
+    """The publication gate passes ``skip_packaging=False`` — generated
+    metadata must not become a blind spot for a real credential (the
+    ``--staged`` path already scans these files via ``git ls-files``)."""
+    pkg = tmp_path / "pkg"
+    (pkg / "demo.egg-info").mkdir(parents=True)
+    secret = "OPENAI_API" + "_KEY=" + FAKE_API_KEY
+    (pkg / "demo.egg-info" / "PKG-INFO").write_text(
+        "Metadata\n\n" + secret + "\n", encoding="utf-8"
+    )
+    report = devin_redact.scan([pkg], skip_packaging=False)
+    files = {str(f["file"]) for f in report["findings"]}
+    assert str(pkg / "demo.egg-info" / "PKG-INFO") in files
 
 
 def test_scan_text_unit():

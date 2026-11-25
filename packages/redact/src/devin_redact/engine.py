@@ -1172,7 +1172,9 @@ def redact_text(
     return new_text, edits
 
 
-def _iter_files(paths: list[Path]) -> list[Path]:
+def _iter_files(
+    paths: list[Path], *, skip_packaging: bool = True
+) -> list[Path]:
     files: set[Path] = set()
     for p in paths:
         if p.is_dir():
@@ -1180,7 +1182,11 @@ def _iter_files(paths: list[Path]) -> list[Path]:
                 dirs[:] = sorted(
                     d
                     for d in dirs
-                    if d not in _SKIP_DIRS and not d.endswith(_SKIP_DIR_SUFFIXES)
+                    if d not in _SKIP_DIRS
+                    and (
+                        not skip_packaging
+                        or not d.endswith(_SKIP_DIR_SUFFIXES)
+                    )
                 )
                 for name in sorted(names):
                     files.add(Path(root) / name)
@@ -2060,12 +2066,18 @@ def rebuild_report(report: dict, findings: list[Finding]) -> dict:
     return rebuilt
 
 
-def scan(paths) -> dict:
+def scan(paths, *, skip_packaging: bool = True) -> dict:
     """Scan files/directories and return the report contract (SPEC §6).
 
     Deterministic: identical input yields identical output.
+    ``skip_packaging=False`` walks ``*.egg-info``/``*.dist-info`` too —
+    the publication gate uses it so generated metadata cannot hide a
+    real credential (the ``--staged`` path already scans them via
+    ``git ls-files``).
     """
-    files = _iter_files([Path(p) for p in paths])
+    files = _iter_files(
+        [Path(p) for p in paths], skip_packaging=skip_packaging
+    )
     all_findings: list[Finding] = []
     errors: list[dict[str, str]] = []
     scanned = 0
