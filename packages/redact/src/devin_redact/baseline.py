@@ -320,6 +320,7 @@ def write_baseline(
     *,
     file_base: Path,
     note: str | None = None,
+    scanned_files=None,
 ) -> dict:
     """Write ``report``'s findings as a new baseline file.
 
@@ -336,6 +337,24 @@ def write_baseline(
     base_dir = path.parent
     groups: dict[tuple[str, str, str, str, str], dict] = {}
     order: list[tuple[str, str, str, str, str]] = []
+    if scanned_files is not None and path.is_file():
+        # Partial-scope refresh: keep entries for files the scan did
+        # not cover — an update run on a subset must not erase the
+        # exceptions triaged for the rest of the tree (#132).
+        scanned = {
+            normalize_file(str(f), file_base=file_base, base_dir=base_dir)
+            for f in scanned_files
+        }
+        try:
+            old = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            old = None
+        for e in (old or {}).get("findings") or []:
+            if not isinstance(e, dict) or e.get("file") in scanned:
+                continue
+            ekey = _entry_key(e)
+            groups[ekey] = dict(e)
+            order.append(ekey)
     for finding in report.get("findings", []):
         key = finding_key(finding, file_base=file_base, base_dir=base_dir)
         if _is_self_finding(key, path):

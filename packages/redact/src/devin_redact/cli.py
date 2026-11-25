@@ -445,17 +445,24 @@ def main(argv: list[str] | None = None) -> int:
                     return 2
                 report = engine.scan_blobs(blobs, errors=errs)
                 file_base = staged.repo_root()
+                scanned_files = [n for n, _ in blobs]
                 if args.baseline is None:
                     # Write the file the gate will actually read: the
                     # first baseline the index holds (same resolution
                     # as the verify path), else cwd-local. Rewriting a
                     # worktree-only local file would let it shadow the
                     # indexed root one once staged (#132 re-review).
+                    # --no-baseline opts out of discovery entirely:
+                    # never consult the index for the target either.
                     target = Path.cwd() / baseline.BASELINE_FILENAME
-                    for name in _index_candidates(file_base):
-                        if staged.staged_blob(name, cwd=file_base) is not None:
-                            target = Path(file_base) / name
-                            break
+                    if not args.no_baseline:
+                        for name in _index_candidates(file_base):
+                            if (
+                                staged.staged_blob(name, cwd=file_base)
+                                is not None
+                            ):
+                                target = Path(file_base) / name
+                                break
             else:
                 missing = [
                     p
@@ -474,6 +481,9 @@ def main(argv: list[str] | None = None) -> int:
                     return 2
                 report = engine.scan(args.paths)
                 file_base = Path.cwd()
+                scanned_files = engine._iter_files(
+                    [Path(p) for p in args.paths]
+                )
                 if target is None:
                     target = Path.cwd() / baseline.BASELINE_FILENAME
             hard = _blocking_errors(report)
@@ -486,7 +496,10 @@ def main(argv: list[str] | None = None) -> int:
                 return 2
             try:
                 summary = baseline.write_baseline(
-                    target, report, file_base=file_base
+                    target,
+                    report,
+                    file_base=file_base,
+                    scanned_files=scanned_files,
                 )
             except OSError as exc:
                 print(

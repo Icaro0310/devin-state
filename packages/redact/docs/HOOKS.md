@@ -137,8 +137,10 @@ recorded stops blocking.
 
 With `gate --staged` the baseline is read from the git **index**, not
 the working tree — the exceptions must be part of the commit they
-suppress. `--update-baseline` writes the file to disk, so after
-reviewing the diff run `git add redact-baseline.json` *before* the
-next staged gate: without it the hook exits 2 (baseline not in the
-index), and an edited-but-unstaged baseline silently keeps the gate
-using the previous indexed version.
+suppress. `--update-baseline` writes the file to disk and prints
+its path, so after reviewing the diff run `git add` on *that* path
+*before* the next staged gate: without it the hook exits 2 (baseline
+not in the index), and an edited-but-unstaged baseline silently keeps
+the gate using the previous indexed version. Note the update may
+target the repo-root baseline even when run from a subdirectory —
+stage the printed path, not a hard-coded name.

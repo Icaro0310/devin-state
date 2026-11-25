@@ -751,3 +751,82 @@ def test_gate_staged_update_targets_indexed_baseline(repo, capsys, monkeypatch):
     root_doc = json.loads((repo / "redact-baseline.json").read_text())
     assert any("new.py" in e["file"] for e in root_doc["findings"])
     assert (repo / "redact-baseline.json").read_text() != before
+
+
+@needs_git
+def test_gate_update_staged_partial_scope_preserves_out_of_scope(repo):
+    """``--update-baseline --staged <sub>`` must not erase entries for
+    files outside the scanned subset (#132 re-review)."""
+    _write_baseline(
+        repo / "redact-baseline.json",
+        [
+            {
+                "file": "app.py",
+                "category": "cloud",
+                "pattern": "aws",
+                "kind": "api-key",
+                "fingerprint": "oldfp",
+                "count": 2,
+                "location": "app.py:1",
+            }
+        ],
+    )
+    _git(repo, "add", "redact-baseline.json")
+    (repo / "src").mkdir()
+    _leaky_file(repo / "src", "new.py")
+    _git(repo, "add", "src/new.py")
+    assert cli.main(["gate", "--update-baseline", "--staged", "src/"]) == 0
+    doc = json.loads((repo / "redact-baseline.json").read_text())
+    files = {e["file"] for e in doc["findings"]}
+    assert "app.py" in files  # out of scope — preserved
+    assert "src/new.py" in files  # in scope — recorded
+
+
+def test_gate_update_partial_scope_worktree(repo, monkeypatch):
+    """Same merge guarantee for the worktree update path."""
+    _write_baseline(
+        repo / "redact-baseline.json",
+        [
+            {
+                "file": "app.py",
+                "category": "cloud",
+                "pattern": "aws",
+                "kind": "api-key",
+                "fingerprint": "oldfp",
+                "count": 2,
+                "location": "app.py:1",
+            }
+        ],
+    )
+    (repo / "src").mkdir()
+    _leaky_file(repo / "src", "new.py")
+    assert cli.main(["gate", "--update-baseline", "src/"]) == 0
+    doc = json.loads((repo / "redact-baseline.json").read_text())
+    files = {e["file"] for e in doc["findings"]}
+    assert files == {"app.py", "src/new.py"}
+
+
+@needs_git
+def test_gate_update_staged_no_baseline_writes_local(repo, monkeypatch):
+    """``--no-baseline --update-baseline --staged`` never consults the
+    index for the target — it writes the cwd-local file (#132)."""
+    root_bl = _write_baseline(repo / "redact-baseline.json", [])
+    before = root_bl.read_text()
+    _git(repo, "add", "redact-baseline.json")
+    (repo / "src").mkdir()
+    _leaky_file(repo / "src", "new.py")
+    _git(repo, "add", "src/new.py")
+    monkeypatch.chdir(repo / "src")
+    assert (
+        cli.main(
+            ["gate", "--no-baseline", "--update-baseline", "--staged", "."]
+        )
+        == 0
+    )
+    local = repo / "src" / "redact-baseline.json"
+    assert local.is_file()
+    # Entries are stored relative to the baseline's own directory.
+    assert {e["file"] for e in json.loads(local.read_text())["findings"]} == {
+        "new.py"
+    }
+    assert root_bl.read_text() == before  # indexed root baseline untouched
