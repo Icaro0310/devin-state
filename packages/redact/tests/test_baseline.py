@@ -723,3 +723,31 @@ def test_gate_baseline_foreign_credential_blocks(tmp_path, monkeypatch, capsys):
     (tmp_path / "redact-baseline.json").write_text(json.dumps(doc))
     assert cli.main(["gate", "."]) == 1
     assert capsys.readouterr().out.strip() == "BLOCKED"
+
+
+@needs_git
+def test_gate_staged_update_targets_indexed_baseline(repo, capsys, monkeypatch):
+    """--update-baseline --staged must rewrite the file verify reads —
+    the indexed root baseline, not a worktree-only local decoy that
+    would shadow it once staged (#132 re-review)."""
+    _leaky_file(repo)
+    _git(repo, "add", "app.py")
+    assert cli.main(["gate", "--staged", "--update-baseline", "app.py"]) == 0
+    capsys.readouterr()
+    _git(repo, "add", "redact-baseline.json")
+    before = (repo / "redact-baseline.json").read_text()
+    sub = repo / "src"
+    sub.mkdir()
+    decoy = sub / "redact-baseline.json"
+    decoy.write_text('{"version": 1, "findings": []}', encoding="utf-8")
+    # New staged finding from the subdir — update must land it in the
+    # root baseline (the file the gate resolves), not the decoy.
+    _leaky_file(sub, "new.py")
+    _git(repo, "add", "src/new.py")
+    monkeypatch.chdir(sub)
+    assert cli.main(["gate", "--staged", "--update-baseline", "."]) == 0
+    capsys.readouterr()
+    assert decoy.read_text() == '{"version": 1, "findings": []}'
+    root_doc = json.loads((repo / "redact-baseline.json").read_text())
+    assert any("new.py" in e["file"] for e in root_doc["findings"])
+    assert (repo / "redact-baseline.json").read_text() != before

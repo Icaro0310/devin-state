@@ -244,6 +244,21 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _index_candidates(repo_root: Path) -> list[str]:
+    """Baseline names the staged gate resolves, cwd-local then root."""
+    cand = []
+    try:
+        rel = os.path.relpath(
+            Path.cwd() / baseline.BASELINE_FILENAME, repo_root
+        )
+        if rel != ".." and not rel.startswith(f"..{os.sep}"):
+            cand.append(rel)
+    except (OSError, ValueError):
+        pass
+    cand.append(baseline.BASELINE_FILENAME)
+    return [Path(c).as_posix() for c in dict.fromkeys(cand)]
+
+
 def _index_baseline(args, repo_root: Path):
     """The ``--staged`` gate's baseline, read from the INDEX.
 
@@ -278,17 +293,7 @@ def _index_baseline(args, repo_root: Path):
         return loaded
     if args.no_baseline:
         return None
-    cand = []
-    try:
-        rel = os.path.relpath(
-            Path.cwd() / baseline.BASELINE_FILENAME, repo_root
-        )
-        if rel != ".." and not rel.startswith(f"..{os.sep}"):
-            cand.append(rel)
-    except (OSError, ValueError):
-        pass
-    cand.append(baseline.BASELINE_FILENAME)
-    for name in dict.fromkeys(Path(c).as_posix() for c in cand):
+    for name in _index_candidates(repo_root):
         loaded = baseline.load_staged_baseline(name, repo_root)
         if loaded is not None:
             return loaded
@@ -422,7 +427,7 @@ def main(argv: list[str] | None = None) -> int:
             # Maintenance mode: record the current findings verbatim.
             # The file is the audit trail — nothing is suppressed until
             # a human reviews the diff and commits it.
-            target = baseline_path or (Path.cwd() / baseline.BASELINE_FILENAME)
+            target = baseline_path
             if args.staged:
                 try:
                     blobs, errs = staged.staged_blobs(args.paths)
@@ -440,6 +445,17 @@ def main(argv: list[str] | None = None) -> int:
                     return 2
                 report = engine.scan_blobs(blobs, errors=errs)
                 file_base = staged.repo_root()
+                if args.baseline is None:
+                    # Write the file the gate will actually read: the
+                    # first baseline the index holds (same resolution
+                    # as the verify path), else cwd-local. Rewriting a
+                    # worktree-only local file would let it shadow the
+                    # indexed root one once staged (#132 re-review).
+                    target = Path.cwd() / baseline.BASELINE_FILENAME
+                    for name in _index_candidates(file_base):
+                        if staged.staged_blob(name, cwd=file_base) is not None:
+                            target = Path(file_base) / name
+                            break
             else:
                 missing = [
                     p
@@ -458,6 +474,8 @@ def main(argv: list[str] | None = None) -> int:
                     return 2
                 report = engine.scan(args.paths)
                 file_base = Path.cwd()
+                if target is None:
+                    target = Path.cwd() / baseline.BASELINE_FILENAME
             hard = _blocking_errors(report)
             if hard:
                 for e in hard:
