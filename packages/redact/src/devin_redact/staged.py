@@ -79,6 +79,9 @@ def staged_blobs(paths, cwd=None) -> tuple[list[Blob], list[dict]]:
     cwd = Path(cwd) if cwd is not None else Path.cwd()
     root = _repo_root(cwd)
     blobs: list[Blob] = []
+    seen: set[str] = set()  # repo-relative names already queued —
+    # overlapping targets (a directory plus a file inside it) must not
+    # count the same staged blob twice.
     errors: list[dict] = []
     for p in paths:
         raw = str(p)
@@ -90,7 +93,9 @@ def staged_blobs(paths, cwd=None) -> tuple[list[Blob], list[dict]]:
         name = Path(rel).as_posix()
         proc = _git(["cat-file", "blob", f":0:{name}"], root)
         if proc.returncode == 0:
-            blobs.append((name, proc.stdout))
+            if name not in seen:
+                seen.add(name)
+                blobs.append((name, proc.stdout))
             continue
         # Not a readable blob: either nothing is staged under ``name``
         # or it is a directory. ``ls-files`` pathspec matching lists the
@@ -112,8 +117,11 @@ def staged_blobs(paths, cwd=None) -> tuple[list[Blob], list[dict]]:
             errors.append({"file": name, "error": "skipped: no staged blob"})
             continue
         for entry in dict.fromkeys(entries):
+            if entry in seen:
+                continue
             sub = _git(["cat-file", "blob", f":0:{entry}"], root)
             if sub.returncode == 0:
+                seen.add(entry)
                 blobs.append((entry, sub.stdout))
             else:
                 detail = sub.stderr.decode("utf-8", "replace").strip()
@@ -121,3 +129,15 @@ def staged_blobs(paths, cwd=None) -> tuple[list[Blob], list[dict]]:
                     {"file": entry, "error": f"staged blob unreadable: {detail}"}
                 )
     return blobs, errors
+
+
+def staged_blob(name: str, cwd=None) -> bytes | None:
+    """A single repo-relative path's index blob, or ``None``.
+
+    Used for index-held metadata — the gate baseline must come from the
+    same commit the scan verifies, never from the working tree.
+    """
+    cwd = Path(cwd) if cwd is not None else Path.cwd()
+    root = _repo_root(cwd)
+    proc = _git(["cat-file", "blob", f":0:{name}"], root)
+    return proc.stdout if proc.returncode == 0 else None

@@ -116,8 +116,13 @@ def load_baseline(path: Path) -> Baseline:
     path = Path(path)
     try:
         raw = path.read_text(encoding="utf-8")
-    except OSError as exc:
+    except (OSError, UnicodeDecodeError) as exc:
         raise BaselineError(f"cannot read baseline {path}: {exc}") from exc
+    return _parse_baseline(raw, path)
+
+
+def _parse_baseline(raw: str, path: Path) -> Baseline:
+    """Validate the decoded baseline JSON into a :class:`Baseline`."""
     try:
         data = json.loads(raw)
     except json.JSONDecodeError as exc:
@@ -154,6 +159,42 @@ def load_baseline(path: Path) -> Baseline:
             )
         counts[_entry_key(entry)] += count
     return Baseline(path=path, counts=counts, entries=len(findings))
+
+
+def load_staged_baseline(name: str, root: Path) -> "Baseline | None":
+    """Read the baseline blob from the git *index*, not the worktree.
+
+    ``gate --staged`` verifies what the commit records, so its
+    exceptions must come from the commit too: a worktree-only baseline
+    edit would suppress staged findings without ever appearing in the
+    diff under review. ``name`` is the repo-relative posix path (index
+    addressing); ``root`` is used as the finding base and as
+    ``Baseline.path``'s parent for key normalisation. Returns ``None``
+    when the index holds no blob under ``name``.
+    """
+    raw = staged.staged_blob(name, cwd=root)
+    if raw is None:
+        return None
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise BaselineError(
+            f"cannot read staged baseline {name}: {exc}"
+        ) from exc
+    return _parse_baseline(text, Path(root) / name)
+
+
+def _is_self_finding(key: tuple, baseline_path: Path) -> bool:
+    """True when the finding key points at the baseline file itself.
+
+    Entries record file paths verbatim, so a baseline inevitably
+    contains whatever secret-shaped strings the triaged filenames hold
+    — scanned, it would flag itself (devin-state#132 review). The
+    artifact is audit data, not scannable surface: self findings are
+    never recorded by :func:`write_baseline` and never count as new in
+    :func:`apply_baseline`.
+    """
+    return key[0] == baseline_path.name
 
 
 def discover_baseline(cwd: Path) -> Path | None:
@@ -199,6 +240,10 @@ def apply_baseline(
     suppressed = 0
     for finding in report.get("findings", []):
         key = finding_key(finding, file_base=file_base, base_dir=base_dir)
+        if _is_self_finding(key, baseline.path):
+            # The baseline file can never suppress findings on itself —
+            # drop them instead of letting the artifact block the gate.
+            continue
         if remaining.get(key, 0) > 0:
             remaining[key] -= 1
             suppressed += 1
@@ -247,6 +292,10 @@ def write_baseline(
     order: list[tuple[str, str, str, str, str]] = []
     for finding in report.get("findings", []):
         key = finding_key(finding, file_base=file_base, base_dir=base_dir)
+        if _is_self_finding(key, path):
+            # Never record findings on the baseline file itself — it is
+            # audit data that inevitably re-triggers the patterns.
+            continue
         if key not in groups:
             groups[key] = {
                 "file": key[0],

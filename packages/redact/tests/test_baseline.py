@@ -15,7 +15,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from devin_redact import baseline, cli, engine
+from devin_redact import baseline, cli, engine, staged
 from test_chunked import FAKE_AWS_KEY
 
 needs_git = pytest.mark.skipif(
@@ -471,6 +471,8 @@ def test_gate_staged_baseline_suppresses(repo, capsys):
     # Baseline from the staged view so keys are repo-relative.
     assert cli.main(["gate", "--staged", "--update-baseline", "app.py"]) == 0
     capsys.readouterr()
+    # The baseline is read from the index — it must be staged to apply.
+    _git(repo, "add", "redact-baseline.json")
     assert cli.main(["gate", "--staged", "app.py"]) == 0
     out = capsys.readouterr()
     assert out.out.strip() == "CLEAN"
@@ -483,6 +485,7 @@ def test_gate_staged_new_secret_blocked_despite_baseline(repo, capsys):
     _git(repo, "add", "app.py")
     assert cli.main(["gate", "--staged", "--update-baseline", "app.py"]) == 0
     capsys.readouterr()
+    _git(repo, "add", "redact-baseline.json")
     # A second staged file was never baselined → its findings are NEW.
     _leaky_file(repo, "other.py")
     _git(repo, "add", "other.py")
@@ -490,3 +493,154 @@ def test_gate_staged_new_secret_blocked_despite_baseline(repo, capsys):
     out = capsys.readouterr()
     assert out.out.strip() == "BLOCKED"
     assert "suppressed" in out.err
+
+
+# --- devin-state#132 review --------------------------------------------------
+
+def test_gate_update_baseline_missing_target_preserves(repo, capsys):
+    """A mistyped target scans as zero files — overwriting the baseline
+    would silently erase it. Refuse and preserve (review #132)."""
+    _leaky_file(repo)
+    assert cli.main(["gate", "--update-baseline", "app.py"]) == 0
+    capsys.readouterr()
+    before = (repo / "redact-baseline.json").read_text()
+    assert cli.main(["gate", "--update-baseline", "ap.py"]) == 2
+    out = capsys.readouterr()
+    assert "not a file or directory" in out.err
+    assert (repo / "redact-baseline.json").read_text() == before
+
+
+def test_gate_update_baseline_empty_dir_is_valid(repo, capsys):
+    """An existing directory with no findings is still a valid target —
+    only nonexistent paths are refused."""
+    d = repo / "empty"
+    d.mkdir()
+    assert cli.main(["gate", "--update-baseline", "empty"]) == 0
+    doc = json.loads((repo / "redact-baseline.json").read_text())
+    assert doc["findings"] == []
+
+
+@needs_git
+def test_gate_update_baseline_staged_nothing_staged_preserves(repo, capsys):
+    """All-skipped staged targets must not erase the baseline either."""
+    _leaky_file(repo)
+    _git(repo, "add", "app.py")
+    assert cli.main(["gate", "--staged", "--update-baseline", "app.py"]) == 0
+    capsys.readouterr()
+    before = (repo / "redact-baseline.json").read_text()
+    assert (
+        cli.main(["gate", "--staged", "--update-baseline", "never.py"]) == 2
+    )
+    assert "nothing staged" in capsys.readouterr().err
+    assert (repo / "redact-baseline.json").read_text() == before
+
+
+@needs_git
+def test_staged_blobs_overlapping_targets_dedupe(repo):
+    """Directory + file inside it must not scan the same blob twice —
+    duplicates double-count findings in both update and verify."""
+    _leaky_file(repo)
+    _git(repo, "add", "app.py")
+    blobs, _ = staged.staged_blobs([".", "app.py"])
+    names = [n for n, _ in blobs]
+    assert names.count("app.py") == 1
+
+
+@needs_git
+def test_gate_staged_overlap_baseline_count(repo, capsys):
+    """The reviewer's case: overlapping targets inflated 7 → 12."""
+    _leaky_file(repo)
+    _git(repo, "add", "app.py")
+    assert (
+        cli.main(["gate", "--staged", "--update-baseline", ".", "app.py"])
+        == 0
+    )
+    capsys.readouterr()
+    doc = json.loads((repo / "redact-baseline.json").read_text())
+    assert sum(e["count"] for e in doc["findings"]) == len(
+        engine.scan([repo / "app.py"])["findings"]
+    )
+
+
+def test_load_baseline_utf16_fails_closed(tmp_path):
+    """A UTF-16 baseline raises BaselineError (exit 2), not a traceback
+    with exit 1."""
+    p = tmp_path / "redact-baseline.json"
+    p.write_bytes('{"version": 1, "findings": []}'.encode("utf-16"))
+    with pytest.raises(baseline.BaselineError):
+        baseline.load_baseline(p)
+
+
+@needs_git
+def test_gate_staged_unstaged_baseline_fails_closed(repo, capsys):
+    """A baseline present only in the worktree must not apply to the
+    staged gate — fail closed with guidance (SEC, review #132)."""
+    _leaky_file(repo)
+    _git(repo, "add", "app.py")
+    assert cli.main(["gate", "--staged", "--update-baseline", "app.py"]) == 0
+    capsys.readouterr()
+    assert cli.main(["gate", "--staged", "app.py"]) == 2
+    assert "not in the index" in capsys.readouterr().err
+
+
+@needs_git
+def test_gate_staged_ignores_unstaged_baseline_edits(repo, capsys):
+    """The exploit: editing the worktree baseline to cover a new staged
+    secret must not unblock the commit."""
+    _leaky_file(repo)
+    _git(repo, "add", "app.py")
+    assert cli.main(["gate", "--staged", "--update-baseline", "app.py"]) == 0
+    capsys.readouterr()
+    _git(repo, "add", "redact-baseline.json")
+    assert cli.main(["gate", "--staged", "app.py"]) == 0
+    capsys.readouterr()
+    # New staged secret + a worktree-only baseline update covering it.
+    _leaky_file(repo, "b.py")
+    _git(repo, "add", "b.py")
+    assert cli.main(["gate", "--update-baseline", "."]) == 0
+    capsys.readouterr()
+    assert cli.main(["gate", "--staged", "app.py", "b.py"]) == 1
+    assert capsys.readouterr().out.strip() == "BLOCKED"
+
+
+def test_gate_baseline_file_itself_never_blocks(tmp_path, monkeypatch, capsys):
+    """Entries record filenames verbatim — a secret-shaped name inside
+    the baseline JSON must not re-flag the artifact itself (#132)."""
+    monkeypatch.chdir(tmp_path)
+    _write_baseline(
+        tmp_path / "redact-baseline.json",
+        [
+            {
+                "file": f"token={FAKE_AWS_KEY}.txt",
+                "category": "x",
+                "pattern": "y",
+                "kind": "z",
+                "fingerprint": "fp",
+                "count": 1,
+                "location": "",
+                "preview": "",
+            }
+        ],
+    )
+    assert cli.main(["gate", "."]) == 0
+    assert capsys.readouterr().out.strip() == "CLEAN"
+
+
+def test_write_baseline_skips_findings_on_itself(tmp_path):
+    report = {
+        "findings": [
+            {
+                "file": "redact-baseline.json",
+                "category": "secret",
+                "pattern": "p",
+                "kind": "k",
+                "fingerprint": "f",
+                "location": "1:1",
+                "preview": "x",
+            }
+        ]
+    }
+    target = tmp_path / "redact-baseline.json"
+    baseline.write_baseline(target, report, file_base=tmp_path)
+    doc = json.loads(target.read_text())
+    assert doc["findings"] == []

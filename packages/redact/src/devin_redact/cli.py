@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -372,9 +373,33 @@ def main(argv: list[str] | None = None) -> int:
                 except staged.StagedScanError as exc:
                     print(f"devin-redact: {exc}", file=sys.stderr)
                     return 2
+                if not blobs:
+                    # Every target skipped — overwriting the baseline
+                    # with zero findings would erase the audit trail.
+                    print(
+                        "devin-redact: nothing staged under the given "
+                        "path(s) — baseline preserved",
+                        file=sys.stderr,
+                    )
+                    return 2
                 report = engine.scan_blobs(blobs, errors=errs)
                 file_base = staged.repo_root()
             else:
+                missing = [
+                    p
+                    for p in args.paths
+                    if not (p.is_file() or p.is_dir())
+                ]
+                for p in missing:
+                    print(
+                        f"devin-redact: not a file or directory: {p}",
+                        file=sys.stderr,
+                    )
+                if missing:
+                    # A mistyped target scans as zero files — writing
+                    # would replace the baseline with an empty finding
+                    # set and look like success.
+                    return 2
                 report = engine.scan(args.paths)
                 file_base = Path.cwd()
             hard = _blocking_errors(report)
@@ -421,7 +446,28 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         if baseline_path is not None:
             try:
-                loaded = baseline.load_baseline(baseline_path)
+                if args.staged:
+                    # The staged gate verifies the commit's content, so
+                    # the exceptions must be read from the commit too —
+                    # a worktree baseline edit would suppress findings
+                    # without appearing in the diff under review.
+                    rel = os.path.relpath(baseline_path, file_base)
+                    if rel == ".." or rel.startswith(f"..{os.sep}"):
+                        raise baseline.BaselineError(
+                            f"baseline {baseline_path} is outside the "
+                            f"repository — cannot read it from the index"
+                        )
+                    loaded = baseline.load_staged_baseline(
+                        Path(rel).as_posix(), file_base
+                    )
+                    if loaded is None:
+                        raise baseline.BaselineError(
+                            f"baseline {baseline_path} is not in the "
+                            f"index — stage it (git add) to use it "
+                            f"with --staged"
+                        )
+                else:
+                    loaded = baseline.load_baseline(baseline_path)
             except baseline.BaselineError as exc:
                 print(f"devin-redact: {exc}", file=sys.stderr)
                 return 2
