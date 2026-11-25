@@ -181,7 +181,7 @@ def _parse_baseline(raw: str, path: Path) -> Baseline:
     )
 
 
-def load_staged_baseline(name: str, root: Path) -> "Baseline | None":
+def load_staged_baseline(name: str, root: Path) -> Baseline | None:
     """Read the baseline blob from the git *index*, not the worktree.
 
     ``gate --staged`` verifies what the commit records, so its
