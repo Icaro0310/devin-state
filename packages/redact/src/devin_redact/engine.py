@@ -2033,6 +2033,26 @@ def _report(
     }
 
 
+def rebuild_report(report: dict, findings: list[Finding]) -> dict:
+    """Re-assemble a scan report around a (possibly filtered) finding list.
+
+    Keeps the SPEC §6 contract — sorted findings, recomputed category
+    counts and ``publication_status`` — while preserving any extra
+    top-level keys the source report carried (``session_id`` …). Used
+    by :mod:`devin_redact.baseline` to drop already-triaged findings
+    without disturbing the rest of the verdict.
+    """
+    rebuilt = _report(
+        int(report.get("files_scanned", 0)),
+        list(findings),
+        list(report.get("errors", [])),
+    )
+    for key, value in report.items():
+        if key not in rebuilt:
+            rebuilt[key] = value
+    return rebuilt
+
+
 def scan(paths) -> dict:
     """Scan files/directories and return the report contract (SPEC §6).
 

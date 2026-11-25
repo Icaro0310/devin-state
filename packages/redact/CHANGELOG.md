@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `gate` baseline mode (devin-state#108): a committed
+  `redact-baseline.json` records findings already triaged as
+  accepted/false-positive, and the gate then fails only on *new*
+  findings. Entries match on
+  `(file, category, pattern, kind, fingerprint)` with per-key
+  occurrence counts — line drift inside a file never resurrects a
+  suppressed finding, while a second occurrence of a baselined finding
+  still counts as new. Baseline paths are normalised relative to the
+  baseline file's directory, so worktree and `--staged` scans produce
+  identical keys. Suppressed/stale counts are reported on stderr;
+  stdout stays the single-word `CLEAN`/`REVIEW`/`BLOCKED` contract.
+  `redact-baseline.json` is auto-discovered in the cwd or the enclosing
+  repo root; `--baseline FILE` overrides the location,
+  `--no-baseline` disables the mechanism, and
+  `--update-baseline` regenerates the file from the current scan
+  (works with `--staged` too) — its diff is the audit trail, so review
+  it before committing: whatever is recorded stops blocking.
+  `engine.rebuild_report` re-assembles the SPEC §6 report around a
+  filtered finding list, preserving extra keys such as `session_id`.
+
 ## [0.2.6] - 2026-10-28
 
 ### Added
