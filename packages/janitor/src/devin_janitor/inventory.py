@@ -536,17 +536,80 @@ class DevinArtifact:
     mtime: float
 
 
+def _strip_jsonc_comments(text: str) -> str:
+    """Remove ``//`` line and ``/* */`` block comments (JSONC).
+
+    ``//`` inside string literals (e.g. ``"https://..."``) is preserved —
+    the scan tracks string/escape state instead of a blind regex.
+    """
+    out: list[str] = []
+    i, n = 0, len(text)
+    in_str = False
+    esc = False
+    while i < n:
+        c = text[i]
+        if in_str:
+            out.append(c)
+            if esc:
+                esc = False
+            elif c == "\\":
+                esc = True
+            elif c == '"':
+                in_str = False
+            i += 1
+            continue
+        if c == '"':
+            in_str = True
+            out.append(c)
+            i += 1
+            continue
+        if c == "/" and i + 1 < n:
+            if text[i + 1] == "/":
+                i += 2
+                while i < n and text[i] not in "\r\n":
+                    i += 1
+                continue
+            if text[i + 1] == "*":
+                i += 2
+                while i + 1 < n and not (text[i] == "*" and text[i + 1] == "/"):
+                    i += 1
+                i += 2
+                continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
 def _validate_state_file(p: Path) -> None:
-    """``.json`` files under ``.devin/`` are state — verify they parse."""
+    """``.json`` files under ``.devin/`` are state — verify they parse.
+
+    ``devin_dir`` defaults to ``./.devin`` (the cwd's dir), so the scan
+    also covers *workspace* ``.devin/`` dirs — which mix runtime state
+    with harness config like ``mcp_config.json``, where ``//`` comments
+    are legal JSONC (the Devin harness accepts them). Retry with
+    comments stripped before calling a file malformed: corrupted JSON
+    stays loud, legal JSONC no longer fails the whole report.
+    """
     try:
-        json.loads(p.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raw = p.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
         raise DevinArtifactError(
             f"malformed .devin state file: {p} ({exc})"
         ) from exc
     except OSError as exc:
         raise DevinArtifactError(
             f"unreadable .devin artifact: {p} ({exc})"
+        ) from exc
+    try:
+        json.loads(raw)
+        return
+    except json.JSONDecodeError:
+        pass
+    try:
+        json.loads(_strip_jsonc_comments(raw))
+    except json.JSONDecodeError as exc:
+        raise DevinArtifactError(
+            f"malformed .devin state file: {p} ({exc})"
         ) from exc
 
 

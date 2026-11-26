@@ -83,6 +83,29 @@ def test_malformed_json_state_is_loud(dotdevin):
         load_devin_artifacts(dotdevin)
 
 
+def test_jsonc_comments_in_config_are_accepted(dotdevin):
+    """Workspace ``.devin/`` mixes state with JSONC harness config —
+    ``//`` and ``/* */`` comments (legal in ``mcp_config.json``) must not
+    be flagged malformed. ``//`` inside strings stays untouched."""
+    _write(
+        dotdevin,
+        "mcp_config.json",
+        '{\n'
+        '  // line comment\n'
+        '  "mcpServers": /* block */\n'
+        '    {"s": {"url": "https://x//y"}}\n'
+        '}\n',
+    )
+    arts = load_devin_artifacts(dotdevin)
+    assert [a.rel_path for a in arts] == ["mcp_config.json"]
+
+
+def test_jsonc_still_malformed_after_comment_strip(dotdevin):
+    _write(dotdevin, "broken.json", "{not json // trailing comment\n")
+    with pytest.raises(DevinArtifactError, match="malformed"):
+        load_devin_artifacts(dotdevin)
+
+
 def test_unstatable_artifact_is_loud(dotdevin, monkeypatch):
     f = _write(dotdevin, "memory/hook-fires.jsonl", "{}\n")
     real_stat = Path.stat
