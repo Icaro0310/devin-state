@@ -94,6 +94,8 @@ def load_keep_file(path: str | Path | None) -> tuple[set[str], list[str]]:
             data = json.loads(_strip_jsonc_comments(raw))
         except ValueError:
             return set(), []
+    if not isinstance(data, dict):
+        return set(), []
     return set(data.get("ids", [])), list(data.get("title_patterns", []))
 
 

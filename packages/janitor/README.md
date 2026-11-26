@@ -230,7 +230,8 @@ use `$XDG_CONFIG_HOME/Devin` (normally `~/.config/Devin`). Override with
 bridge labels sidecar follows `DEVIN_BRIDGE_STATE_DIR`. Protect
 sessions in `.devin/janitor-keep.json`
 (`{"ids": [...], "title_patterns": [...]}`); tune classification rules via
-`--config file.json`. `report` reads every store (`sessions.db`,
+`--config file.json`. `.devin/*.json` state files and the keep file accept
+JSONC comments (`//` and `/* */`) — malformed JSON still fails loudly. `report` reads every store (`sessions.db`,
 `acp-messages/`, `state.vscdb`, `session_locks/`, `.devin/` artifacts) and
 estimates what the
 janitor's own rules would free — it never writes; it exits 0 on a clean

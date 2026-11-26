@@ -47,6 +47,14 @@ def test_load_keep_file_accepts_jsonc(tmp_path):
     assert patterns == ["KICKOFF"]
 
 
+def test_load_keep_file_non_object_root_returns_empty(tmp_path):
+    """``[] // comment`` parses as valid JSON(C) but is not the expected
+    object — return empty protections instead of crashing on ``.get()``."""
+    f = tmp_path / "keep.json"
+    f.write_text('["a"] // not an object\n', encoding="utf-8")
+    assert load_keep_file(f) == (set(), [])
+
+
 def test_keep_ids_and_patterns():
     rows = [
         mkrow("keep-id", user_msgs=100),
