@@ -536,17 +536,94 @@ class DevinArtifact:
     mtime: float
 
 
+def _strip_jsonc_comments(text: str) -> str:
+    """Blank ``//`` line and ``/* */`` block comments (JSONC).
+
+    Comments are *blanked*, not deleted: every comment char becomes a
+    space except newlines, so the output keeps the original length and
+    ``json`` errors still report the real line/column. Blanking also
+    stops a comment from merging tokens — ``tr/* x */ue`` must not
+    silently validate as ``true``.
+
+    ``//`` inside string literals (e.g. ``"https://..."``) is preserved —
+    the scan tracks string/escape state instead of a blind regex.
+
+    Raises ``ValueError`` on an unterminated ``/*`` comment — a file that
+    ends mid-comment is malformed JSONC, not a truncated-but-valid one.
+    """
+    out = list(text)
+    i, n = 0, len(text)
+    in_str = False
+    esc = False
+    while i < n:
+        c = text[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif c == "\\":
+                esc = True
+            elif c == '"':
+                in_str = False
+            i += 1
+            continue
+        if c == '"':
+            in_str = True
+            i += 1
+            continue
+        if c == "/" and i + 1 < n:
+            if text[i + 1] == "/":
+                j = i
+                while j < n and text[j] not in "\r\n":
+                    j += 1
+                for k in range(i, j):
+                    out[k] = " "
+                i = j
+                continue
+            if text[i + 1] == "*":
+                j = i + 2
+                while j + 1 < n and not (text[j] == "*" and text[j + 1] == "/"):
+                    j += 1
+                if j + 1 >= n:
+                    raise ValueError("unterminated block comment")
+                for k in range(i, j + 2):
+                    if text[k] not in "\r\n":
+                        out[k] = " "
+                i = j + 2
+                continue
+        i += 1
+    return "".join(out)
+
+
 def _validate_state_file(p: Path) -> None:
-    """``.json`` files under ``.devin/`` are state — verify they parse."""
+    """``.json`` files under ``.devin/`` are state — verify they parse.
+
+    ``devin_dir`` defaults to ``./.devin`` (the cwd's dir), so the scan
+    also covers *workspace* ``.devin/`` dirs — which mix runtime state
+    with harness config like ``mcp_config.json``, where ``//`` comments
+    are legal JSONC (the Devin harness accepts them). Retry with
+    comments stripped before calling a file malformed: corrupted JSON
+    stays loud, legal JSONC no longer fails the whole report.
+    """
     try:
-        json.loads(p.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raw = p.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
         raise DevinArtifactError(
             f"malformed .devin state file: {p} ({exc})"
         ) from exc
     except OSError as exc:
         raise DevinArtifactError(
             f"unreadable .devin artifact: {p} ({exc})"
+        ) from exc
+    try:
+        json.loads(raw)
+        return
+    except json.JSONDecodeError:
+        pass
+    try:
+        json.loads(_strip_jsonc_comments(raw))
+    except ValueError as exc:
+        raise DevinArtifactError(
+            f"malformed .devin state file: {p} ({exc})"
         ) from exc
 
 
