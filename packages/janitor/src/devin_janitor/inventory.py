@@ -537,19 +537,27 @@ class DevinArtifact:
 
 
 def _strip_jsonc_comments(text: str) -> str:
-    """Remove ``//`` line and ``/* */`` block comments (JSONC).
+    """Blank ``//`` line and ``/* */`` block comments (JSONC).
+
+    Comments are *blanked*, not deleted: every comment char becomes a
+    space except newlines, so the output keeps the original length and
+    ``json`` errors still report the real line/column. Blanking also
+    stops a comment from merging tokens — ``tr/* x */ue`` must not
+    silently validate as ``true``.
 
     ``//`` inside string literals (e.g. ``"https://..."``) is preserved —
     the scan tracks string/escape state instead of a blind regex.
+
+    Raises ``ValueError`` on an unterminated ``/*`` comment — a file that
+    ends mid-comment is malformed JSONC, not a truncated-but-valid one.
     """
-    out: list[str] = []
+    out = list(text)
     i, n = 0, len(text)
     in_str = False
     esc = False
     while i < n:
         c = text[i]
         if in_str:
-            out.append(c)
             if esc:
                 esc = False
             elif c == "\\":
@@ -560,22 +568,28 @@ def _strip_jsonc_comments(text: str) -> str:
             continue
         if c == '"':
             in_str = True
-            out.append(c)
             i += 1
             continue
         if c == "/" and i + 1 < n:
             if text[i + 1] == "/":
-                i += 2
-                while i < n and text[i] not in "\r\n":
-                    i += 1
+                j = i
+                while j < n and text[j] not in "\r\n":
+                    j += 1
+                for k in range(i, j):
+                    out[k] = " "
+                i = j
                 continue
             if text[i + 1] == "*":
-                i += 2
-                while i + 1 < n and not (text[i] == "*" and text[i + 1] == "/"):
-                    i += 1
-                i += 2
+                j = i + 2
+                while j + 1 < n and not (text[j] == "*" and text[j + 1] == "/"):
+                    j += 1
+                if j + 1 >= n:
+                    raise ValueError("unterminated block comment")
+                for k in range(i, j + 2):
+                    if text[k] not in "\r\n":
+                        out[k] = " "
+                i = j + 2
                 continue
-        out.append(c)
         i += 1
     return "".join(out)
 
@@ -607,7 +621,7 @@ def _validate_state_file(p: Path) -> None:
         pass
     try:
         json.loads(_strip_jsonc_comments(raw))
-    except json.JSONDecodeError as exc:
+    except ValueError as exc:
         raise DevinArtifactError(
             f"malformed .devin state file: {p} ({exc})"
         ) from exc

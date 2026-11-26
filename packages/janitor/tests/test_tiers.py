@@ -3,7 +3,7 @@ import time
 from conftest import OLD_S, add_gui_session, add_session
 from devin_janitor.config import JanitorConfig
 from devin_janitor.inventory import SessionRow, load_inventory
-from devin_janitor.tiers import Tier, classify, norm_title
+from devin_janitor.tiers import Tier, classify, load_keep_file, norm_title
 
 
 def mkrow(sid, **kw) -> SessionRow:
@@ -27,6 +27,24 @@ def test_grace_window_keeps_recent():
     c = classify([recent, old])
     assert c.kept["new"] == "grace window"
     assert c.tier_of("old") is Tier.KEEP
+
+
+def test_load_keep_file_accepts_jsonc(tmp_path):
+    """A keep file with ``//`` comments must apply its protections —
+    the ``.devin/`` validator accepts JSONC, so strict-only parsing
+    would silently drop every id/pattern."""
+    f = tmp_path / "keep.json"
+    f.write_text(
+        '{\n'
+        '  // never delete these\n'
+        '  "ids": ["s-keep"],\n'
+        '  "title_patterns": ["KICKOFF"] /* trailing */\n'
+        '}\n',
+        encoding="utf-8",
+    )
+    ids, patterns = load_keep_file(f)
+    assert ids == {"s-keep"}
+    assert patterns == ["KICKOFF"]
 
 
 def test_keep_ids_and_patterns():

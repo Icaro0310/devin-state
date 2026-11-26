@@ -25,6 +25,7 @@ from devin_janitor.config import JanitorConfig
 from devin_janitor.inventory import (
     DevinArtifact,
     SessionRow,
+    _strip_jsonc_comments,
     load_devin_artifacts,
 )
 
@@ -71,16 +72,28 @@ def norm_title(title: str) -> str:
 
 
 def load_keep_file(path: str | Path | None) -> tuple[set[str], list[str]]:
-    """``{"ids": [...], "title_patterns": [...]}`` — both optional."""
+    """``{"ids": [...], "title_patterns": [...]}`` — both optional.
+
+    Accepts JSONC comments like the ``.devin/`` state validator: a keep
+    file the inventory considers valid must not silently drop every
+    protection because it carries a ``//`` note.
+    """
     if path is None:
         return set(), []
     p = Path(path).expanduser()
     if not p.is_file():
         return set(), []
     try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
+        raw = p.read_text(encoding="utf-8")
+    except OSError:
         return set(), []
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        try:
+            data = json.loads(_strip_jsonc_comments(raw))
+        except ValueError:
+            return set(), []
     return set(data.get("ids", [])), list(data.get("title_patterns", []))
 
 

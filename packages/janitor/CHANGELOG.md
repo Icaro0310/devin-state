@@ -55,6 +55,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   code queued the session — and its messages — for deletion under
   `run --apply` with tier2 selected, violating the fail-open contract
   that an unclear verdict can never delete.
+- `.devin/*.json` state/config validation now accepts JSONC comments
+  (`//` and `/* */`, e.g. in `mcp_config.json`) instead of failing the
+  report; corrupted JSON still raises. Comments are blanked
+  position-preserving (same length, newlines kept), so error
+  line/column stays exact, `1/* x */2`-style token merges are rejected,
+  and an unterminated `/*` is malformed rather than silently truncated.
+  `janitor-keep.json` (keep-file ids/title patterns) parses with the
+  same leniency — a keep file with comments no longer drops every
+  protection while the inventory accepts it.
 
 ## [0.1.3] - 2026-11-09
 
